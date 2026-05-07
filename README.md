@@ -91,4 +91,4 @@ Once Phase 0 lands, this section will document:
 
 ## License
 
-Private project. No license declared.
+[Apache License 2.0](LICENSE).
