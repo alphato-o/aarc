@@ -79,13 +79,50 @@ Bundle IDs: `club.aarun.AARC` (iOS), `club.aarun.AARC.watchkitapp` (watch).
 
 ## Development
 
-The Xcode project and proxy code do not exist yet — they are created in [Phase 0](docs/phases/phase-0-foundation.md).
+### One-time setup
 
-Once Phase 0 lands, this section will document:
-- Xcode project setup
-- Building & running on simulator / device
-- Running the proxy locally (`wrangler dev`)
-- Running tests
+```sh
+brew install xcodegen        # generates ios/AARC.xcodeproj from project.yml
+cd proxy && npm install      # Cloudflare Worker deps
+```
+
+### iOS / watchOS
+
+The `.xcodeproj` is generated, not committed. Source of truth: [`ios/project.yml`](ios/project.yml).
+
+```sh
+cd ios
+xcodegen generate            # creates AARC.xcodeproj
+open AARC.xcodeproj
+# Set your Apple Developer Team in Signing & Capabilities for both
+# AARC and AARCWatch targets, then Run.
+```
+
+Run AARCKit's tests on the host without Xcode:
+```sh
+cd ios/AARCKit && swift test
+```
+
+### Cloudflare Worker (proxy)
+
+```sh
+cd proxy
+npx wrangler dev             # local at http://localhost:8787
+# In another shell:
+curl http://localhost:8787/ping
+```
+
+To deploy to `api.aarun.club`:
+```sh
+npx wrangler login           # browser-based Cloudflare auth, one-time
+npx wrangler deploy
+```
+
+`wrangler.toml` declares the custom domain binding; deploy will create the `api.aarun.club` route automatically as long as the `aarun.club` zone is on the same Cloudflare account.
+
+### Pointing the iOS app at a local proxy
+
+In Xcode, edit the `AARC` scheme → Run → Arguments → Environment Variables, add `AARC_API_BASE_URL=http://localhost:8787` for debug builds. Production builds always hit `https://api.aarun.club`.
 
 ---
 
