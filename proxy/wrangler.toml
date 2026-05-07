@@ -1,0 +1,20 @@
+name = "aarc-api"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Bind the Worker to api.aarun.club. Requires the aarun.club zone to be on
+# this Cloudflare account. If the route doesn't activate on first deploy,
+# the custom domain can also be added via Workers & Pages → aarc-api →
+# Settings → Domains & Routes → Add Custom Domain → api.aarun.club.
+routes = [
+  { pattern = "api.aarun.club", custom_domain = true }
+]
+
+# Observability — turn on Logpush-style request logging in the dashboard.
+[observability]
+enabled = true
+
+# Secrets are NOT committed. Use:
+#   npx wrangler secret put ANTHROPIC_API_KEY
+# (Phase 1 onward.)
