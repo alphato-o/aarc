@@ -1,0 +1,120 @@
+# =====================================================================
+# macOS
+# =====================================================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# =====================================================================
+# Xcode
+# https://github.com/github/gitignore/blob/main/Swift.gitignore
+# =====================================================================
+
+## User settings
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+
+## Compatibility with Xcode 8 and earlier (ignoring not required starting Xcode 9)
+*.xcscmblueprint
+*.xccheckout
+
+## Compatibility with Xcode 3 and earlier (ignoring not required starting Xcode 4)
+build/
+DerivedData/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+## Obj-C/Swift specific
+*.swiftpm
+.swiftpm/
+
+## Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# =====================================================================
+# Swift Package Manager
+# =====================================================================
+.build/
+Packages/
+# Keep Package.resolved for reproducibility (do NOT ignore)
+# Package.resolved
+
+# =====================================================================
+# CocoaPods (not currently used; ignored to avoid future surprises)
+# =====================================================================
+Pods/
+
+# =====================================================================
+# Fastlane (if introduced later)
+# =====================================================================
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# =====================================================================
+# Cloudflare Worker / Node (proxy/)
+# =====================================================================
+node_modules/
+.wrangler/
+dist/
+.npm
+.pnp.*
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =====================================================================
+# Environment / secrets
+# =====================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+
+# =====================================================================
+# Editor / tooling
+# =====================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.history/
+
+# =====================================================================
+# Claude Code / agent artifacts
+# =====================================================================
+.claude/
+PLAN.html
