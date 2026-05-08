@@ -13,6 +13,8 @@ struct RunHomeView: View {
                 }
 
                 VStack(spacing: 24) {
+                    LiveRunTile()
+
                     Image(systemName: "figure.run.circle.fill")
                         .font(.system(size: 96))
                         .foregroundStyle(Theme.accent)

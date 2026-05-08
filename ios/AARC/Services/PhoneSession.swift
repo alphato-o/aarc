@@ -2,25 +2,29 @@ import Foundation
 import WatchConnectivity
 import AARCKit
 
-/// iOS-side wrapper around `WCSession`. Phase 0 establishes the session and
-/// supports a smoke-test `hello` round-trip; Phase 1 wires this to ScriptEngine.
+/// iOS-side wrapper around `WCSession`. Phase 0 ran the hello smoke test;
+/// §1.2 wires this up as the live-metrics ingestion path: the watch sends
+/// `LiveMetrics` 1 Hz via `sendMessageData` (best-effort) and workout
+/// state events via `transferUserInfo` (queued + guaranteed).
 ///
 /// Concurrency notes:
-/// - Class is `@MainActor` so SwiftUI views can read its `@Observable` state directly.
-/// - Delegate methods are explicitly `nonisolated` because WatchConnectivity invokes
-///   them on a background queue. They capture values into locals before hopping to
-///   MainActor to mutate state.
-/// - State is sourced from the activation delegate callback, never read synchronously
-///   right after `session.activate()`.
+/// - Class is `@MainActor` so SwiftUI can read its `@Observable` state.
+/// - Delegate methods are `nonisolated` because WatchConnectivity invokes
+///   them on a background queue. They capture values into locals before
+///   hopping to MainActor for state mutation and ingest.
 @Observable
 @MainActor
 final class PhoneSession: NSObject {
+    static let shared = PhoneSession()
+
     var isReachable: Bool = false
     var isPaired: Bool = false
     var activationState: WCSessionActivationState = .notActivated
     var lastInboundText: String?
 
     private let session: WCSession?
+    private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
 
     override init() {
         self.session = WCSession.isSupported() ? WCSession.default : nil
@@ -31,7 +35,6 @@ final class PhoneSession: NSObject {
         guard let session else { return }
         session.delegate = self
         session.activate()
-        // isPaired / isReachable / activationState come from the delegate callback.
     }
 
     func sendHello(text: String = "hello from phone") {
@@ -39,8 +42,35 @@ final class PhoneSession: NSObject {
               session.activationState == .activated,
               session.isReachable else { return }
         let message = WCMessage.hello(text: text)
-        guard let data = try? JSONEncoder().encode(message) else { return }
+        guard let data = try? encoder.encode(message) else { return }
         session.sendMessageData(data, replyHandler: nil) { _ in }
+    }
+
+    /// Decode + route a WCMessage inbound from the watch.
+    private func route(_ message: WCMessage) {
+        switch message {
+        case .hello(let text):
+            self.lastInboundText = text
+
+        case .liveMetrics(let metrics):
+            LiveMetricsConsumer.shared.ingest(metrics)
+
+        case .workoutStarted(let runId, let startedAt):
+            LiveMetricsConsumer.shared.ingestStarted(runId: runId, startedAt: startedAt)
+
+        case .workoutPaused:
+            LiveMetricsConsumer.shared.ingestPaused()
+
+        case .workoutResumed:
+            LiveMetricsConsumer.shared.ingestResumed()
+
+        case .workoutEnded(let workoutUUID):
+            LiveMetricsConsumer.shared.ingestEnded(workoutUUID: workoutUUID)
+
+        // Outbound-only on phone side; ignore if echoed somehow.
+        case .startWorkout, .endWorkout, .hapticCue, .companionMessageDispatched:
+            break
+        }
     }
 }
 
@@ -60,7 +90,6 @@ extension PhoneSession: @preconcurrency WCSessionDelegate {
     nonisolated func sessionDidBecomeInactive(_ session: WCSession) {}
 
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
-        // Per Apple guidance, reactivate on iOS so the next paired watch can connect.
         WCSession.default.activate()
     }
 
@@ -69,10 +98,23 @@ extension PhoneSession: @preconcurrency WCSessionDelegate {
         Task { @MainActor in self.isReachable = isReachable }
     }
 
+    /// Live-metrics path (1 Hz, best-effort).
     nonisolated func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
-        guard let message = try? JSONDecoder().decode(WCMessage.self, from: messageData) else { return }
-        if case .hello(let text) = message {
-            Task { @MainActor in self.lastInboundText = text }
+        Task { @MainActor in
+            guard let message = try? self.decoder.decode(WCMessage.self, from: messageData) else { return }
+            self.route(message)
         }
     }
+
+    /// State-event path (queued, guaranteed delivery).
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        guard let data = userInfo[Self.userInfoMessageKey] as? Data else { return }
+        Task { @MainActor in
+            guard let message = try? self.decoder.decode(WCMessage.self, from: data) else { return }
+            self.route(message)
+        }
+    }
+
+    /// Key shared with the watch side for envelope wrapping.
+    nonisolated static let userInfoMessageKey = "wc.message"
 }
