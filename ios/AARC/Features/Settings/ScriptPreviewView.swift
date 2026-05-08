@@ -79,7 +79,7 @@ struct ScriptPreviewView: View {
                                     .foregroundStyle(.secondary)
                                 Spacer()
                                 Button {
-                                    LocalTTS.shared.speak(message.text)
+                                    Speaker.shared.speak(message.text)
                                 } label: {
                                     Image(systemName: "speaker.wave.2.fill")
                                 }
@@ -136,11 +136,12 @@ struct ScriptPreviewView: View {
 
     private func speakAll(_ messages: [ScriptMessage]) async {
         for message in messages {
-            LocalTTS.shared.speak(message.text)
+            Speaker.shared.speak(message.text)
             // Crude pacing — give each line time to play before queuing
-            // the next.  AVSpeechSynthesizer queues internally so this
-            // mostly affects perceived sequencing.
-            try? await Task.sleep(for: .seconds(3))
+            // the next. AVSpeechSynthesizer queues internally; the remote
+            // path needs the wait so consecutive AVAudioPlayer instances
+            // don't overlap.
+            try? await Task.sleep(for: .seconds(5))
         }
     }
 }

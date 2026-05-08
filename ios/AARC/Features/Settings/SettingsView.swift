@@ -6,6 +6,15 @@ struct SettingsView: View {
     @State private var pingResult: String?
     @State private var pinging = false
 
+    @State private var preferRemoteVoice: Bool = Speaker.shared.preferRemoteVoice
+    @State private var currentVoiceId: String = RemoteTTS.shared.voice.id
+
+    private var currentVoiceLabel: String {
+        let voice = ElevenLabsVoice.all.first(where: { $0.id == currentVoiceId })
+            ?? .danielBritish
+        return "\(voice.name) (\(voice.accent))"
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -30,18 +39,34 @@ struct SettingsView: View {
                     LabeledContent("Watch reachable", value: phoneSession.isReachable ? "Yes" : "No")
 
                     Button("Test companion voice") {
-                        LocalTTS.shared.speak(
-                            "Audio test. If your music just ducked, AARC's audio session is wired up. If it kept blasting, something is broken — but at least you have music."
+                        Speaker.shared.speak(
+                            "Right then. Audio test. If your music just ducked and you can hear me, AARC's audio is wired up properly, you marvellous wastrel."
                         )
                     }
-                    LabeledContent("Voice", value: LocalTTS.shared.voiceDescription)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
-                Section("Audio") {
+                Section {
                     Toggle("Mute companion", isOn: muteBinding)
+                    Toggle("Use ElevenLabs voice (premium)", isOn: $preferRemoteVoice)
+                        .onChange(of: preferRemoteVoice) { _, newValue in
+                            Speaker.shared.preferRemoteVoice = newValue
+                        }
+
+                    if preferRemoteVoice {
+                        NavigationLink("Voice: \(currentVoiceLabel)") {
+                            VoicePickerView()
+                        }
+                    } else {
+                        LabeledContent("Voice", value: LocalTTS.shared.voiceDescription)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
                     LabeledContent("Audio session", value: AudioPlaybackManager.shared.isSessionActive ? "Active" : "Idle")
+                } header: {
+                    Text("Audio")
+                } footer: {
+                    Text("ElevenLabs gives a punchy neural voice for the companion. Each line is downloaded once and cached on this device — repeats are free. Falls back to Apple's voice automatically if the network drops.")
                 }
 
                 Section("About") {

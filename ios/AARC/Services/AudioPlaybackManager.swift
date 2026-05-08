@@ -20,7 +20,7 @@ final class AudioPlaybackManager {
     var isMuted: Bool = false {
         didSet {
             if isMuted {
-                LocalTTS.shared.stopAll()
+                Speaker.shared.stopAll()
             }
         }
     }
@@ -98,7 +98,7 @@ final class AudioPlaybackManager {
         switch type {
         case .began:
             // Phone call / Siri started — drop in-flight utterance.
-            LocalTTS.shared.stopAll()
+            Speaker.shared.stopAll()
             isSessionActive = false
 
         case .ended:
