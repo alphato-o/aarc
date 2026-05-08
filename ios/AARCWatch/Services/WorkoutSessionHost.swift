@@ -26,6 +26,17 @@ final class WorkoutSessionHost: NSObject {
     var currentRunIsTestData: Bool = true
     var currentRunType: RunType = .outdoor
 
+    // Diagnostics (visible on the active-run view's debug section).
+    /// When the workout-builder delegate last fired with new samples.
+    var lastSampleEventAt: Date?
+    /// Cumulative count of sample-collection events per quantity type
+    /// (e.g. "HKQuantityTypeIdentifierHeartRate" -> 12).
+    var samplesPerType: [String: Int] = [:]
+    /// Most recent set of types the delegate reported.
+    var lastCollectedTypeShortNames: [String] = []
+    /// HK authorisation status per type we care about, snapshot at start.
+    var hkAuthSnapshot: [String: String] = [:]
+
     // HK plumbing.
     private var session: HKWorkoutSession?
     private var builder: HKLiveWorkoutBuilder?
@@ -80,13 +91,7 @@ final class WorkoutSessionHost: NSObject {
         // to auto-enable types for .running, in practice some setups
         // come up without HR / distance / energy populated. Explicit
         // enable removes the ambiguity.
-        let typesToCollect: [HKQuantityTypeIdentifier] = [
-            .heartRate,
-            .distanceWalkingRunning,
-            .activeEnergyBurned,
-            .stepCount,
-        ]
-        for id in typesToCollect {
+        for id in Self.typesToCollect {
             if let type = HKObjectType.quantityType(forIdentifier: id) {
                 dataSource.enableCollection(for: type, predicate: nil)
             }
@@ -106,6 +111,10 @@ final class WorkoutSessionHost: NSObject {
         self.lastPublishedSplitKm = 0
         self.distanceWindow = []
         self.lastError = nil
+        self.lastSampleEventAt = nil
+        self.samplesPerType = [:]
+        self.lastCollectedTypeShortNames = []
+        self.hkAuthSnapshot = snapshotAuthStatus(for: Self.typesToCollect)
 
         let beginDate = Date()
         session.startActivity(with: beginDate)
@@ -310,12 +319,60 @@ extension WorkoutSessionHost: @preconcurrency HKWorkoutSessionDelegate {
 
 extension WorkoutSessionHost: @preconcurrency HKLiveWorkoutBuilderDelegate {
     nonisolated func workoutBuilder(_ workoutBuilder: HKLiveWorkoutBuilder, didCollectDataOf collectedTypes: Set<HKSampleType>) {
-        // The 1Hz ticker handles UI refresh; no extra work needed here.
-        // Kept for delegate conformance; we may fan out events later.
+        let identifiers = collectedTypes.compactMap { ($0 as? HKQuantityType)?.identifier }
+        Task { @MainActor in
+            self.lastSampleEventAt = .now
+            self.lastCollectedTypeShortNames = identifiers.map { Self.shortName(for: $0) }
+            for id in identifiers {
+                self.samplesPerType[Self.shortName(for: id), default: 0] += 1
+            }
+            // Pull a fresh snapshot — Apple's recommended pattern is to
+            // refresh on the data event, not just on a timer.
+            self.refreshMetrics()
+        }
     }
 
     nonisolated func workoutBuilderDidCollectEvent(_ workoutBuilder: HKLiveWorkoutBuilder) {
         // Auto-pause / lap markers — ignore in §1.1.
+    }
+}
+
+// MARK: - Diagnostics helpers
+
+extension WorkoutSessionHost {
+    fileprivate static let typesToCollect: [HKQuantityTypeIdentifier] = [
+        .heartRate,
+        .distanceWalkingRunning,
+        .activeEnergyBurned,
+        .stepCount,
+    ]
+
+    fileprivate static func shortName(for identifier: String) -> String {
+        let prefix = "HKQuantityTypeIdentifier"
+        if identifier.hasPrefix(prefix) {
+            return String(identifier.dropFirst(prefix.count))
+        }
+        return identifier
+    }
+
+    fileprivate func snapshotAuthStatus(for ids: [HKQuantityTypeIdentifier]) -> [String: String] {
+        var out: [String: String] = [:]
+        for id in ids {
+            guard let type = HKObjectType.quantityType(forIdentifier: id) else { continue }
+            let status = healthStore.authorizationStatus(for: type)
+            out[Self.shortName(for: id.rawValue)] = Self.describe(status)
+        }
+        out["WorkoutType"] = Self.describe(healthStore.authorizationStatus(for: HKObjectType.workoutType()))
+        return out
+    }
+
+    fileprivate static func describe(_ status: HKAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .sharingDenied: return "sharingDenied"
+        case .sharingAuthorized: return "sharingAuthorized"
+        @unknown default: return "unknown"
+        }
     }
 }
 
