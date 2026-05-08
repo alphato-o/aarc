@@ -13,6 +13,7 @@ struct SettingsView: View {
 
                 Section("Diagnostics") {
                     NavigationLink("Permissions") { PermissionsView() }
+                    NavigationLink("Script Preview (AI)") { ScriptPreviewView() }
                     Button(action: ping) {
                         HStack {
                             Text("Ping API")
