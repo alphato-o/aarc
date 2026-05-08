@@ -26,8 +26,9 @@ The whole tracking layer is here.
 | 1.1.3 | Attach `HKWorkoutRouteBuilder`; collection started/paused/ended in lockstep with the session | impl | Route appears in Apple Fitness post-finish |
 | 1.1.4 | 1Hz publisher: read `builder.statistics(for: .distanceWalkingRunning)`, current heart rate (`activeWorkoutZone` or query latest sample), average pace (derived as elapsed/distance), current pace (delta over last 30s window from HK statistics), elapsed time | impl | A `LiveMetrics` value emitted every second |
 | 1.1.5 | Detect new km splits by comparing distance to last published threshold; emit a `Split` in the snapshot when crossed | impl | Splits arrive at correct distances |
-| 1.1.6 | `endCollection` + `finishWorkout`; before finishing, set `metadata: ["aarcRunId": runId.uuidString]` | impl | Workout in Health has the metadata |
-| 1.1.7 | Failure handling: if `finishWorkout` errors, persist a "to retry" record on the watch and retry next launch | impl | A simulated failure recovers |
+| 1.1.6 | `endCollection` + `finishWorkout`; before finishing, stamp `metadata` with `aarc.run_id`, `aarc.test_data` (per `Config.isTestDataMode`), `aarc.created_at`, `aarc.app_version`. See [D19](../decisions.md#d19--healthkit-test-data-isolation--accepted). | impl | Workout in Apple Health shows the metadata; `predicateForObjects(withMetadataKey:"aarc.test_data", ...)` returns it |
+| 1.1.7 | Honour `Config.skipHealthKitWrite`: when ON, abandon the session before `finishWorkout` so nothing lands in HK; companion data still saves to local DB | impl | Toggle on → run completes, nothing in Apple Health, history still shows the run |
+| 1.1.8 | Failure handling: if `finishWorkout` errors, persist a "to retry" record on the watch and retry next launch | impl | A simulated failure recovers |
 
 ### 1.2 — WatchConnectivity wiring
 
@@ -106,6 +107,22 @@ The whole tracking layer is here.
 | 1.9.4 | "Discard" deletes our companion record only; HealthKit workout is left alone (or optionally deleted with explicit confirm) | impl | — |
 | 1.9.5 | History list: rows of "date · type · distance · duration · pace", newest first, sourced from companion records (`Run`s) joined to Health on demand | UI | — |
 | 1.9.6 | Detail view = same as post-run summary | UI | — |
+
+### 1.10 — Test-data safety net (D19)
+
+The founder's iPhone hosts real training data. Before any HK write ships, the safety mechanism must be in place. Default at Phase 1 start: tag mode ON, skip mode OFF.
+
+| # | Task | Deliverable | Acceptance |
+|---|---|---|---|
+| 1.10.1 | `Config.isTestDataMode` (Bool, default `true`) and `Config.skipHealthKitWrite` (Bool, default `false`), persisted to `UserDefaults`, exposed as `@Observable` for UI | `Config.swift` extensions | Values persist across launches |
+| 1.10.2 | Settings → "Test Data" section: two toggles, count of tagged workouts in HK, "Wipe AARC test data" button, last-wipe timestamp | `TestDataSettingsView.swift` | All controls render and persist |
+| 1.10.3 | Banner on `ActiveRunView` and post-run summary while `isTestDataMode \|\| skipHealthKitWrite`: "TEST RUN — won't be permanently kept in Health" | UI | Banner visible across both screens; gone when both modes off |
+| 1.10.4 | History list rows: small "TEST" badge when `RunRecord.isTestData == true` | UI | Visible on tagged rows |
+| 1.10.5 | `TestDataManager.wipe()` actor: query workouts via `HKQuery.predicateForObjects(withMetadataKey: "aarc.test_data", operatorType: .equalTo, value: NSNumber(value: true))`, batch-delete via `healthStore.delete([HKObject])`, then delete matching local `RunRecord` rows | `TestDataManager.swift` | Tagged workouts and their associated samples + route disappear from Apple Health; non-tagged workouts untouched |
+| 1.10.6 | `TestDataManager.testWorkoutCount()` reads the same predicate to populate the Settings count; refreshes after wipe and after each new run | impl | Count reflects reality |
+| 1.10.7 | Confirmation alert before wiping (button is destructive, says "Wipe N workouts from Apple Health"); second confirm when toggling tag mode OFF ("Future runs will be permanent in Health — confirm") | UI | Cannot wipe or flip modes without explicit confirm |
+| 1.10.8 | Add `isTestData: Bool` to `RunRecord` SwiftData model, set at run creation from `Config.isTestDataMode` | model migration | Old records default `isTestData = false` |
+| 1.10.9 | Manual end-to-end check: do a treadmill walk + an outdoor short run with tag mode ON, confirm both appear in Apple Fitness, run `Wipe`, confirm both vanish from Apple Fitness and AARC History | manual test | Wipe demonstrably reverses both runs |
 
 ---
 
