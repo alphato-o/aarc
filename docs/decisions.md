@@ -132,6 +132,28 @@ We do not store split rows in our DB. We derive them per-render by querying `HKS
 
 ---
 
+## D19 — HealthKit test-data isolation — **Accepted**
+
+**Context:** The founder's only iPhone is also their daily driver and contains years of real training data in Apple Health. Every Phase 1+ run we record will write to HealthKit. Without a safety mechanism, AARC test/dev runs would mix indistinguishably with real runs and pollute training history.
+
+**Decision:** Two-layer safety, both default-ON:
+
+1. **Tag mode (default ON).** Every HK workout AARC writes carries metadata `aarc.test_data: true`. A "Wipe AARC test data" action queries HealthKit by that metadata key and bulk-deletes matching workouts (HK cascades to associated samples and route).
+2. **Skip mode (default OFF, opt-in).** A second toggle that prevents any HK writes whatsoever — runs live only in AARC's local SwiftData store. For moments of paranoia or buggy builds.
+
+UI affordances make test mode unmissable:
+- Banner on active run and post-run summary while either mode is on
+- "TEST" badge on history rows
+- Settings panel showing test-workout count + wipe button + last-wipe timestamp
+
+**Toggling off:** When the founder flips "Tag as test data" OFF, future runs are written without the tag and become permanent in Health. A confirmation alert prevents accidental flips. Wipe button continues to operate strictly on `aarc.test_data == true` workouts, so real runs are never in scope.
+
+**Other metadata we always stamp** (regardless of test mode): `aarc.run_id`, `aarc.created_at`, `aarc.app_version`. Useful for support/debugging and for linking HK workouts back to our companion data in SwiftData.
+
+**Status:** _accepted (mandatory before any HK write lands)._
+
+---
+
 ## D18 — Domain and hostnames — **Accepted**
 
 Domain: **`aarun.club`** (registered, DNS to be moved to Cloudflare in Phase 0).
