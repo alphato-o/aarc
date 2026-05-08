@@ -14,10 +14,13 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
-    DEVELOPMENT_TEAM: ""
+    # Hardcoded so xcodegen regenerations don't blank the AARC target's
+    # signing config. Watch target keeps its own (manual) signing block;
+    # both happen to use the same team.
+    DEVELOPMENT_TEAM: GK7889VKDF
     ENABLE_HARDENED_RUNTIME: NO
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "12"
+    CURRENT_PROJECT_VERSION: "13"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 
