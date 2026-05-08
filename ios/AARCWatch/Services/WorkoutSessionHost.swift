@@ -24,6 +24,7 @@ final class WorkoutSessionHost: NSObject {
     // Identity for this run — stamped into HK metadata at finalise.
     var currentRunId: UUID?
     var currentRunIsTestData: Bool = true
+    var currentRunType: RunType = .outdoor
 
     // HK plumbing.
     private var session: HKWorkoutSession?
@@ -73,7 +74,25 @@ final class WorkoutSessionHost: NSObject {
 
         let session = try HKWorkoutSession(healthStore: healthStore, configuration: config)
         let builder = session.associatedWorkoutBuilder()
-        builder.dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: config)
+        let dataSource = HKLiveWorkoutDataSource(healthStore: healthStore, workoutConfiguration: config)
+
+        // Belt-and-suspenders: even though the data source is supposed
+        // to auto-enable types for .running, in practice some setups
+        // come up without HR / distance / energy populated. Explicit
+        // enable removes the ambiguity.
+        let typesToCollect: [HKQuantityTypeIdentifier] = [
+            .heartRate,
+            .distanceWalkingRunning,
+            .activeEnergyBurned,
+            .stepCount,
+        ]
+        for id in typesToCollect {
+            if let type = HKObjectType.quantityType(forIdentifier: id) {
+                dataSource.enableCollection(for: type, predicate: nil)
+            }
+        }
+
+        builder.dataSource = dataSource
         session.delegate = self
         builder.delegate = self
 
@@ -81,6 +100,7 @@ final class WorkoutSessionHost: NSObject {
         self.builder = builder
         self.currentRunId = runId
         self.currentRunIsTestData = isTestData
+        self.currentRunType = (locationType == .indoor) ? .treadmill : .outdoor
         self.skipHealthKitWriteForCurrentRun = skipHealthKitWrite
         self.startedAt = .now
         self.lastPublishedSplitKm = 0

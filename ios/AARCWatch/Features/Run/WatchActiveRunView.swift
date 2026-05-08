@@ -12,6 +12,9 @@ struct WatchActiveRunView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 8) {
+                modeBadge
+                    .padding(.bottom, 2)
+
                 Text(formatElapsed(host.liveMetrics.elapsed))
                     .font(.system(.title, design: .rounded, weight: .heavy))
                     .monospacedDigit()
@@ -66,6 +69,19 @@ struct WatchActiveRunView: View {
                  ? "This is a test run. It will be tagged in Apple Health for easy cleanup."
                  : "This run will be permanently saved to Apple Health.")
         }
+    }
+
+    @ViewBuilder
+    private var modeBadge: some View {
+        let isIndoor = host.currentRunType == .treadmill
+        Label(
+            isIndoor ? "Treadmill" : "Outdoor",
+            systemImage: isIndoor ? "figure.run.treadmill" : "figure.run"
+        )
+        .font(.caption2.bold())
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(.tint.opacity(0.25), in: Capsule())
     }
 
     @ViewBuilder
