@@ -71,15 +71,23 @@ These exist because they shed enormous risk and complexity. Follow them; if you 
 
 ### Build number
 
-The watch's main UI and iPhone's Settings → About both display `vX.Y.Z (B)` where `B` is `CURRENT_PROJECT_VERSION` in `ios/project.yml`. Always bump `B` once on every push of code changes (any commit touching `ios/AARC*/` or `ios/AARCKit/`). Never bump for docs-only or proxy-only commits.
+The watch's main UI and iPhone's Settings → About display `vX.Y.Z (S.HHMMSS)`:
+- **`S`** = `CURRENT_PROJECT_VERSION` in `ios/project.yml`. Source-controlled. Bumps on every push of code changes.
+- **`HHMMSS`** = the local time at which **this specific Xcode build** was compiled. Stamped automatically into the built `Info.plist` by a postBuildScript on each target. Different on every ⌘R.
+
+Together they answer two questions the founder can ask by glancing at the watch:
+- "Am I running the latest pushed build?" → does `S` match `git pull && grep CURRENT_PROJECT_VERSION ios/project.yml`?
+- "Did this last ⌘R actually take?" → does `HHMMSS` match the time you just hit Run?
+
+Bump `S` on every push that touches `ios/AARC*/` or `ios/AARCKit/`. Never on docs-only or proxy-only.
 
 ```sh
-scripts/bump-build.sh   # increments by 1, prints "build: N → N+1"
+scripts/bump-build.sh   # increments S by 1, prints "build: N → N+1"
 ```
 
-After running, `cd ios && xcodegen generate` so `project.pbxproj` picks up the new value. Stage `ios/project.yml` along with the rest of the changes.
+After running, `cd ios && xcodegen generate` so `project.pbxproj` picks up the new value. Stage `ios/project.yml`.
 
-This convention exists so the founder can verify a fresh build is actually running on their devices — by glancing at the build number on the watch home screen — rather than guessing.
+The `HHMMSS` suffix is automatic and requires no agent action — Xcode handles it on every ⌘R via the postBuildScript defined in `project.yml`.
 
 ### Testing
 
