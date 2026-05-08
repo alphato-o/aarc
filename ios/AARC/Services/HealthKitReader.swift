@@ -39,6 +39,69 @@ actor HealthKitReader {
         return nil
     }
 
+    /// A single (timestamp, value) point. Used for chart series.
+    struct SeriesPoint: Identifiable, Sendable, Hashable {
+        public let id = UUID()
+        public let timestamp: Date
+        public let value: Double
+    }
+
+    /// HR samples during a workout, ordered by time. Each sample is a
+    /// distinct reading from the watch sensor (typically every few seconds
+    /// during an active workout).
+    func fetchHeartRateSeries(during workout: HKWorkout) async throws -> [SeriesPoint] {
+        let pred = HKQuery.predicateForSamples(
+            withStart: workout.startDate,
+            end: workout.endDate,
+            options: .strictStartDate
+        )
+        let samples = try await sample(of: HKQuantityType(.heartRate), predicate: pred, limit: HKObjectQueryNoLimit)
+        let bpm = HKUnit(from: "count/min")
+        return samples
+            .compactMap { $0 as? HKQuantitySample }
+            .map { SeriesPoint(timestamp: $0.startDate, value: $0.quantity.doubleValue(for: bpm)) }
+            .sorted { $0.timestamp < $1.timestamp }
+    }
+
+    /// Per-minute bucketed pace (seconds per kilometre), derived from the
+    /// HK distance series during the workout. Empty buckets are skipped.
+    func fetchPaceSeries(during workout: HKWorkout, bucketSeconds: TimeInterval = 60) async throws -> [SeriesPoint] {
+        let pred = HKQuery.predicateForSamples(
+            withStart: workout.startDate,
+            end: workout.endDate,
+            options: .strictStartDate
+        )
+        let interval = DateComponents(second: Int(bucketSeconds))
+        let buckets: [(Date, Double)] = try await withCheckedThrowingContinuation { continuation in
+            let q = HKStatisticsCollectionQuery(
+                quantityType: HKQuantityType(.distanceWalkingRunning),
+                quantitySamplePredicate: pred,
+                options: .cumulativeSum,
+                anchorDate: workout.startDate,
+                intervalComponents: interval
+            )
+            q.initialResultsHandler = { _, results, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                var out: [(Date, Double)] = []
+                results?.enumerateStatistics(from: workout.startDate, to: workout.endDate) { stats, _ in
+                    let meters = stats.sumQuantity()?.doubleValue(for: .meter()) ?? 0
+                    out.append((stats.startDate, meters))
+                }
+                continuation.resume(returning: out)
+            }
+            store.execute(q)
+        }
+        // Convert per-bucket distance to per-bucket pace (sec/km).
+        return buckets.compactMap { (date, meters) in
+            guard meters > 1 else { return nil }   // skip standing still
+            let secPerKm = bucketSeconds / (meters / 1000)
+            return SeriesPoint(timestamp: date, value: secPerKm)
+        }
+    }
+
     /// All locations on the workout's route, ordered by time.
     func fetchRoute(for workout: HKWorkout) async throws -> [CLLocation] {
         // 1. Find the route series associated with this workout.

@@ -16,7 +16,11 @@ struct HistoryView: View {
                     )
                 } else {
                     List(runs) { run in
-                        RunListRow(run: run)
+                        NavigationLink {
+                            RunDetailView(run: run)
+                        } label: {
+                            RunListRow(run: run)
+                        }
                     }
                     .listStyle(.plain)
                 }

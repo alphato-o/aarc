@@ -1,18 +1,24 @@
 import SwiftUI
 import AARCKit
 
-/// Live-run view shown after the user taps Start. Reads from
-/// `WorkoutSessionHost.liveMetrics` and renders. Computes nothing itself.
+/// In-session UI on the watch. Three pages, NRC-style:
+/// - swipe left: Controls (pause / resume / end)
+/// - center (default): Live metrics
+/// - swipe right: Diagnostics
 struct WatchActiveRunView: View {
     @Environment(WorkoutSessionHost.self) private var host
     @Environment(\.dismiss) private var dismiss
 
+    @State private var selectedPage: Page = .metrics
     @State private var showEndConfirm = false
 
+    private enum Page: Hashable { case controls, metrics, diagnostics }
+
     var body: some View {
-        TabView {
-            metricsPage
-            diagnosticsPage
+        TabView(selection: $selectedPage) {
+            controlsPage.tag(Page.controls)
+            metricsPage.tag(Page.metrics)
+            diagnosticsPage.tag(Page.diagnostics)
         }
         .tabViewStyle(.page)
         .navigationBarBackButtonHidden(true)
@@ -31,7 +37,59 @@ struct WatchActiveRunView: View {
         }
     }
 
-    // MARK: - Page 1: live metrics
+    // MARK: - Controls (swipe left)
+
+    private var controlsPage: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                modeBadge
+                    .padding(.bottom, 4)
+
+                if host.state == .running {
+                    Button {
+                        host.pause()
+                    } label: {
+                        Label("Pause", systemImage: "pause.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.yellow)
+                    .controlSize(.small)
+                } else if host.state == .paused {
+                    Button {
+                        host.resume()
+                    } label: {
+                        Label("Resume", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+                    .controlSize(.small)
+                }
+
+                Button(role: .destructive) {
+                    showEndConfirm = true
+                } label: {
+                    Label("End", systemImage: "stop.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.small)
+
+                if host.state == .paused {
+                    Text("PAUSED")
+                        .font(.caption.bold())
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(.yellow.opacity(0.3), in: Capsule())
+                }
+            }
+            .padding()
+        }
+    }
+
+    // MARK: - Metrics (default centre)
 
     private var metricsPage: some View {
         ScrollView {
@@ -65,28 +123,12 @@ struct WatchActiveRunView: View {
                         .padding(.vertical, 2)
                         .background(.yellow.opacity(0.3), in: Capsule())
                 }
-
-                Spacer(minLength: 8)
-
-                HStack(spacing: 8) {
-                    if host.state == .running {
-                        Button("Pause") { host.pause() }
-                            .tint(.yellow)
-                    } else if host.state == .paused {
-                        Button("Resume") { host.resume() }
-                            .tint(.green)
-                    }
-                    Button("End") { showEndConfirm = true }
-                        .tint(.red)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
             .padding()
         }
     }
 
-    // MARK: - Page 2: diagnostics (swipe right)
+    // MARK: - Diagnostics (swipe right)
 
     private var diagnosticsPage: some View {
         ScrollView {
@@ -136,6 +178,8 @@ struct WatchActiveRunView: View {
             .padding()
         }
     }
+
+    // MARK: - Subviews
 
     @ViewBuilder
     private var modeBadge: some View {
