@@ -17,7 +17,7 @@ settings:
     DEVELOPMENT_TEAM: ""
     ENABLE_HARDENED_RUNTIME: NO
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "2"
+    CURRENT_PROJECT_VERSION: "3"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 
@@ -49,6 +49,17 @@ targets:
       - package: AARCKit
       - target: AARCWatch
         embed: true
+    postBuildScripts:
+      - name: Stamp Build Number
+        script: |
+          # Replace the built Info.plist's CFBundleVersion with
+          # "<source-version>.<HHMMSS>" so each Xcode build is uniquely
+          # identifiable on-device. Runs before code signing seals the
+          # bundle, so the modification is signed.
+          set -e
+          buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"
+          plutil -replace CFBundleVersion -string "$buildStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          echo "Stamped CFBundleVersion = $buildStamp"
 
   AARCWatch:
     type: application
@@ -77,6 +88,13 @@ targets:
         DEVELOPMENT_TEAM: GK7889VKDF
     dependencies:
       - package: AARCKit
+    postBuildScripts:
+      - name: Stamp Build Number
+        script: |
+          set -e
+          buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"
+          plutil -replace CFBundleVersion -string "$buildStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          echo "Stamped CFBundleVersion = $buildStamp"
 
   AARCTests:
     type: bundle.unit-test
