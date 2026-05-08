@@ -22,6 +22,11 @@ struct WatchRootView: View {
                     Text("AARC")
                         .font(.title3.bold())
 
+                    Text(AppVersion.versionString)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+
                     if !hkAuthorized {
                         Button {
                             Task { await requestHK() }

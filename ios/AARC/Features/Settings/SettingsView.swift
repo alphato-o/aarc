@@ -1,4 +1,5 @@
 import SwiftUI
+import AARCKit
 
 struct SettingsView: View {
     @Environment(PhoneSession.self) private var phoneSession
@@ -52,10 +53,3 @@ struct SettingsView: View {
     }
 }
 
-enum AppVersion {
-    static var versionString: String {
-        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        return "\(v) (\(b))"
-    }
-}

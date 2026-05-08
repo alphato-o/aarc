@@ -69,6 +69,18 @@ These exist because they shed enormous risk and complexity. Follow them; if you 
 - Commit often. A single phase produces many small commits; do not batch a whole phase into one mega-commit.
 - Branch naming: `phase-N/<slug>` for phase work, `fix/<slug>` for bug fixes, `chore/<slug>` for housekeeping. Trunk-based — merge to `main` frequently. Solo project, so PRs are optional unless we want a review checkpoint.
 
+### Build number
+
+The watch's main UI and iPhone's Settings → About both display `vX.Y.Z (B)` where `B` is `CURRENT_PROJECT_VERSION` in `ios/project.yml`. Always bump `B` once on every push of code changes (any commit touching `ios/AARC*/` or `ios/AARCKit/`). Never bump for docs-only or proxy-only commits.
+
+```sh
+scripts/bump-build.sh   # increments by 1, prints "build: N → N+1"
+```
+
+After running, `cd ios && xcodegen generate` so `project.pbxproj` picks up the new value. Stage `ios/project.yml` along with the rest of the changes.
+
+This convention exists so the founder can verify a fresh build is actually running on their devices — by glancing at the build number on the watch home screen — rather than guessing.
+
 ### Testing
 
 - iOS: unit tests for `ScriptEngine`, `AIClient`, `MemoryStore`, `BranchSelector`, anything with branchable logic. UI tests for the start-run flow once Phase 1 lands.
