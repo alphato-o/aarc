@@ -132,7 +132,8 @@ struct RunDetailView: View {
                 ForEach(hrSeries) { point in
                     LineMark(
                         x: .value("Time", point.timestamp),
-                        y: .value("Normalized", normalize(point.value, range: hrRange))
+                        y: .value("Normalized", normalize(point.value, range: hrRange)),
+                        series: .value("Series", "HR")
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(.red)
@@ -143,18 +144,27 @@ struct RunDetailView: View {
                     LineMark(
                         x: .value("Time", point.timestamp),
                         // Invert: smaller pace value (faster) → higher line.
-                        y: .value("Normalized", 1 - normalize(point.value, range: paceRange))
+                        y: .value("Normalized", 1 - normalize(point.value, range: paceRange)),
+                        series: .value("Series", "Pace")
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(.blue)
                 }
             }
         }
+        .chartLegend(.hidden)
         .chartYAxis(.hidden)
         .chartXAxis {
-            AxisMarks(values: .stride(by: .minute, count: 5)) { _ in
+            // Let Swift Charts pick a sensible stride based on the
+            // actual data range — fixed strides break short test runs.
+            AxisMarks(values: .automatic(desiredCount: 4)) { value in
                 AxisGridLine()
-                AxisValueLabel(format: .dateTime.hour().minute())
+                AxisTick()
+                if let date = value.as(Date.self) {
+                    AxisValueLabel {
+                        Text(date, format: .dateTime.hour().minute())
+                    }
+                }
             }
         }
         .chartYScale(domain: 0...1)
