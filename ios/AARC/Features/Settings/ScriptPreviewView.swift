@@ -17,13 +17,23 @@ struct ScriptPreviewView: View {
     var body: some View {
         Form {
             Section("Plan") {
-                LabeledContent("Distance") {
-                    Stepper("\(formattedKm) km", value: $distanceKm, in: 1...42, step: 0.5)
-                        .labelsHidden()
+                Stepper(value: $distanceKm, in: 1...42, step: 0.5) {
+                    HStack {
+                        Text("Distance")
+                        Spacer()
+                        Text("\(formattedKm) km")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
                 }
-                LabeledContent("Target pace") {
-                    Stepper(formattedPace, value: $paceMinPerKm, in: 3.0...10.0, step: 0.25)
-                        .labelsHidden()
+                Stepper(value: $paceMinPerKm, in: 3.0...10.0, step: 0.25) {
+                    HStack {
+                        Text("Target pace")
+                        Spacer()
+                        Text(formattedPace)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Button {
                     Task { await generate() }
