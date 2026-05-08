@@ -7,13 +7,6 @@ struct SettingsView: View {
     @State private var pinging = false
 
     @State private var preferRemoteVoice: Bool = Speaker.shared.preferRemoteVoice
-    @State private var currentVoiceId: String = RemoteTTS.shared.voice.id
-
-    private var currentVoiceLabel: String {
-        let voice = ElevenLabsVoice.all.first(where: { $0.id == currentVoiceId })
-            ?? .danielBritish
-        return "\(voice.name) (\(voice.accent))"
-    }
 
     var body: some View {
         NavigationStack {
@@ -53,11 +46,16 @@ struct SettingsView: View {
                         }
 
                     if preferRemoteVoice {
-                        NavigationLink("Voice: \(currentVoiceLabel)") {
-                            VoicePickerView()
+                        LabeledContent("ElevenLabs voice", value: RemoteTTS.voiceId)
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        if let err = RemoteTTS.shared.lastError {
+                            Text("Last error: \(err)")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
                         }
                     } else {
-                        LabeledContent("Voice", value: LocalTTS.shared.voiceDescription)
+                        LabeledContent("Apple voice", value: LocalTTS.shared.voiceDescription)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
