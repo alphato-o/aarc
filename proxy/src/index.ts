@@ -1,7 +1,10 @@
 import { generateScriptHandler } from "./routes/generateScript";
 
 interface Env {
-    ANTHROPIC_API_KEY: string;
+    OPENROUTER_API_KEY?: string;
+    OPENROUTER_MODEL?: string;
+    ANTHROPIC_API_KEY?: string;
+    ANTHROPIC_MODEL?: string;
 }
 
 const json = (data: unknown, init: ResponseInit = {}): Response =>

@@ -5,23 +5,14 @@ import {
     ScriptSchema,
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
-import { callAnthropic, AnthropicError, SCRIPT_MODEL } from "../lib/anthropic";
+import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 
-export interface Env {
-    ANTHROPIC_API_KEY: string;
-}
+export type Env = LLMEnv;
 
 export async function generateScriptHandler(
     request: Request,
     env: Env,
 ): Promise<Response> {
-    if (!env.ANTHROPIC_API_KEY) {
-        return json(
-            { ok: false, error: "ANTHROPIC_API_KEY not configured" },
-            { status: 500 },
-        );
-    }
-
     let body: unknown;
     try {
         body = await request.json();
@@ -49,25 +40,27 @@ export async function generateScriptHandler(
     const userPrompt = buildUserPrompt(req);
 
     let raw: string;
+    let provider: "openrouter" | "anthropic";
+    let model: string;
     try {
-        raw = await callAnthropic({
-            apiKey: env.ANTHROPIC_API_KEY,
-            model: SCRIPT_MODEL,
-            systemPrompt,
-            userPrompt,
-            maxTokens: 4096,
-            cacheSystem: true,
-        });
+        const result = await callLLM(
+            {
+                purpose: "script",
+                systemPrompt,
+                userPrompt,
+                maxTokens: 4096,
+                cacheSystem: true,
+            },
+            env,
+        );
+        raw = result.text;
+        provider = result.provider;
+        model = result.model;
     } catch (e) {
-        if (e instanceof AnthropicError) {
-            return json(
-                { ok: false, error: "upstream", detail: e.message },
-                { status: 502 },
-            );
-        }
+        const desc = describeUpstreamError(e);
         return json(
-            { ok: false, error: String(e instanceof Error ? e.message : e) },
-            { status: 502 },
+            { ok: false, error: "upstream", detail: desc.message },
+            { status: desc.httpStatus },
         );
     }
 
@@ -101,10 +94,11 @@ export async function generateScriptHandler(
         );
     }
 
-    const response: GenerateScriptResponse = {
+    const response: GenerateScriptResponse & { provider: string } = {
         scriptId: crypto.randomUUID(),
-        model: SCRIPT_MODEL,
+        model,
         messages: validated.data,
+        provider,
     };
     return json({ ok: true, ...response });
 }
@@ -137,7 +131,6 @@ function buildUserPrompt(
 function stripCodeFences(text: string): string {
     const trimmed = text.trim();
     if (trimmed.startsWith("```")) {
-        // Remove an opening fence line and a closing fence
         const withoutOpen = trimmed.replace(/^```(?:json)?\s*\n?/, "");
         return withoutOpen.replace(/\n?```\s*$/, "").trim();
     }

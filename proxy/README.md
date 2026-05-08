@@ -31,9 +31,24 @@ proxy/
 
 All secrets live in Cloudflare via `wrangler secret put <NAME>`. Never commit them.
 
+The LLM dispatcher accepts either provider — set exactly one of:
+
 | Name | Used by | Phase |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `lib/anthropic.ts` | 1 |
+| `OPENROUTER_API_KEY` | `lib/openrouter.ts` (preferred — one key, many providers) | 1 |
+| `ANTHROPIC_API_KEY` | `lib/anthropic.ts` (native, only Anthropic models) | 1 |
+
+Optional model overrides:
+
+| Name | Default |
+|---|---|
+| `OPENROUTER_MODEL` | `anthropic/claude-sonnet-4.5` |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` |
+
+Phase 4 secrets:
+
+| Name | Used by | Phase |
+|---|---|---|
 | `ELEVENLABS_API_KEY` | `routes/tts.ts` | 4 |
 | `APPLE_TEAM_ID` | `lib/appAttest.ts` | 4 |
 
