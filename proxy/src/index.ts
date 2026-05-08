@@ -1,10 +1,12 @@
 import { generateScriptHandler } from "./routes/generateScript";
+import { ttsHandler } from "./routes/tts";
 
 interface Env {
     OPENROUTER_API_KEY?: string;
     OPENROUTER_MODEL?: string;
     ANTHROPIC_API_KEY?: string;
     ANTHROPIC_MODEL?: string;
+    ELEVENLABS_API_KEY?: string;
 }
 
 const json = (data: unknown, init: ResponseInit = {}): Response =>
@@ -23,6 +25,10 @@ export default {
 
         if (request.method === "POST" && url.pathname === "/generate-script") {
             return generateScriptHandler(request, env);
+        }
+
+        if (request.method === "POST" && url.pathname === "/tts") {
+            return ttsHandler(request, env);
         }
 
         return json(
