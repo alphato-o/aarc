@@ -10,6 +10,30 @@ struct WatchActiveRunView: View {
     @State private var showEndConfirm = false
 
     var body: some View {
+        TabView {
+            metricsPage
+            diagnosticsPage
+        }
+        .tabViewStyle(.page)
+        .navigationBarBackButtonHidden(true)
+        .alert("End run?", isPresented: $showEndConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("End", role: .destructive) {
+                Task {
+                    _ = await host.endRun()
+                    dismiss()
+                }
+            }
+        } message: {
+            Text(host.currentRunIsTestData
+                 ? "This is a test run. It will be tagged in Apple Health for easy cleanup."
+                 : "This run will be permanently saved to Apple Health.")
+        }
+    }
+
+    // MARK: - Page 1: live metrics
+
+    private var metricsPage: some View {
         ScrollView {
             VStack(spacing: 8) {
                 modeBadge
@@ -28,6 +52,11 @@ struct WatchActiveRunView: View {
                     metric("HR", value: formatHR(host.liveMetrics.currentHeartRate))
                 }
                 .padding(.top, 4)
+
+                HStack(spacing: 16) {
+                    metric("Avg", value: formatPace(host.liveMetrics.avgPaceSecPerKm))
+                    metric("kcal", value: "\(Int(host.liveMetrics.energyKcal))")
+                }
 
                 if host.state == .paused {
                     Text("PAUSED")
@@ -55,19 +84,56 @@ struct WatchActiveRunView: View {
             }
             .padding()
         }
-        .navigationBarBackButtonHidden(true)
-        .alert("End run?", isPresented: $showEndConfirm) {
-            Button("Cancel", role: .cancel) {}
-            Button("End", role: .destructive) {
-                Task {
-                    _ = await host.endRun()
-                    dismiss()
+    }
+
+    // MARK: - Page 2: diagnostics (swipe right)
+
+    private var diagnosticsPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Diagnostics")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+
+                Group {
+                    diagRow("Sample event",
+                            value: host.lastSampleEventAt.map { "\(secondsAgo($0))s ago" } ?? "never")
+                    diagRow("Last types",
+                            value: host.lastCollectedTypeShortNames.isEmpty
+                                ? "—"
+                                : host.lastCollectedTypeShortNames.joined(separator: ", "))
+                }
+
+                Divider().padding(.vertical, 2)
+
+                Text("Sample counts")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                ForEach(host.samplesPerType.sorted(by: { $0.key < $1.key }), id: \.key) { name, count in
+                    diagRow(name, value: "\(count)")
+                }
+                if host.samplesPerType.isEmpty {
+                    Text("none yet")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+
+                Divider().padding(.vertical, 2)
+
+                Text("Auth at start")
+                    .font(.caption.bold())
+                    .foregroundStyle(.secondary)
+                ForEach(host.hkAuthSnapshot.sorted(by: { $0.key < $1.key }), id: \.key) { name, status in
+                    HStack {
+                        Text(name).font(.caption2)
+                        Spacer()
+                        Text(status)
+                            .font(.caption2)
+                            .foregroundStyle(status == "sharingAuthorized" ? .green : .red)
+                    }
                 }
             }
-        } message: {
-            Text(host.currentRunIsTestData
-                 ? "This is a test run. It will be tagged in Apple Health for easy cleanup."
-                 : "This run will be permanently saved to Apple Health.")
+            .padding()
         }
     }
 
@@ -95,6 +161,19 @@ struct WatchActiveRunView: View {
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private func diagRow(_ name: String, value: String) -> some View {
+        HStack {
+            Text(name).font(.caption2).foregroundStyle(.secondary)
+            Spacer()
+            Text(value).font(.caption2).monospacedDigit()
+        }
+    }
+
+    private func secondsAgo(_ date: Date) -> Int {
+        max(0, Int(Date().timeIntervalSince(date)))
     }
 
     private func formatElapsed(_ seconds: TimeInterval) -> String {
