@@ -1,14 +1,6 @@
 import Foundation
 import Observation
-
-/// HealthKit metadata keys we stamp on every workout AARC writes.
-/// See D19 in docs/decisions.md.
-enum HKMetadataKeys {
-    static let runId = "aarc.run_id"
-    static let testData = "aarc.test_data"
-    static let createdAt = "aarc.created_at"
-    static let appVersion = "aarc.app_version"
-}
+import AARCKit  // re-exported HKMetadataKeys
 
 /// User-facing safety toggles that govern HealthKit writes.
 /// Default at app launch: tag mode ON, skip mode OFF (D19).

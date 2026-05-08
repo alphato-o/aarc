@@ -60,6 +60,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: club.aarun.AARC.watchkitapp
         PRODUCT_NAME: AARCWatch
         INFOPLIST_FILE: AARCWatch/Info.plist
+        CODE_SIGN_ENTITLEMENTS: AARCWatch/AARCWatch.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         WATCHOS_DEPLOYMENT_TARGET: "10.0"
