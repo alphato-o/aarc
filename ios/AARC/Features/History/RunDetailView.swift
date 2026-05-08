@@ -48,11 +48,10 @@ struct RunDetailView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(RunTitleGenerator.title(
                 forRunId: run.id,
-                startedAt: run.startedAt,
                 runType: RunType(rawValue: run.runTypeRaw) ?? .outdoor
             ))
                 .font(.title3.bold())
-                .lineLimit(3)
+                .lineLimit(2)
             Text(run.startedAt, format: .dateTime.weekday(.wide).month(.wide).day().hour().minute())
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -103,65 +102,91 @@ struct RunDetailView: View {
 
     private var chartSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Telemetry")
-                    .font(.subheadline.bold())
+            HStack(spacing: 8) {
+                Text("Telemetry").font(.subheadline.bold())
                 Spacer()
-                seriesToggle("HR", color: .red, isOn: $showHR, available: !hrSeries.isEmpty)
-                seriesToggle("Pace", color: .blue, isOn: $showPace, available: !paceSeries.isEmpty)
-            }
-
-            if showHR && !hrSeries.isEmpty {
-                hrChart
-            }
-
-            if showPace && !paceSeries.isEmpty {
-                paceChart
+                legendChip("HR", color: .red,
+                           range: hrRangeLabel,
+                           isOn: $showHR, available: !hrSeries.isEmpty)
+                legendChip("Pace", color: .blue,
+                           range: paceRangeLabel,
+                           isOn: $showPace, available: !paceSeries.isEmpty)
             }
 
             if hrSeries.isEmpty && paceSeries.isEmpty && !isLoading {
                 placeholderBox(text: "No telemetry available for this run.", height: 80)
+            } else {
+                overlayChart
             }
         }
     }
 
-    @ViewBuilder
-    private var hrChart: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Heart rate")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Chart(hrSeries) { point in
-                LineMark(
-                    x: .value("Time", point.timestamp),
-                    y: .value("BPM", point.value)
-                )
-                .interpolationMethod(.monotone)
-                .foregroundStyle(.red)
+    /// Single chart with both lines overlaid. Each series is normalized
+    /// to [0, 1] so they share a common Y axis even though their natural
+    /// units (bpm vs sec/km) are unrelated. Pace is also inverted so up =
+    /// faster. The legend chips above show absolute ranges; the chart
+    /// itself shows shape and timing.
+    private var overlayChart: some View {
+        Chart {
+            if showHR {
+                ForEach(hrSeries) { point in
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        y: .value("Normalized", normalize(point.value, range: hrRange))
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(.red)
+                }
             }
-            .chartYAxisLabel("bpm")
-            .frame(height: 140)
+            if showPace {
+                ForEach(paceSeries) { point in
+                    LineMark(
+                        x: .value("Time", point.timestamp),
+                        // Invert: smaller pace value (faster) → higher line.
+                        y: .value("Normalized", 1 - normalize(point.value, range: paceRange))
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(.blue)
+                }
+            }
         }
+        .chartYAxis(.hidden)
+        .chartXAxis {
+            AxisMarks(values: .stride(by: .minute, count: 5)) { _ in
+                AxisGridLine()
+                AxisValueLabel(format: .dateTime.hour().minute())
+            }
+        }
+        .chartYScale(domain: 0...1)
+        .frame(height: 180)
     }
 
-    @ViewBuilder
-    private var paceChart: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Pace (sec / km)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Chart(paceSeries) { point in
-                LineMark(
-                    x: .value("Time", point.timestamp),
-                    y: .value("Pace", point.value)
-                )
-                .interpolationMethod(.monotone)
-                .foregroundStyle(.blue)
-            }
-            // Lower number = faster pace; invert axis so up = faster.
-            .chartYScale(domain: .automatic(includesZero: false, reversed: true))
-            .frame(height: 140)
-        }
+    // MARK: - Series ranges (computed for normalisation + legends)
+
+    private var hrRange: (min: Double, max: Double) {
+        let values = hrSeries.map(\.value)
+        return (values.min() ?? 0, values.max() ?? 1)
+    }
+
+    private var paceRange: (min: Double, max: Double) {
+        let values = paceSeries.map(\.value)
+        return (values.min() ?? 0, values.max() ?? 1)
+    }
+
+    private var hrRangeLabel: String {
+        guard !hrSeries.isEmpty else { return "—" }
+        return "\(Int(hrRange.min))–\(Int(hrRange.max)) bpm"
+    }
+
+    private var paceRangeLabel: String {
+        guard !paceSeries.isEmpty else { return "—" }
+        return "\(formatPaceShort(paceRange.min))–\(formatPaceShort(paceRange.max)) /km"
+    }
+
+    private func normalize(_ value: Double, range: (min: Double, max: Double)) -> Double {
+        let span = range.max - range.min
+        guard span > 0.0001 else { return 0.5 }
+        return (value - range.min) / span
     }
 
     private var loadingHint: some View {
@@ -191,13 +216,19 @@ struct RunDetailView: View {
     }
 
     @ViewBuilder
-    private func seriesToggle(_ label: String, color: Color, isOn: Binding<Bool>, available: Bool) -> some View {
+    private func legendChip(_ label: String, color: Color, range: String, isOn: Binding<Bool>, available: Bool) -> some View {
         Button {
             isOn.wrappedValue.toggle()
         } label: {
             HStack(spacing: 4) {
-                Circle().fill(color).frame(width: 8, height: 8)
-                Text(label).font(.caption)
+                Circle()
+                    .fill(isOn.wrappedValue ? color : .gray.opacity(0.5))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(label).font(.caption.bold())
+                    Text(range).font(.caption2).foregroundStyle(.secondary)
+                }
+                .strikethrough(!isOn.wrappedValue, color: .secondary)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
@@ -209,6 +240,13 @@ struct RunDetailView: View {
         .buttonStyle(.plain)
         .disabled(!available)
         .opacity(available ? 1 : 0.4)
+    }
+
+    private func formatPaceShort(_ secPerKm: Double) -> String {
+        guard secPerKm.isFinite, secPerKm > 0 else { return "—" }
+        let m = Int(secPerKm) / 60
+        let r = Int(secPerKm) % 60
+        return String(format: "%d:%02d", m, r)
     }
 
     @ViewBuilder
