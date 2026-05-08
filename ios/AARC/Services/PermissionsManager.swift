@@ -64,14 +64,34 @@ final class PermissionsManager {
     }
 
     func requestMicrophone() async {
-        _ = await AVAudioApplication.requestRecordPermission()
+        _ = await Self.requestMicrophonePermission()
         await refresh()
     }
 
     func requestSpeechRecognition() async {
-        _ = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { _ in continuation.resume(returning: ()) }
-        }
+        _ = await Self.requestSpeechRecognitionAuthorization()
         await refresh()
+    }
+
+    /// Off-MainActor helper. SFSpeechRecognizer's callback fires on an
+    /// arbitrary queue; calling `withCheckedContinuation` from inside a
+    /// `@MainActor` function in Swift 6 strict concurrency trips a
+    /// dispatch-queue assertion when the continuation resumes. Doing the
+    /// authorization request from a `nonisolated` static helper sidesteps
+    /// the cross-isolation resume path; the @MainActor caller awaits the
+    /// final value and updates state on its own actor.
+    nonisolated private static func requestSpeechRecognitionAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
+        await withCheckedContinuation { (continuation: CheckedContinuation<SFSpeechRecognizerAuthorizationStatus, Never>) in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    /// Symmetric helper for the mic. The async API on iOS 17+ already
+    /// returns a `Bool`, but we keep it nonisolated for consistency with
+    /// the speech path.
+    nonisolated private static func requestMicrophonePermission() async -> Bool {
+        await AVAudioApplication.requestRecordPermission()
     }
 }
