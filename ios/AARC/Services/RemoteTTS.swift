@@ -14,37 +14,42 @@ import Observation
 final class RemoteTTS: NSObject {
     static let shared = RemoteTTS()
 
-    /// Currently selected voice. Mutable; UI binds to it.
-    var voice: ElevenLabsVoice = .danielBritish
+    /// Hardcoded ElevenLabs voice. We picked one and we're sticking with
+    /// it; no user-facing voice picker.
+    static let voiceId: String = "lKMAeQD7Brvj7QCWByqK"
 
     /// Cumulative bytes pulled from the proxy this session — diagnostic.
     private(set) var bytesFetchedThisSession: Int = 0
     /// Whether we used the cache instead of fetching, last call.
     private(set) var lastWasCacheHit: Bool = false
+    /// Last upstream error string, if the most recent attempt fell back.
+    private(set) var lastError: String?
 
     private var player: AVAudioPlayer?
 
-    /// Speak a single line. Asynchronous: first call for a (voice, text)
-    /// pair waits on the network round-trip; subsequent calls play from
-    /// the local cache.
+    /// Speak a single line. Asynchronous: first call for a given text
+    /// pays the network round-trip; subsequent calls play from cache.
     func speak(_ text: String) async {
         guard !text.isEmpty else { return }
         guard !AudioPlaybackManager.shared.isMuted else { return }
 
-        let key = AudioCache.key(voiceId: voice.id, text: text)
+        let key = AudioCache.key(voiceId: Self.voiceId, text: text)
         let url: URL
         if let cached = await AudioCache.shared.url(forKey: key) {
             url = cached
             lastWasCacheHit = true
+            lastError = nil
         } else {
             do {
                 let data = try await fetchAudio(text: text)
                 bytesFetchedThisSession += data.count
                 url = try await AudioCache.shared.store(data: data, forKey: key)
                 lastWasCacheHit = false
+                lastError = nil
             } catch {
                 // Network / upstream failure → speak with the local
                 // synthesizer so the runner isn't silent.
+                lastError = error.localizedDescription
                 LocalTTS.shared.speak(text)
                 return
             }
@@ -58,6 +63,7 @@ final class RemoteTTS: NSObject {
             p.prepareToPlay()
             p.play()
         } catch {
+            lastError = "AVAudioPlayer: \(error.localizedDescription)"
             LocalTTS.shared.speak(text)
         }
     }
@@ -73,7 +79,7 @@ final class RemoteTTS: NSObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.timeoutInterval = 15
-        let body: [String: Any] = ["text": text, "voiceId": voice.id]
+        let body: [String: Any] = ["text": text, "voiceId": Self.voiceId]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)
@@ -100,52 +106,6 @@ extension RemoteTTS: @preconcurrency AVAudioPlayerDelegate {
             }
         }
     }
-}
-
-// MARK: - Voice presets
-
-/// A handful of ElevenLabs preset voices that ship on every account.
-/// User can pick one in Settings → Audio. IDs are stable.
-struct ElevenLabsVoice: Identifiable, Hashable, Sendable {
-    let id: String
-    let name: String
-    let descriptor: String
-    let accent: String
-
-    static let danielBritish = ElevenLabsVoice(
-        id: "onwK4e9ZLuTAKqWW03F9",
-        name: "Daniel",
-        descriptor: "deep, authoritative",
-        accent: "British"
-    )
-    static let georgeBritish = ElevenLabsVoice(
-        id: "JBFqnCBsd6RMkjVDRZzb",
-        name: "George",
-        descriptor: "warm, distinguished",
-        accent: "British"
-    )
-    static let brianAmerican = ElevenLabsVoice(
-        id: "nPczCjzI2devNBz1zQrb",
-        name: "Brian",
-        descriptor: "deep, narration",
-        accent: "American"
-    )
-    static let antoniAmerican = ElevenLabsVoice(
-        id: "ErXwobaYiN019PkySvjV",
-        name: "Antoni",
-        descriptor: "well-rounded",
-        accent: "American"
-    )
-    static let charlieAustralian = ElevenLabsVoice(
-        id: "IKne3meq5aSn9XLyUdCD",
-        name: "Charlie",
-        descriptor: "casual, friendly",
-        accent: "Australian"
-    )
-
-    static let all: [ElevenLabsVoice] = [
-        .danielBritish, .georgeBritish, .brianAmerican, .antoniAmerican, .charlieAustralian,
-    ]
 }
 
 enum RemoteTTSError: Error, LocalizedError {
