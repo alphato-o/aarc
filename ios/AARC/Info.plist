@@ -55,7 +55,5 @@
 	<string>AARC transcribes your voice notes on-device so it can pass the text to the AI companion for a reply.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>AARC reads motion data to confirm step count and cadence on indoor (treadmill) runs.</string>
-	<key>WKAppBundleIdentifier</key>
-	<string>club.aarun.AARC.watchkitapp</string>
 </dict>
 </plist>
