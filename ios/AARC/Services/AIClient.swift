@@ -13,12 +13,12 @@ actor AIClient {
 
     init(session: URLSession = .shared) {
         self.session = session
-        let e = JSONEncoder()
-        e.keyEncodingStrategy = .convertToSnakeCase
-        self.encoder = e
-        let d = JSONDecoder()
-        d.keyDecodingStrategy = .useDefaultKeys
-        self.decoder = d
+        // The proxy schema is camelCase (distanceKm, runType, …), so we
+        // pass keys through untouched on both sides. Don't switch to
+        // snake_case — that produced "distance_km" in requests and
+        // tripped the zod validator on the proxy.
+        self.encoder = JSONEncoder()
+        self.decoder = JSONDecoder()
     }
 
     /// Inputs the proxy's `/generate-script` route accepts.
