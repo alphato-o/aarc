@@ -124,6 +124,36 @@ npx wrangler deploy
 
 In Xcode, edit the `AARC` scheme → Run → Arguments → Environment Variables, add `AARC_API_BASE_URL=http://localhost:8787` for debug builds. Production builds always hit `https://api.aarun.club`.
 
+### Quick iteration loop
+
+```sh
+git pull
+cd ios && xcodegen generate
+open AARC.xcodeproj
+# ⌘R with AARC scheme + iPhone destination
+```
+
+After deploy: check the **build number on the watch home screen** (and iPhone Settings → About). If both match the value in `ios/project.yml`'s `CURRENT_PROJECT_VERSION`, you're on the latest build. Bumped on every code-change push by `scripts/bump-build.sh` (see AGENTS.md).
+
+### Deploying only the watch app
+
+When the iOS code didn't change but the watch did, skip the full iOS install:
+
+1. Toolbar scheme dropdown → switch from **AARC** to **AARCWatch**
+2. Destination dropdown → your Apple Watch by name
+3. ⌘R — Xcode pushes the watch bundle through the iPhone
+
+Switch back to the **AARC** scheme afterwards.
+
+### When to clean or delete
+
+You almost never need to. Day-to-day, incremental builds + reinstalls are correct. Reach for these only when something visibly broken:
+
+- **⌘⇧K (Clean Build Folder)** — signature seal mismatches, "module not found" after a refactor, Xcode insists nothing has changed
+- **Delete app from iPhone** — capabilities or entitlements changed and provisioning needs to re-bind
+- **Force-quit watch app** (swipe away in recents) — when you suspect watchOS is keeping an older instance warm and you want to be sure the next launch loads the freshly-deployed bundle
+- **`rm -rf ~/Library/Developer/Xcode/DerivedData/AARC-*`** — last-resort nuke when ⌘⇧K isn't enough
+
 ---
 
 ## License
