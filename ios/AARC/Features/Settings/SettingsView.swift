@@ -27,6 +27,20 @@ struct SettingsView: View {
                     }
                     .disabled(!phoneSession.isReachable)
                     LabeledContent("Watch reachable", value: phoneSession.isReachable ? "Yes" : "No")
+
+                    Button("Test companion voice") {
+                        LocalTTS.shared.speak(
+                            "Audio test. If your music just ducked, AARC's audio session is wired up. If it kept blasting, something is broken — but at least you have music."
+                        )
+                    }
+                    LabeledContent("Voice", value: LocalTTS.shared.voiceDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Audio") {
+                    Toggle("Mute companion", isOn: muteBinding)
+                    LabeledContent("Audio session", value: AudioPlaybackManager.shared.isSessionActive ? "Active" : "Idle")
                 }
 
                 Section("About") {
@@ -36,6 +50,15 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
         }
+    }
+
+    /// Bridges AudioPlaybackManager.isMuted (a non-@Bindable @Observable
+    /// property on a singleton) into a SwiftUI Binding for the Toggle.
+    private var muteBinding: Binding<Bool> {
+        Binding(
+            get: { AudioPlaybackManager.shared.isMuted },
+            set: { AudioPlaybackManager.shared.isMuted = $0 }
+        )
     }
 
     private func ping() {
