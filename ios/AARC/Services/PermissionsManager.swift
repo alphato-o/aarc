@@ -6,6 +6,8 @@ import Speech
 @Observable
 @MainActor
 final class PermissionsManager {
+    static let shared = PermissionsManager()
+
     private let healthStore = HKHealthStore()
 
     var healthKitAuthorized: Bool = false

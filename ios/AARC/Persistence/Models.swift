@@ -1,8 +1,8 @@
 import Foundation
 import SwiftData
 
-// Phase 0 placeholder schema. Fields fleshed out in Phase 1.
-// See docs/data-model.md for the final shape.
+// Phase 0 placeholder schema, fleshed out in §1.9.
+// See docs/data-model.md for the full target shape.
 
 @Model
 final class RunRecord {
@@ -10,16 +10,49 @@ final class RunRecord {
     var startedAt: Date
     var endedAt: Date?
     var personality: String
+    /// Apple Health's UUID for the corresponding workout. Source of
+    /// truth for sample data (route, HR series, etc.) — fetched on
+    /// demand rather than duplicated locally.
     var healthKitWorkoutUUID: UUID?
     /// True for runs recorded while either safety mode was on (D19).
     /// Drives the "TEST" badge in History and is the link key for cleanup.
     var isTestData: Bool = false
 
-    init(id: UUID = UUID(), startedAt: Date = .now, personality: String, isTestData: Bool = false) {
+    /// "outdoor" or "treadmill". Stored as raw string for SwiftData
+    /// schema simplicity; convert to/from `AARCKit.RunType` at the edges.
+    var runTypeRaw: String = "outdoor"
+
+    // Denormalised snapshot from HealthKit, for fast list rendering
+    // without re-querying HK on every row. Refreshed on save.
+    var cachedDistanceMeters: Double = 0
+    var cachedDurationSeconds: Double = 0
+    var cachedAvgPaceSecPerKm: Double = 0
+    var cachedEnergyKcal: Double = 0
+
+    init(
+        id: UUID = UUID(),
+        startedAt: Date = .now,
+        endedAt: Date? = nil,
+        personality: String,
+        isTestData: Bool = false,
+        healthKitWorkoutUUID: UUID? = nil,
+        runTypeRaw: String = "outdoor",
+        cachedDistanceMeters: Double = 0,
+        cachedDurationSeconds: Double = 0,
+        cachedAvgPaceSecPerKm: Double = 0,
+        cachedEnergyKcal: Double = 0
+    ) {
         self.id = id
         self.startedAt = startedAt
+        self.endedAt = endedAt
         self.personality = personality
         self.isTestData = isTestData
+        self.healthKitWorkoutUUID = healthKitWorkoutUUID
+        self.runTypeRaw = runTypeRaw
+        self.cachedDistanceMeters = cachedDistanceMeters
+        self.cachedDurationSeconds = cachedDurationSeconds
+        self.cachedAvgPaceSecPerKm = cachedAvgPaceSecPerKm
+        self.cachedEnergyKcal = cachedEnergyKcal
     }
 }
 

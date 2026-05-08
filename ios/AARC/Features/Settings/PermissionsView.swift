@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct PermissionsView: View {
-    @State private var manager = PermissionsManager()
+    @State private var manager = PermissionsManager.shared
 
     var body: some View {
         Form {
