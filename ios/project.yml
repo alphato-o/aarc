@@ -66,6 +66,14 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         SUPPORTED_PLATFORMS: "watchos watchsimulator"
         ENABLE_PREVIEWS: YES
+        # Manual signing: auto-signing on this team minted iOS-platform profiles
+        # for the watch target, which fail validation on the watch itself with
+        # MIInstallerError 0xe8008015. The Portal-issued watchOS profile is
+        # named "AARC Watch Development".
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "Apple Development"
+        PROVISIONING_PROFILE_SPECIFIER: "AARC Watch Development"
+        DEVELOPMENT_TEAM: GK7889VKDF
     dependencies:
       - package: AARCKit
 
