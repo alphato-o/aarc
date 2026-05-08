@@ -14,6 +14,8 @@ import AARCKit
 @Observable
 @MainActor
 final class WorkoutSessionHost: NSObject {
+    static let shared = WorkoutSessionHost()
+
     // Published state for the UI.
     var state: WorkoutState = .idle
     var liveMetrics: LiveMetrics = .zero
@@ -99,17 +101,25 @@ final class WorkoutSessionHost: NSObject {
 
         state = .running
         startTicker()
+
+        // Tell the phone the workout has started so it can begin
+        // observing live metrics. Queued + guaranteed delivery.
+        WatchSession.shared.sendStateEvent(
+            .workoutStarted(runId: runId, startedAt: startedAt ?? .now)
+        )
     }
 
     func pause() {
         guard state == .running else { return }
         session?.pause()
         // delegate flips state to .paused
+        WatchSession.shared.sendStateEvent(.workoutPaused)
     }
 
     func resume() {
         guard state == .paused else { return }
         session?.resume()
+        WatchSession.shared.sendStateEvent(.workoutResumed)
     }
 
     /// End the run. Honours `skipHealthKitWrite`: when set, abandons the
@@ -154,6 +164,9 @@ final class WorkoutSessionHost: NSObject {
             self.builder = nil
             self.routeBuilder = nil
             state = .ended
+            if let uuid = workout?.uuid {
+                WatchSession.shared.sendStateEvent(.workoutEnded(healthKitWorkoutUUID: uuid))
+            }
             return workout?.uuid
         } catch {
             lastError = error.localizedDescription
@@ -219,6 +232,11 @@ final class WorkoutSessionHost: NSObject {
             lastSplit: split,
             state: state
         )
+
+        // Push to the iPhone. Best-effort; drops are fine because the
+        // watch keeps writing to HealthKit independently.
+        WatchSession.shared.sendLiveMetrics(liveMetrics)
+
         _ = startedAt  // silence unused for now
     }
 

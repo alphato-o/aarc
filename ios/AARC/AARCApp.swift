@@ -3,14 +3,13 @@ import SwiftData
 
 @main
 struct AARCApp: App {
-    private let phoneSession = PhoneSession()
-
     var body: some Scene {
         WindowGroup {
             RootTabView()
-                .environment(phoneSession)
+                .environment(PhoneSession.shared)
+                .environment(LiveMetricsConsumer.shared)
                 .preferredColorScheme(.dark)
-                .task { phoneSession.activate() }
+                .task { PhoneSession.shared.activate() }
         }
         .modelContainer(PersistenceStore.shared.container)
     }
