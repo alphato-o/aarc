@@ -11,11 +11,15 @@ final class RunRecord {
     var endedAt: Date?
     var personality: String
     var healthKitWorkoutUUID: UUID?
+    /// True for runs recorded while either safety mode was on (D19).
+    /// Drives the "TEST" badge in History and is the link key for cleanup.
+    var isTestData: Bool = false
 
-    init(id: UUID = UUID(), startedAt: Date = .now, personality: String) {
+    init(id: UUID = UUID(), startedAt: Date = .now, personality: String, isTestData: Bool = false) {
         self.id = id
         self.startedAt = startedAt
         self.personality = personality
+        self.isTestData = isTestData
     }
 }
 

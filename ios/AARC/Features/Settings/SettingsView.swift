@@ -8,6 +8,8 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                TestDataSettingsSection()
+
                 Section("Diagnostics") {
                     NavigationLink("Permissions") { PermissionsView() }
                     Button(action: ping) {
