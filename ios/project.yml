@@ -17,7 +17,7 @@ settings:
     DEVELOPMENT_TEAM: ""
     ENABLE_HARDENED_RUNTIME: NO
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "3"
+    CURRENT_PROJECT_VERSION: "4"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 
@@ -51,6 +51,7 @@ targets:
         embed: true
     postBuildScripts:
       - name: Stamp Build Number
+        basedOnDependencyAnalysis: false
         script: |
           # Replace the built Info.plist's CFBundleVersion with
           # "<source-version>.<HHMMSS>" so each Xcode build is uniquely
@@ -90,6 +91,7 @@ targets:
       - package: AARCKit
     postBuildScripts:
       - name: Stamp Build Number
+        basedOnDependencyAnalysis: false
         script: |
           set -e
           buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"

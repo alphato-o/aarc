@@ -1,5 +1,7 @@
 import Foundation
 import Observation
+import SwiftData
+import HealthKit
 import AARCKit
 
 /// iPhone-side sink for the watch's 1 Hz `LiveMetrics` stream. Holds the
@@ -50,53 +52,116 @@ final class LiveMetricsConsumer {
     }
 
     func ingestPaused() {
-        if var m = latest {
-            m = LiveMetrics(
-                elapsed: m.elapsed,
-                distanceMeters: m.distanceMeters,
-                currentPaceSecPerKm: m.currentPaceSecPerKm,
-                avgPaceSecPerKm: m.avgPaceSecPerKm,
-                currentHeartRate: m.currentHeartRate,
-                energyKcal: m.energyKcal,
-                lastSplit: m.lastSplit,
-                state: .paused
-            )
-            self.latest = m
-        }
+        latest = latest?.with(state: .paused)
     }
 
     func ingestResumed() {
-        if var m = latest {
-            m = LiveMetrics(
-                elapsed: m.elapsed,
-                distanceMeters: m.distanceMeters,
-                currentPaceSecPerKm: m.currentPaceSecPerKm,
-                avgPaceSecPerKm: m.avgPaceSecPerKm,
-                currentHeartRate: m.currentHeartRate,
-                energyKcal: m.energyKcal,
-                lastSplit: m.lastSplit,
-                state: .running
-            )
-            self.latest = m
-        }
+        latest = latest?.with(state: .running)
     }
 
     func ingestEnded(workoutUUID: UUID) {
         self.lastFinishedWorkoutUUID = workoutUUID
-        // Mark the latest snapshot as ended; UI uses this to wind down.
-        if var m = latest {
-            m = LiveMetrics(
-                elapsed: m.elapsed,
-                distanceMeters: m.distanceMeters,
-                currentPaceSecPerKm: m.currentPaceSecPerKm,
-                avgPaceSecPerKm: m.avgPaceSecPerKm,
-                currentHeartRate: m.currentHeartRate,
-                energyKcal: m.energyKcal,
-                lastSplit: m.lastSplit,
-                state: .ended
-            )
-            self.latest = m
+        latest = latest?.with(state: .ended)
+
+        // Kick off persistence in the background. HK may take a few
+        // seconds to propagate the workout from watch to iPhone, so the
+        // task retries with backoff.
+        Task { await persistRun(workoutUUID: workoutUUID) }
+    }
+
+    /// Fetch the workout from HealthKit and write a `RunRecord` row.
+    /// Idempotent: if a record with the same HK UUID already exists,
+    /// it is updated rather than duplicated.
+    private func persistRun(workoutUUID: UUID) async {
+        guard let workout = try? await HealthKitReader.shared.fetchWorkoutWithRetry(uuid: workoutUUID) else {
+            // We can still create a stub record so the run isn't lost;
+            // the cached fields will be 0 until HK syncs and the user
+            // pulls to refresh (a future affordance).
+            createStubRecord(workoutUUID: workoutUUID)
+            return
         }
-        // Run record persistence lands in §1.9 (post-run summary).
+
+        let context = PersistenceStore.shared.container.mainContext
+
+        // Pull denormalised fields out of HK.
+        let distance = HealthKitReader.shared.distanceMeters(workout)
+        let energy = HealthKitReader.shared.energyKcal(workout)
+        let runType = HealthKitReader.shared.runType(workout)
+        let isTest = HealthKitReader.shared.isTestData(workout)
+        let aarcId = HealthKitReader.shared.aarcRunId(workout) ?? currentRunId ?? UUID()
+        let duration = workout.duration
+        let avgPace = (distance > 0) ? duration / (distance / 1000) : 0
+
+        let existing = try? context.fetch(
+            FetchDescriptor<RunRecord>(
+                predicate: #Predicate { $0.healthKitWorkoutUUID == workoutUUID }
+            )
+        )
+
+        if let record = existing?.first {
+            record.endedAt = workout.endDate
+            record.cachedDistanceMeters = distance
+            record.cachedDurationSeconds = duration
+            record.cachedAvgPaceSecPerKm = avgPace
+            record.cachedEnergyKcal = energy
+            record.runTypeRaw = runType.rawValue
+            record.isTestData = isTest
+        } else {
+            let record = RunRecord(
+                id: aarcId,
+                startedAt: workout.startDate,
+                endedAt: workout.endDate,
+                personality: "roast_coach",  // §1.5 will source this properly
+                isTestData: isTest,
+                healthKitWorkoutUUID: workoutUUID,
+                runTypeRaw: runType.rawValue,
+                cachedDistanceMeters: distance,
+                cachedDurationSeconds: duration,
+                cachedAvgPaceSecPerKm: avgPace,
+                cachedEnergyKcal: energy
+            )
+            context.insert(record)
+        }
+
+        try? context.save()
+    }
+
+    private func createStubRecord(workoutUUID: UUID) {
+        let context = PersistenceStore.shared.container.mainContext
+        let id = currentRunId ?? UUID()
+        let existing = try? context.fetch(
+            FetchDescriptor<RunRecord>(predicate: #Predicate { $0.id == id })
+        )
+        guard existing?.isEmpty ?? true else { return }
+        let record = RunRecord(
+            id: id,
+            startedAt: startedAt ?? .now,
+            endedAt: .now,
+            personality: "roast_coach",
+            isTestData: true,
+            healthKitWorkoutUUID: workoutUUID,
+            runTypeRaw: latest?.lastSplit == nil ? "outdoor" : "outdoor",
+            cachedDistanceMeters: latest?.distanceMeters ?? 0,
+            cachedDurationSeconds: latest?.elapsed ?? 0,
+            cachedAvgPaceSecPerKm: latest?.avgPaceSecPerKm ?? 0,
+            cachedEnergyKcal: latest?.energyKcal ?? 0
+        )
+        context.insert(record)
+        try? context.save()
+    }
+}
+
+private extension LiveMetrics {
+    func with(state newState: WorkoutState) -> LiveMetrics {
+        LiveMetrics(
+            elapsed: elapsed,
+            distanceMeters: distanceMeters,
+            currentPaceSecPerKm: currentPaceSecPerKm,
+            avgPaceSecPerKm: avgPaceSecPerKm,
+            currentHeartRate: currentHeartRate,
+            energyKcal: energyKcal,
+            lastSplit: lastSplit,
+            state: newState
+        )
     }
 }
