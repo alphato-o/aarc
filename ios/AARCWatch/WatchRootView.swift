@@ -1,4 +1,5 @@
 import SwiftUI
+import AARCKit
 
 struct WatchRootView: View {
     @Environment(WatchSession.self) private var session
@@ -8,13 +9,14 @@ struct WatchRootView: View {
     @State private var requestingAuth = false
     @State private var startError: String?
     @State private var showActiveRun = false
+    @State private var mode: RunType = .treadmill  // safer default for first runs
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 10) {
                     Image(systemName: "figure.run")
-                        .font(.system(size: 36))
+                        .font(.system(size: 32))
                         .foregroundStyle(.tint)
 
                     Text("AARC")
@@ -33,12 +35,30 @@ struct WatchRootView: View {
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                     } else {
-                        Button("Start Run") {
-                            Task { await startOutdoorRun() }
+                        // Two distinct buttons read better on watchOS than
+                        // a picker. .segmented is unavailable on watchOS.
+                        VStack(spacing: 6) {
+                            Button {
+                                mode = .treadmill
+                                Task { await startRun() }
+                            } label: {
+                                Label("Treadmill", systemImage: "figure.run.treadmill")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.green)
+                            .controlSize(.small)
+
+                            Button {
+                                mode = .outdoor
+                                Task { await startRun() }
+                            } label: {
+                                Label("Outdoor", systemImage: "figure.run")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.green)
-                        .controlSize(.small)
                     }
 
                     if let startError {
@@ -79,12 +99,15 @@ struct WatchRootView: View {
         }
     }
 
-    private func startOutdoorRun() async {
+    private func startRun() async {
         startError = nil
         do {
-            // §1.1 default: tag every watch-initiated run as test data.
-            // §1.2 will override this from the phone via WCMessage.startWorkout.
-            try await host.startOutdoorRun(isTestData: true, skipHealthKitWrite: false)
+            switch mode {
+            case .outdoor:
+                try await host.startOutdoorRun(isTestData: true, skipHealthKitWrite: false)
+            case .treadmill:
+                try await host.startTreadmillRun(isTestData: true, skipHealthKitWrite: false)
+            }
             showActiveRun = true
         } catch {
             startError = error.localizedDescription
@@ -94,6 +117,6 @@ struct WatchRootView: View {
 
 #Preview {
     WatchRootView()
-        .environment(WatchSession())
-        .environment(WorkoutSessionHost())
+        .environment(WatchSession.shared)
+        .environment(WorkoutSessionHost.shared)
 }
