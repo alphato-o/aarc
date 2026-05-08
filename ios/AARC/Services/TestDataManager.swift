@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import AARCKit
 
 /// Counts and bulk-deletes AARC-tagged workouts in HealthKit.
 /// Companion-data cleanup (local RunRecord rows) happens in the caller

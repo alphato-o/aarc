@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import AARCKit  // re-exported HKMetadataKeys
+import AARCKit  // for HKMetadataKeys (used by other settings consumers)
 
 /// User-facing safety toggles that govern HealthKit writes.
 /// Default at app launch: tag mode ON, skip mode OFF (D19).
