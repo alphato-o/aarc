@@ -43,12 +43,29 @@ final class LiveMetricsConsumer {
     func ingest(_ metrics: LiveMetrics) {
         self.latest = metrics
         self.lastUpdateAt = .now
+        // Forward to the script engine so generated lines fire at the
+        // right moments. No-op when the engine isn't active.
+        ScriptEngine.shared.processTick(metrics)
     }
 
     func ingestStarted(runId: UUID, startedAt: Date) {
         self.currentRunId = runId
         self.startedAt = startedAt
         self.lastFinishedWorkoutUUID = nil
+
+        // Hand the most-recently generated script to ScriptEngine so it
+        // can begin firing lines on the upcoming live-metrics ticks.
+        // §1.7 will replace this "use whatever's in ScriptPreviewStore"
+        // path with a proper Ready-to-run flow on RunHomeView; for now
+        // the contract is: generate a script in Settings → Script
+        // Preview, then start the run.
+        if let script = ScriptPreviewStore.shared.latest {
+            let plannedMeters = ScriptPreviewStore.shared.distanceKm * 1000
+            ScriptEngine.shared.start(
+                script: script,
+                plannedDistanceMeters: plannedMeters
+            )
+        }
     }
 
     func ingestPaused() {
@@ -62,6 +79,11 @@ final class LiveMetricsConsumer {
     func ingestEnded(workoutUUID: UUID) {
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
+
+        // Wind down the script engine — the "finish" trigger should
+        // already have fired during a normal run. If the user ended
+        // early, any unspoken lines just go quiet.
+        ScriptEngine.shared.stop()
 
         // Kick off persistence in the background. HK may take a few
         // seconds to propagate the workout from watch to iPhone, so the

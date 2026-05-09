@@ -67,6 +67,22 @@ struct SettingsView: View {
                     Text("ElevenLabs gives a punchy neural voice for the companion. Each line is downloaded once and cached on this device — repeats are free. Falls back to Apple's voice automatically if the network drops.")
                 }
 
+                Section {
+                    LabeledContent("State", value: ScriptEngine.shared.isActive ? "Active" : "Idle")
+                    LabeledContent("Lines dispatched", value: "\(ScriptEngine.shared.dispatchCount)")
+                        .monospacedDigit()
+                    if let last = ScriptEngine.shared.lastDispatched {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Last line").font(.caption).foregroundStyle(.secondary)
+                            Text(last).font(.caption).lineLimit(3)
+                        }
+                    }
+                } header: {
+                    Text("Script Engine")
+                } footer: {
+                    Text("Activates automatically when the watch starts a workout, using the most-recently generated script in Script Preview. Fires lines as live metrics cross the trigger thresholds.")
+                }
+
                 Section("About") {
                     LabeledContent("Version", value: AppVersion.versionString)
                     LabeledContent("API", value: Config.apiBaseURL.absoluteString)
