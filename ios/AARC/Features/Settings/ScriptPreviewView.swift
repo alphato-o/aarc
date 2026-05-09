@@ -1,11 +1,11 @@
 import SwiftUI
 import AARCKit
 
-/// Diagnostic surface: hits POST /generate-script with a 5km treadmill
-/// Roast Coach plan, displays each returned line, and offers a "Speak"
-/// button per line plus "Speak all" for the whole sequence. Validates
-/// the proxy → Anthropic → schema-validated JSON pipe end-to-end before
-/// the script engine wires this into actual runs.
+/// Diagnostic surface: hits POST /generate-script with the user's
+/// current plan (distance / time / open), displays each returned line,
+/// and offers a "Speak" button per line plus "Speak all" for the whole
+/// sequence. Validates the proxy → LLM → schema-validated JSON pipe
+/// end-to-end.
 ///
 /// Plan inputs and the most-recent generated script are persisted via
 /// `ScriptPreviewStore.shared` so navigating away and back doesn't
@@ -21,24 +21,40 @@ struct ScriptPreviewView: View {
 
         Form {
             Section("Plan") {
-                Stepper(value: $store.distanceKm, in: 1...42, step: 0.5) {
-                    HStack {
-                        Text("Distance")
-                        Spacer()
-                        Text("\(formattedKm) km")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
+                Picker("Plan", selection: $store.planKind) {
+                    Text("Distance").tag(RunPlan.Kind.distance)
+                    Text("Time").tag(RunPlan.Kind.time)
+                    Text("Open").tag(RunPlan.Kind.open)
                 }
-                Stepper(value: $store.paceMinPerKm, in: 3.0...10.0, step: 0.25) {
-                    HStack {
-                        Text("Target pace")
-                        Spacer()
-                        Text(formattedPace)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                .pickerStyle(.segmented)
+
+                switch store.planKind {
+                case .distance:
+                    Stepper(value: $store.distanceKm, in: 0.5...42, step: 0.5) {
+                        HStack {
+                            Text("Distance")
+                            Spacer()
+                            Text("\(formattedKm) km")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                case .time:
+                    Stepper(value: $store.timeMinutes, in: 5...720, step: 5) {
+                        HStack {
+                            Text("Duration")
+                            Spacer()
+                            Text("\(Int(store.timeMinutes)) min")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                case .open:
+                    Label("Open run — no target", systemImage: "infinity")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
+
                 Button {
                     Task { await generate() }
                 } label: {
@@ -116,27 +132,16 @@ struct ScriptPreviewView: View {
             : String(format: "%.1f", store.distanceKm)
     }
 
-    private var formattedPace: String {
-        let total = Int(store.paceMinPerKm * 60)
-        let m = total / 60
-        let s = total % 60
-        return String(format: "%d:%02d /km", m, s)
-    }
-
     private func generate() async {
         isGenerating = true
         error = nil
         defer { isGenerating = false }
-        let plan = AIClient.ScriptPlan(
-            goal: "free",
-            distanceKm: store.distanceKm,
-            targetPaceSecPerKm: store.paceMinPerKm * 60,
-            personalityId: "roast_coach",
-            runType: "treadmill"
+        let plan = AIClient.ScriptPlan.from(
+            store.currentPlan,
+            runType: .treadmill,
+            personalityId: "roast_coach"
         )
         do {
-            // Replace, not append — each Generate overwrites the cached
-            // script per the founder's spec.
             store.latest = try await AIClient.shared.generateScript(plan: plan)
         } catch {
             self.error = error.localizedDescription

@@ -64,8 +64,6 @@ export async function generateScriptHandler(
         );
     }
 
-    // The model is instructed to produce JSON only. Tolerate accidental
-    // code-fence wrapping; reject anything else.
     const jsonText = stripCodeFences(raw);
     let parsedScript: unknown;
     try {
@@ -106,16 +104,28 @@ export async function generateScriptHandler(
 function buildUserPrompt(
     req: z.infer<typeof GenerateScriptRequestSchema>,
 ): string {
-    const lines: string[] = [
-        `Distance: ${req.distanceKm} km`,
-        `Run type: ${req.runType}`,
-        `Goal: ${req.goal}`,
-    ];
-    if (req.targetPaceSecPerKm) {
-        const m = Math.floor(req.targetPaceSecPerKm / 60);
-        const s = Math.round(req.targetPaceSecPerKm % 60);
-        lines.push(`Target pace: ${m}:${String(s).padStart(2, "0")} per km`);
+    const lines: string[] = [];
+
+    switch (req.planKind) {
+        case "distance":
+            lines.push(
+                `PLAN: distance run, ${req.distanceKm} km. The runner has a fixed target distance; the script must include the distance-mode required messages (per-km loop, halfway, near_finish with remainingMeters: 100, finish).`,
+            );
+            break;
+        case "time":
+            lines.push(
+                `PLAN: timed run, ${req.timeMinutes} minutes. The runner is running for a fixed time; the script must include the time-mode required messages (a recurring time.everySeconds loop, halfway, near_finish with remainingSeconds: 60, finish). The runner may or may not cross km marks; you can include distance.everyMeters: 1000 if you like, but it is optional.`,
+            );
+            break;
+        case "open":
+            lines.push(
+                `PLAN: open run, no distance or time target. The runner stops when they want. The script must NOT include halfway, finish, or near_finish triggers — there is no defined end. Use distance.everyMeters: 1000 for the per-km loop and scattered time.atSeconds at varied N values for surprise roasts.`,
+            );
+            break;
     }
+
+    lines.push(`Run type: ${req.runType}`);
+    lines.push(`Goal: ${req.goal}`);
     if (req.recentRunSummary) {
         lines.push(`Recent: ${req.recentRunSummary}`);
     }

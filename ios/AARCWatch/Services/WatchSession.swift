@@ -1,5 +1,6 @@
 import Foundation
 import WatchConnectivity
+import WatchKit
 import AARCKit
 
 /// watchOS-side wrapper around `WCSession`. §1.2 makes this the
@@ -109,6 +110,10 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         case .startWorkout(let runId, let runType, let personalityId):
             // Phone-initiated. Phone has already generated the script,
             // so skip preparing and jump straight to countdown.
+            // Fire a strong haptic so the wrist gets nudged — best we
+            // can do for "look at the watch" since watchOS doesn't
+            // expose remote-foreground.
+            WKInterfaceDevice.current().play(.notification)
             Task {
                 await WorkoutSessionHost.shared.beginRun(
                     runType: runType,

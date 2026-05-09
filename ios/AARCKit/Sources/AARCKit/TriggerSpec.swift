@@ -14,28 +14,35 @@ public struct TriggerSpec: Codable, Sendable, Hashable {
 
     public let type: Kind
     public let atSeconds: Int?
+    public let everySeconds: Int?
     public let atMeters: Double?
     public let everyMeters: Double?
     public let remainingMeters: Double?
+    public let remainingSeconds: Int?
 
     public init(
         type: Kind,
         atSeconds: Int? = nil,
+        everySeconds: Int? = nil,
         atMeters: Double? = nil,
         everyMeters: Double? = nil,
-        remainingMeters: Double? = nil
+        remainingMeters: Double? = nil,
+        remainingSeconds: Int? = nil
     ) {
         self.type = type
         self.atSeconds = atSeconds
+        self.everySeconds = everySeconds
         self.atMeters = atMeters
         self.everyMeters = everyMeters
         self.remainingMeters = remainingMeters
+        self.remainingSeconds = remainingSeconds
     }
 
     /// Render as a tiny human-readable hint for diagnostics UIs.
     public var humanDescription: String {
         switch type {
         case .time:
+            if let every = everySeconds { return "every \(every)s" }
             return "at t=\(atSeconds ?? 0)s"
         case .distance:
             if let every = everyMeters { return "every \(Int(every))m" }
@@ -44,6 +51,7 @@ public struct TriggerSpec: Codable, Sendable, Hashable {
         case .halfway:
             return "halfway"
         case .nearFinish:
+            if let s = remainingSeconds { return "\(s)s to go" }
             return "\(Int(remainingMeters ?? 0))m to go"
         case .finish:
             return "at finish"

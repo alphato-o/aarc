@@ -73,6 +73,25 @@ final class RemoteTTS: NSObject {
         player = nil
     }
 
+    /// Download + cache the audio for a line WITHOUT playing it.
+    /// Used by RunOrchestrator to warm the cache during the prepare
+    /// phase so the warmup at t=0 plays instantly. Best-effort; on
+    /// failure the live `speak(_:)` path will retry or fall back to
+    /// LocalTTS.
+    func prefetch(_ text: String) async {
+        guard !text.isEmpty else { return }
+        let key = AudioCache.key(voiceId: Self.voiceId, text: text)
+        if await AudioCache.shared.url(forKey: key) != nil { return }
+        do {
+            let data = try await fetchAudio(text: text)
+            bytesFetchedThisSession += data.count
+            _ = try await AudioCache.shared.store(data: data, forKey: key)
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     private func fetchAudio(text: String) async throws -> Data {
         let url = Config.apiBaseURL.appendingPathComponent("tts")
         var request = URLRequest(url: url)
