@@ -9,6 +9,7 @@ public struct TriggerSpec: Codable, Sendable, Hashable {
         case distance
         case halfway
         case nearFinish = "near_finish"
+        case finish
     }
 
     public let type: Kind
@@ -44,6 +45,8 @@ public struct TriggerSpec: Codable, Sendable, Hashable {
             return "halfway"
         case .nearFinish:
             return "\(Int(remainingMeters ?? 0))m to go"
+        case .finish:
+            return "at finish"
         }
     }
 }
