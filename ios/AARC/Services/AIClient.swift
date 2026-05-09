@@ -21,15 +21,31 @@ actor AIClient {
         self.decoder = JSONDecoder()
     }
 
-    /// Inputs the proxy's `/generate-script` route accepts.
+    /// Inputs the proxy's `/generate-script` route accepts. Pace was
+    /// dropped — runners run how they feel, the AI doesn't need it.
+    /// `planKind` selects the plan structure; provide whichever of
+    /// distanceKm / timeMinutes matches.
     struct ScriptPlan: Codable, Sendable {
         var goal: String = "free"        // "free" | "training" | "race"
-        var distanceKm: Double
-        var targetPaceSecPerKm: Double?
+        var planKind: String             // "distance" | "time" | "open"
+        var distanceKm: Double?
+        var timeMinutes: Double?
         var personalityId: String = "roast_coach"
         var runType: String = "outdoor"  // "outdoor" | "treadmill"
         var recentRunSummary: String?
         var userMemory: [String]?
+
+        /// Convenience — derive a ScriptPlan from a RunPlan + run type.
+        static func from(_ plan: RunPlan, runType: RunType, personalityId: String) -> ScriptPlan {
+            ScriptPlan(
+                goal: "free",
+                planKind: plan.kind.rawValue,
+                distanceKm: plan.distanceKm,
+                timeMinutes: plan.timeMinutes,
+                personalityId: personalityId,
+                runType: runType.rawValue
+            )
+        }
     }
 
     func generateScript(plan: ScriptPlan) async throws -> GeneratedScript {

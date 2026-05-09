@@ -5,49 +5,114 @@ struct RunHomeView: View {
     @State private var selectedPersonality: Personality = .roastCoach
     @State private var settings = TestDataSettings.shared
     @State private var orchestrator = RunOrchestrator.shared
+    @State private var planStore = ScriptPreviewStore.shared
 
     var body: some View {
+        @Bindable var planStore = planStore
+
         NavigationStack {
-            VStack(spacing: 0) {
-                if settings.isAnySafetyModeOn {
-                    TestRunBanner(skipHealthKit: settings.skipHealthKitWrite)
-                }
-
-                VStack(spacing: 24) {
-                    LiveRunTile()
-
-                    if !LiveMetricsConsumer.shared.isRunActive {
-                        Image(systemName: "figure.run.circle.fill")
-                            .font(.system(size: 96))
-                            .foregroundStyle(Theme.accent)
-
-                        startSection
+            ScrollView {
+                VStack(spacing: 0) {
+                    if settings.isAnySafetyModeOn {
+                        TestRunBanner(skipHealthKit: settings.skipHealthKitWrite)
                     }
 
-                    Spacer()
+                    VStack(spacing: 20) {
+                        LiveRunTile()
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Companion")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Picker("Personality", selection: $selectedPersonality) {
-                            ForEach(Personality.allDefaults) { p in
-                                Text(p.displayName).tag(p)
-                            }
+                        if !LiveMetricsConsumer.shared.isRunActive {
+                            Image(systemName: "figure.run.circle.fill")
+                                .font(.system(size: 88))
+                                .foregroundStyle(Theme.accent)
+
+                            planSection(planStore: planStore)
+                            companionSection
+                            startSection
                         }
-                        .pickerStyle(.segmented)
-                        Text(selectedPersonality.tagline)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
                     .padding()
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
-                .padding()
             }
             .navigationTitle("AARC")
         }
     }
+
+    // MARK: - Plan picker
+
+    @ViewBuilder
+    private func planSection(planStore: ScriptPreviewStore) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Plan")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Plan", selection: Binding(
+                get: { planStore.planKind },
+                set: { planStore.planKind = $0 }
+            )) {
+                Text("Distance").tag(RunPlan.Kind.distance)
+                Text("Time").tag(RunPlan.Kind.time)
+                Text("Open").tag(RunPlan.Kind.open)
+            }
+            .pickerStyle(.segmented)
+
+            switch planStore.planKind {
+            case .distance:
+                Stepper(value: Binding(get: { planStore.distanceKm }, set: { planStore.distanceKm = $0 }),
+                        in: 0.5...42, step: 0.5) {
+                    HStack {
+                        Image(systemName: "ruler")
+                        Text("Distance")
+                        Spacer()
+                        Text("\(formatKm(planStore.distanceKm)) km")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            case .time:
+                Stepper(value: Binding(get: { planStore.timeMinutes }, set: { planStore.timeMinutes = $0 }),
+                        in: 5...720, step: 5) {
+                    HStack {
+                        Image(systemName: "stopwatch")
+                        Text("Duration")
+                        Spacer()
+                        Text("\(Int(planStore.timeMinutes)) min")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            case .open:
+                Label("No target — run until you stop", systemImage: "infinity")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            }
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    // MARK: - Companion
+
+    private var companionSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Companion")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("Personality", selection: $selectedPersonality) {
+                ForEach(Personality.allDefaults) { p in
+                    Text(p.displayName).tag(p)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text(selectedPersonality.tagline)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    // MARK: - Start
 
     @ViewBuilder
     private var startSection: some View {
@@ -60,7 +125,7 @@ struct RunHomeView: View {
                 Text("Coach loading…")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("Generating script + ready your watch")
+                Text("Generating script + warming the first lines")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
@@ -90,9 +155,10 @@ struct RunHomeView: View {
                 }
 
                 if phase == .sentToWatch {
-                    Text("Sent to watch — confirm Start there.")
+                    Text("Look at your watch — tap notification to confirm Start.")
                         .font(.caption)
                         .foregroundStyle(.green)
+                        .multilineTextAlignment(.center)
                 }
             }
 
@@ -107,6 +173,12 @@ struct RunHomeView: View {
                 }
             }
         }
+    }
+
+    private func formatKm(_ km: Double) -> String {
+        km.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "%.0f", km)
+            : String(format: "%.1f", km)
     }
 }
 

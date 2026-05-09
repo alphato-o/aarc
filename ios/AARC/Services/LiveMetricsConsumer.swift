@@ -55,15 +55,12 @@ final class LiveMetricsConsumer {
 
         // Hand the most-recently generated script to ScriptEngine so it
         // can begin firing lines on the upcoming live-metrics ticks.
-        // §1.7 will replace this "use whatever's in ScriptPreviewStore"
-        // path with a proper Ready-to-run flow on RunHomeView; for now
-        // the contract is: generate a script in Settings → Script
-        // Preview, then start the run.
+        // The plan (distance / time / open) lives in ScriptPreviewStore
+        // and was the basis for the script's structure.
         if let script = ScriptPreviewStore.shared.latest {
-            let plannedMeters = ScriptPreviewStore.shared.distanceKm * 1000
             ScriptEngine.shared.start(
                 script: script,
-                plannedDistanceMeters: plannedMeters
+                plan: ScriptPreviewStore.shared.currentPlan
             )
         }
     }

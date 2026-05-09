@@ -8,18 +8,10 @@ import AARCKit
 /// every metric tick, and dispatches matching messages to
 /// `Speaker.shared.speak()`.
 ///
-/// Lifecycle:
-/// - `start(script:plannedDistanceMeters:)` — called when the watch
-///   sends `workoutStarted`; resets fired-message tracking.
-/// - `processTick(_:)` — called for every `LiveMetrics` snapshot.
-/// - `stop()` — called when the watch sends `workoutEnded`.
-///
-/// Idempotency:
-/// - `playOnce: true` messages fire at most once per run.
-/// - `playOnce: false` messages fire at most once per "epoch" (e.g.
-///   per-km loop fires once per km crossed).
-/// - A flat cooldown prevents spam if multiple triggers fire within a
-///   short window.
+/// Plan-aware: `halfway`, `near_finish`, and `finish` triggers
+/// evaluate against distance for `.distance` plans, against elapsed
+/// time for `.time` plans, and never fire for `.open` plans (the
+/// model is instructed not to emit them in that case anyway).
 @Observable
 @MainActor
 final class ScriptEngine {
@@ -39,26 +31,26 @@ final class ScriptEngine {
 
     // MARK: - Configuration
 
-    /// Minimum gap between two dispatched lines, in seconds. Prevents
-    /// spam when several triggers happen to match in the same second
-    /// (e.g. surprise + per-km landing on the same metric tick).
+    /// Minimum gap between two dispatched lines, in seconds.
     private let cooldown: TimeInterval = 10
 
     // MARK: - Run state
 
     private var script: GeneratedScript?
-    private var plannedDistanceMeters: Double = 0
+    private var plan: RunPlan = .open
     private var firedMessageIds: Set<String> = []
-    private var lastFiredKmByMessageId: [String: Int] = [:]
+    /// Per-message epoch counter for recurring triggers
+    /// (distance.everyMeters and time.everySeconds).
+    private var epochByMessageId: [String: Int] = [:]
     private var lastDispatchAt: Date?
 
     // MARK: - API
 
-    func start(script: GeneratedScript, plannedDistanceMeters: Double) {
+    func start(script: GeneratedScript, plan: RunPlan) {
         self.script = script
-        self.plannedDistanceMeters = plannedDistanceMeters
+        self.plan = plan
         self.firedMessageIds.removeAll()
-        self.lastFiredKmByMessageId.removeAll()
+        self.epochByMessageId.removeAll()
         self.lastDispatchAt = nil
         self.dispatchCount = 0
         self.lastDispatched = nil
@@ -71,7 +63,7 @@ final class ScriptEngine {
         self.script = nil
         self.activeScriptId = nil
         self.firedMessageIds.removeAll()
-        self.lastFiredKmByMessageId.removeAll()
+        self.epochByMessageId.removeAll()
         self.lastDispatchAt = nil
     }
 
@@ -81,7 +73,6 @@ final class ScriptEngine {
     func processTick(_ metrics: LiveMetrics) {
         guard isActive, let script else { return }
 
-        // Cooldown gate — if we just spoke, don't speak again yet.
         if let last = lastDispatchAt,
            Date().timeIntervalSince(last) < cooldown {
             return
@@ -90,9 +81,6 @@ final class ScriptEngine {
         for message in script.messages {
             if shouldFire(message: message, metrics: metrics) {
                 dispatch(message)
-                // One dispatch per tick. Other matching messages will
-                // get their turn on subsequent ticks once cooldown
-                // clears.
                 return
             }
         }
@@ -107,9 +95,21 @@ final class ScriptEngine {
 
         switch trigger.type {
         case .time:
-            guard let atSeconds = trigger.atSeconds else { return false }
-            guard elapsed >= TimeInterval(atSeconds) else { return false }
-            return passesPlayOnceGate(message)
+            if let atSeconds = trigger.atSeconds {
+                guard elapsed >= TimeInterval(atSeconds) else { return false }
+                return passesPlayOnceGate(message)
+            }
+            if let everySeconds = trigger.everySeconds, everySeconds > 0 {
+                let currentEpoch = Int(elapsed / TimeInterval(everySeconds))
+                guard currentEpoch >= 1 else { return false }
+                let lastEpoch = epochByMessageId[message.id] ?? 0
+                if currentEpoch > lastEpoch {
+                    epochByMessageId[message.id] = currentEpoch
+                    return true
+                }
+                return false
+            }
+            return false
 
         case .distance:
             if let atMeters = trigger.atMeters {
@@ -119,9 +119,9 @@ final class ScriptEngine {
             if let everyMeters = trigger.everyMeters, everyMeters > 0 {
                 let currentEpoch = Int(distance / everyMeters)
                 guard currentEpoch >= 1 else { return false }
-                let lastEpoch = lastFiredKmByMessageId[message.id] ?? 0
+                let lastEpoch = epochByMessageId[message.id] ?? 0
                 if currentEpoch > lastEpoch {
-                    lastFiredKmByMessageId[message.id] = currentEpoch
+                    epochByMessageId[message.id] = currentEpoch
                     return true
                 }
                 return false
@@ -129,27 +129,43 @@ final class ScriptEngine {
             return false
 
         case .halfway:
-            guard plannedDistanceMeters > 0 else { return false }
-            guard distance >= plannedDistanceMeters / 2 else { return false }
+            // Distance plan → half distance; time plan → half elapsed.
+            // Open plan → never fires.
+            if let total = plan.totalMeters {
+                guard distance >= total / 2 else { return false }
+            } else if let total = plan.totalSeconds {
+                guard elapsed >= total / 2 else { return false }
+            } else {
+                return false
+            }
             return passesPlayOnceGate(message)
 
         case .nearFinish:
-            guard plannedDistanceMeters > 0,
-                  let remaining = trigger.remainingMeters else { return false }
-            guard distance >= plannedDistanceMeters - remaining else { return false }
-            return passesPlayOnceGate(message)
+            // Distance plan + remainingMeters, OR time plan + remainingSeconds.
+            if let total = plan.totalMeters,
+               let remaining = trigger.remainingMeters {
+                guard distance >= total - remaining else { return false }
+                return passesPlayOnceGate(message)
+            }
+            if let total = plan.totalSeconds,
+               let remainingSeconds = trigger.remainingSeconds {
+                guard elapsed >= total - TimeInterval(remainingSeconds) else { return false }
+                return passesPlayOnceGate(message)
+            }
+            return false
 
         case .finish:
-            guard plannedDistanceMeters > 0 else { return false }
-            guard distance >= plannedDistanceMeters else { return false }
+            if let total = plan.totalMeters {
+                guard distance >= total else { return false }
+            } else if let total = plan.totalSeconds {
+                guard elapsed >= total else { return false }
+            } else {
+                return false
+            }
             return passesPlayOnceGate(message)
         }
     }
 
-    /// For messages with `playOnce: true`, fire at most once per run.
-    /// `playOnce: false` messages bypass this gate (their per-trigger
-    /// state is tracked separately, e.g. lastFiredKm for
-    /// `distance.everyMeters`).
     private func passesPlayOnceGate(_ message: ScriptMessage) -> Bool {
         guard message.playOnce else { return true }
         if firedMessageIds.contains(message.id) { return false }
