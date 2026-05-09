@@ -6,18 +6,22 @@ import AARCKit
 /// button per line plus "Speak all" for the whole sequence. Validates
 /// the proxy → Anthropic → schema-validated JSON pipe end-to-end before
 /// the script engine wires this into actual runs.
+///
+/// Plan inputs and the most-recent generated script are persisted via
+/// `ScriptPreviewStore.shared` so navigating away and back doesn't
+/// throw away results — they're only replaced when the user taps
+/// Generate again.
 struct ScriptPreviewView: View {
-    @State private var script: GeneratedScript?
+    @State private var store = ScriptPreviewStore.shared
     @State private var isGenerating = false
     @State private var error: String?
 
-    @State private var distanceKm: Double = 5
-    @State private var paceMinPerKm: Double = 5.5
-
     var body: some View {
+        @Bindable var store = store
+
         Form {
             Section("Plan") {
-                Stepper(value: $distanceKm, in: 1...42, step: 0.5) {
+                Stepper(value: $store.distanceKm, in: 1...42, step: 0.5) {
                     HStack {
                         Text("Distance")
                         Spacer()
@@ -26,7 +30,7 @@ struct ScriptPreviewView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Stepper(value: $paceMinPerKm, in: 3.0...10.0, step: 0.25) {
+                Stepper(value: $store.paceMinPerKm, in: 3.0...10.0, step: 0.25) {
                     HStack {
                         Text("Target pace")
                         Spacer()
@@ -56,7 +60,7 @@ struct ScriptPreviewView: View {
                 }
             }
 
-            if let script {
+            if let script = store.latest {
                 Section {
                     HStack {
                         Text("Model").foregroundStyle(.secondary)
@@ -65,6 +69,9 @@ struct ScriptPreviewView: View {
                     }
                     Button("Speak all (in order)") {
                         Task { await speakAll(script.messages) }
+                    }
+                    Button("Clear", role: .destructive) {
+                        store.clear()
                     }
                 } header: {
                     Text("Result")
@@ -104,13 +111,13 @@ struct ScriptPreviewView: View {
     }
 
     private var formattedKm: String {
-        distanceKm.truncatingRemainder(dividingBy: 1) == 0
-            ? String(format: "%.0f", distanceKm)
-            : String(format: "%.1f", distanceKm)
+        store.distanceKm.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "%.0f", store.distanceKm)
+            : String(format: "%.1f", store.distanceKm)
     }
 
     private var formattedPace: String {
-        let total = Int(paceMinPerKm * 60)
+        let total = Int(store.paceMinPerKm * 60)
         let m = total / 60
         let s = total % 60
         return String(format: "%d:%02d /km", m, s)
@@ -122,13 +129,15 @@ struct ScriptPreviewView: View {
         defer { isGenerating = false }
         let plan = AIClient.ScriptPlan(
             goal: "free",
-            distanceKm: distanceKm,
-            targetPaceSecPerKm: paceMinPerKm * 60,
+            distanceKm: store.distanceKm,
+            targetPaceSecPerKm: store.paceMinPerKm * 60,
             personalityId: "roast_coach",
             runType: "treadmill"
         )
         do {
-            script = try await AIClient.shared.generateScript(plan: plan)
+            // Replace, not append — each Generate overwrites the cached
+            // script per the founder's spec.
+            store.latest = try await AIClient.shared.generateScript(plan: plan)
         } catch {
             self.error = error.localizedDescription
         }
@@ -137,10 +146,6 @@ struct ScriptPreviewView: View {
     private func speakAll(_ messages: [ScriptMessage]) async {
         for message in messages {
             Speaker.shared.speak(message.text)
-            // Crude pacing — give each line time to play before queuing
-            // the next. AVSpeechSynthesizer queues internally; the remote
-            // path needs the wait so consecutive AVAudioPlayer instances
-            // don't overlap.
             try? await Task.sleep(for: .seconds(5))
         }
     }
