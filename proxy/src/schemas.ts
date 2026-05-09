@@ -24,7 +24,7 @@ export type GenerateScriptRequest = z.infer<typeof GenerateScriptRequestSchema>;
 
 const TriggerSpecSchema = z
     .object({
-        type: z.enum(["time", "distance", "halfway", "near_finish"]),
+        type: z.enum(["time", "distance", "halfway", "near_finish", "finish"]),
         atSeconds: z.number().int().nonnegative().optional(),
         atMeters: z.number().nonnegative().optional(),
         everyMeters: z.number().positive().optional(),
@@ -57,6 +57,10 @@ const TriggerSpecSchema = z
                         message: "near_finish triggers require remainingMeters",
                     });
                 }
+                break;
+            case "finish":
+                // Fires the moment the runner reaches the planned
+                // distance. No parameters needed.
                 break;
         }
     });
