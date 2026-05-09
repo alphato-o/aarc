@@ -4,6 +4,7 @@ import AARCKit
 struct RunHomeView: View {
     @State private var selectedPersonality: Personality = .roastCoach
     @State private var settings = TestDataSettings.shared
+    @State private var orchestrator = RunOrchestrator.shared
 
     var body: some View {
         NavigationStack {
@@ -15,20 +16,13 @@ struct RunHomeView: View {
                 VStack(spacing: 24) {
                     LiveRunTile()
 
-                    Image(systemName: "figure.run.circle.fill")
-                        .font(.system(size: 96))
-                        .foregroundStyle(Theme.accent)
+                    if !LiveMetricsConsumer.shared.isRunActive {
+                        Image(systemName: "figure.run.circle.fill")
+                            .font(.system(size: 96))
+                            .foregroundStyle(Theme.accent)
 
-                    Text("Tap Start on your Apple Watch")
-                        .font(.title3)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
-
-                    Text("AARC tracks runs from the watch. The phone is the AI brain and audio device.")
-                        .font(.footnote)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal)
+                        startSection
+                    }
 
                     Spacer()
 
@@ -52,6 +46,66 @@ struct RunHomeView: View {
                 .padding()
             }
             .navigationTitle("AARC")
+        }
+    }
+
+    @ViewBuilder
+    private var startSection: some View {
+        let phase = orchestrator.phase
+        let isBusy = phase == .generating
+
+        VStack(spacing: 10) {
+            if isBusy {
+                ProgressView()
+                Text("Coach loading…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text("Generating script + ready your watch")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("Start a run")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await orchestrator.startFromPhone(runType: .treadmill, personalityId: selectedPersonality.id) }
+                    } label: {
+                        Label("Treadmill", systemImage: "figure.run.treadmill")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.green)
+
+                    Button {
+                        Task { await orchestrator.startFromPhone(runType: .outdoor, personalityId: selectedPersonality.id) }
+                    } label: {
+                        Label("Outdoor", systemImage: "figure.run")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                if phase == .sentToWatch {
+                    Text("Sent to watch — confirm Start there.")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+            }
+
+            if let err = orchestrator.lastError {
+                VStack(spacing: 6) {
+                    Text("Couldn't start: \(err)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Button("Dismiss") { orchestrator.clearError() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+            }
         }
     }
 }
