@@ -11,6 +11,20 @@ import AARCKit
 /// Apple owns all tracking: distance, pace, HR, energy, route smoothing.
 /// We observe what the builder publishes and compute one trivial derived
 /// value (current pace = distance delta / time delta over a 30 s window).
+/// User-facing phases of a run on the watch — distinct from
+/// `WorkoutState` (which mirrors HK's session state). The phase covers
+/// the pre-workout flow (preparing, counting down) that has no HK
+/// concept yet.
+public enum WorkoutPhase: String, Sendable {
+    case idle
+    case preparing      // waiting for phone to generate the script
+    case countingDown   // 3-2-1-GO before HK session begins
+    case running
+    case paused
+    case ended
+    case error          // script generation or HK auth failed
+}
+
 @Observable
 @MainActor
 final class WorkoutSessionHost: NSObject {
@@ -18,8 +32,20 @@ final class WorkoutSessionHost: NSObject {
 
     // Published state for the UI.
     var state: WorkoutState = .idle
+    var phase: WorkoutPhase = .idle
     var liveMetrics: LiveMetrics = .zero
     var lastError: String?
+
+    /// Countdown seconds remaining (3, 2, 1, then 0 → start). UI binds.
+    var countdownRemaining: Int = 0
+    private var countdownTask: Task<Void, Never>?
+
+    /// Pending parameters captured during preparing phase, used when
+    /// the countdown completes and we actually start the HK session.
+    private var pendingRunType: RunType = .treadmill
+    private var pendingRunId: UUID?
+    private var pendingIsTestData: Bool = true
+    private var pendingSkipHealthKitWrite: Bool = false
 
     // Identity for this run — stamped into HK metadata at finalise.
     var currentRunId: UUID?
@@ -53,6 +79,97 @@ final class WorkoutSessionHost: NSObject {
 
     // MARK: - Lifecycle
 
+    /// Begin the prepare → countdown → run flow, asking the phone to
+    /// generate a script while the user waits on the spinner. Called by
+    /// the watch UI button OR triggered remotely by a phone-initiated
+    /// startWorkout (in which case the script is already done and
+    /// `prepareScriptOnPhone: false` skips straight to the countdown).
+    func beginRun(
+        runType: RunType,
+        runId: UUID = UUID(),
+        isTestData: Bool = true,
+        skipHealthKitWrite: Bool = false,
+        personalityId: String = "roast_coach",
+        prepareScriptOnPhone: Bool = true
+    ) async {
+        self.pendingRunType = runType
+        self.pendingRunId = runId
+        self.pendingIsTestData = isTestData
+        self.pendingSkipHealthKitWrite = skipHealthKitWrite
+
+        if prepareScriptOnPhone {
+            self.phase = .preparing
+            self.lastError = nil
+            // Ask the phone to generate. The phone's PhoneSession route
+            // handler will reply with .scriptReady or .scriptFailed,
+            // which call into onScriptReady() / onScriptFailed() below.
+            WatchSession.shared.sendStateEvent(
+                .prepareWorkout(runId: runId, runType: runType, personalityId: personalityId)
+            )
+        } else {
+            // Phone already has the script (phone-initiated flow);
+            // jump straight to the countdown.
+            beginCountdown()
+        }
+    }
+
+    /// Phone replied that the script is ready. Move to countdown.
+    /// Called by WatchSession on receipt of .scriptReady.
+    func onScriptReady() {
+        guard phase == .preparing else { return }
+        beginCountdown()
+    }
+
+    /// Phone failed to generate. Surface the error; user can retry or
+    /// skip the coach by tapping Start again from the error state.
+    func onScriptFailed(reason: String) {
+        guard phase == .preparing else { return }
+        self.lastError = reason
+        self.phase = .error
+    }
+
+    /// Cancel the prepare/countdown flow before it becomes a real
+    /// workout (e.g. user changed their mind during the spinner).
+    func cancelPreparation() {
+        countdownTask?.cancel()
+        countdownTask = nil
+        phase = .idle
+        lastError = nil
+        pendingRunId = nil
+    }
+
+    private func beginCountdown() {
+        phase = .countingDown
+        countdownRemaining = 3
+        countdownTask?.cancel()
+        countdownTask = Task { @MainActor [weak self] in
+            for n in stride(from: 3, through: 1, by: -1) {
+                guard let self, !Task.isCancelled else { return }
+                self.countdownRemaining = n
+                try? await Task.sleep(for: .seconds(1))
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.countdownRemaining = 0
+            await self.startSessionFromCountdown()
+        }
+    }
+
+    private func startSessionFromCountdown() async {
+        do {
+            try await start(
+                locationType: pendingRunType == .treadmill ? .indoor : .outdoor,
+                runId: pendingRunId ?? UUID(),
+                isTestData: pendingIsTestData,
+                skipHealthKitWrite: pendingSkipHealthKitWrite
+            )
+        } catch {
+            self.lastError = error.localizedDescription
+            self.phase = .error
+        }
+    }
+
+    /// Direct-start path retained as a fallback for tests / no-coach
+    /// runs. Skips the prepare + countdown flow entirely.
     func startOutdoorRun(
         runId: UUID = UUID(),
         isTestData: Bool,
@@ -141,13 +258,15 @@ final class WorkoutSessionHost: NSObject {
     func pause() {
         guard state == .running else { return }
         session?.pause()
-        // delegate flips state to .paused
+        // delegate flips state to .paused; mirror to phase for the UI.
+        phase = .paused
         WatchSession.shared.sendStateEvent(.workoutPaused)
     }
 
     func resume() {
         guard state == .paused else { return }
         session?.resume()
+        phase = .running
         WatchSession.shared.sendStateEvent(.workoutResumed)
     }
 
@@ -193,6 +312,7 @@ final class WorkoutSessionHost: NSObject {
             self.builder = nil
             self.routeBuilder = nil
             state = .ended
+            phase = .ended
             if let uuid = workout?.uuid {
                 WatchSession.shared.sendStateEvent(.workoutEnded(healthKitWorkoutUUID: uuid))
             }
@@ -202,6 +322,7 @@ final class WorkoutSessionHost: NSObject {
             // Leave session/builder set so we can later retry; for now
             // also surface .ended so the UI can move on.
             state = .ended
+            phase = .ended
             return nil
         }
     }
@@ -301,10 +422,19 @@ extension WorkoutSessionHost: @preconcurrency HKWorkoutSessionDelegate {
     ) {
         Task { @MainActor in
             switch toState {
-            case .notStarted, .prepared: self.state = .idle
-            case .running: self.state = .running
-            case .paused: self.state = .paused
-            case .ended, .stopped: self.state = .ended
+            case .notStarted, .prepared:
+                self.state = .idle
+                // Don't downgrade phase here — preparing / countingDown
+                // run BEFORE the HK session actually starts.
+            case .running:
+                self.state = .running
+                self.phase = .running
+            case .paused:
+                self.state = .paused
+                self.phase = .paused
+            case .ended, .stopped:
+                self.state = .ended
+                self.phase = .ended
             @unknown default: break
             }
         }

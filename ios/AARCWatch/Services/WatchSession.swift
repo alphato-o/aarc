@@ -80,11 +80,54 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
     nonisolated func session(_ session: WCSession, didReceiveMessageData messageData: Data) {
         Task { @MainActor in
             guard let message = try? self.decoder.decode(WCMessage.self, from: messageData) else { return }
-            if case .hello(let text) = message {
-                self.lastInboundText = text
+            self.route(message)
+        }
+    }
+
+    /// State events from the phone arrive via transferUserInfo. Decode
+    /// + route the same way as live messages.
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        guard let data = userInfo[Self.userInfoMessageKey] as? Data else { return }
+        Task { @MainActor in
+            guard let message = try? self.decoder.decode(WCMessage.self, from: data) else { return }
+            self.route(message)
+        }
+    }
+
+    @MainActor
+    private func route(_ message: WCMessage) {
+        switch message {
+        case .hello(let text):
+            self.lastInboundText = text
+
+        case .scriptReady:
+            WorkoutSessionHost.shared.onScriptReady()
+
+        case .scriptFailed(let reason):
+            WorkoutSessionHost.shared.onScriptFailed(reason: reason)
+
+        case .startWorkout(let runId, let runType, let personalityId):
+            // Phone-initiated. Phone has already generated the script,
+            // so skip preparing and jump straight to countdown.
+            Task {
+                await WorkoutSessionHost.shared.beginRun(
+                    runType: runType,
+                    runId: runId,
+                    personalityId: personalityId,
+                    prepareScriptOnPhone: false
+                )
             }
-            // §1.2 only wires the watch → phone direction in earnest.
-            // Phone → Watch (e.g., startWorkout, hapticCue) lands in §4.
+
+        case .endWorkout:
+            // Phone is asking us to end (e.g., bigger UI on the phone).
+            Task { _ = await WorkoutSessionHost.shared.endRun() }
+
+        // Inbound only from the phone-initiation path; ignore all
+        // outbound message cases that should never come back to us.
+        case .hapticCue, .companionMessageDispatched,
+             .prepareWorkout, .workoutStarted, .workoutPaused,
+             .workoutResumed, .workoutEnded, .liveMetrics:
+            break
         }
     }
 }

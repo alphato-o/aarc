@@ -46,6 +46,15 @@ final class PhoneSession: NSObject {
         session.sendMessageData(data, replyHandler: nil) { _ in }
     }
 
+    /// Send a state event to the watch. Uses transferUserInfo so the
+    /// message is queued and guaranteed to deliver, even if the watch
+    /// app isn't reachable at the instant of send.
+    func sendStateEvent(_ event: WCMessage) {
+        guard let session, session.activationState == .activated else { return }
+        guard let data = try? encoder.encode(event) else { return }
+        session.transferUserInfo([Self.userInfoMessageKey: data])
+    }
+
     /// Decode + route a WCMessage inbound from the watch.
     private func route(_ message: WCMessage) {
         switch message {
@@ -67,8 +76,19 @@ final class PhoneSession: NSObject {
         case .workoutEnded(let workoutUUID):
             LiveMetricsConsumer.shared.ingestEnded(workoutUUID: workoutUUID)
 
+        case .prepareWorkout(let runId, let runType, let personalityId):
+            // Watch user just hit Start. Generate a script for them.
+            Task {
+                await RunOrchestrator.shared.handlePrepareFromWatch(
+                    runId: runId,
+                    runType: runType,
+                    personalityId: personalityId
+                )
+            }
+
         // Outbound-only on phone side; ignore if echoed somehow.
-        case .startWorkout, .endWorkout, .hapticCue, .companionMessageDispatched:
+        case .startWorkout, .endWorkout, .hapticCue, .companionMessageDispatched,
+             .scriptReady, .scriptFailed:
             break
         }
     }

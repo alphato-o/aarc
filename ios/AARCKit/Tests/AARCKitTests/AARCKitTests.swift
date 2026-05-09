@@ -20,13 +20,13 @@ import Testing
 
 @Test func wcMessageEnumRoundTrip() throws {
     let id = UUID()
-    let msg = WCMessage.startWorkout(runId: id, personalityId: "roast_coach", mode: .training)
+    let msg = WCMessage.startWorkout(runId: id, runType: .treadmill, personalityId: "roast_coach")
     let data = try JSONEncoder().encode(msg)
     let decoded = try JSONDecoder().decode(WCMessage.self, from: data)
-    if case .startWorkout(let runId, let personalityId, let mode) = decoded {
+    if case .startWorkout(let runId, let runType, let personalityId) = decoded {
         #expect(runId == id)
+        #expect(runType == .treadmill)
         #expect(personalityId == "roast_coach")
-        #expect(mode == .training)
     } else {
         Issue.record("expected .startWorkout case")
     }
