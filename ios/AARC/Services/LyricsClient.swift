@@ -507,9 +507,13 @@ actor LyricsClient {
         switch lyrics {
         case .synced(let lines, let source):
             guard !lines.isEmpty else { return nil }
+            let texts = lines.map(\.text)
+            // No progress hint: prefer the signature (most-repeated) line,
+            // otherwise rotate.
             guard let progress = progressSec else {
-                let idx = abs(rotation) % lines.count
-                return contextSelection(lines: lines.map(\.text), index: idx, source: source, synced: true)
+                let idx = Self.signatureLineIndex(in: texts)
+                    ?? (abs(rotation) % texts.count)
+                return contextSelection(lines: texts, index: idx, source: source, synced: false)
             }
             var chosenIndex: Int = 0
             var found = false
@@ -521,16 +525,28 @@ actor LyricsClient {
                     break
                 }
             }
-            if !found { chosenIndex = 0 }
-            return contextSelection(lines: lines.map(\.text), index: chosenIndex, source: source, synced: true)
+            if !found {
+                // We're earlier than the first real lyric (intro / silence).
+                // Fall back to the signature line so the DJ has something
+                // worth roasting rather than line 0.
+                if let sig = Self.signatureLineIndex(in: texts) {
+                    return contextSelection(lines: texts, index: sig, source: source, synced: false)
+                }
+                chosenIndex = 0
+            }
+            return contextSelection(lines: texts, index: chosenIndex, source: source, synced: found)
 
         case .unsynced(let lines, let source):
             guard !lines.isEmpty else { return nil }
-            // Approximate sync via proportional position when we know the
-            // track duration; otherwise rotate.
+            // For unsynced we lean on the signature line first — without
+            // accurate timing, the chorus is the most useful thing to riff
+            // on. Only fall back to proportional position when there's no
+            // clear signature.
             let idx: Int
-            if let progress = progressSec,
-               let duration = track.durationSeconds, duration > 0 {
+            if let sig = Self.signatureLineIndex(in: lines) {
+                idx = sig
+            } else if let progress = progressSec,
+                      let duration = track.durationSeconds, duration > 0 {
                 let frac = max(0, min(1, progress / TimeInterval(duration)))
                 idx = min(lines.count - 1, Int(Double(lines.count) * frac))
             } else {
@@ -687,6 +703,7 @@ actor LyricsClient {
             let textNS = nsLine.substring(from: lastEnd)
             let text = textNS.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.isEmpty { continue }
+            if isMetadataLine(text) { continue }
             for m in matches {
                 let mmRange = m.range(at: 1)
                 let ssRange = m.range(at: 2)
@@ -710,7 +727,99 @@ actor LyricsClient {
     private static func splitPlainLyrics(_ raw: String) -> [String] {
         raw.split(whereSeparator: { $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+            .filter { !$0.isEmpty && !isMetadataLine($0) }
+    }
+
+    /// True iff this line is a credits / metadata header rather than an
+    /// actual lyric. NetEase in particular wraps every LRC with a stanza
+    /// of "作词 : Name", "作曲 : Name", "制作人 : Name", etc. that have
+    /// real timestamps but no business being read aloud. Same shape on
+    /// LRCLib for English-language transcriptions ("Written by: ...").
+    /// Match heuristic: line contains a `:` (or fullwidth `：`) AND
+    /// starts with a known role prefix.
+    private static func isMetadataLine(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        guard trimmed.contains(":") || trimmed.contains("：") else { return false }
+        let lower = trimmed.lowercased()
+
+        // Chinese role prefixes (NetEase + QQ Music conventions).
+        let zhPrefixes = [
+            "作词", "作曲", "编曲", "制作人", "制作", "出品", "出品人",
+            "演唱", "原唱", "和声", "和音", "合声",
+            "录音", "录音师", "录音室",
+            "混音", "混音师", "母带", "母带师",
+            "演奏", "吉他", "贝斯", "鼓手", "键盘", "弦乐", "管乐",
+            "监制", "策划", "统筹", "宣传",
+            "Op", "Sp", "OP", "SP", "C.P", "ISRC",
+        ]
+        for p in zhPrefixes {
+            if trimmed.hasPrefix(p) { return true }
+        }
+
+        // English role prefixes.
+        let enPrefixes = [
+            "composed by", "written by", "produced by", "lyrics by",
+            "music by", "arranged by", "mixed by", "mastered by",
+            "recorded by", "performed by", "engineered by",
+            "vocals by", "guitar by", "bass by", "drums by",
+            "keyboards by", "keys by",
+            "lyricist", "composer", "arranger", "producer",
+        ]
+        for p in enPrefixes {
+            if lower.hasPrefix(p) { return true }
+        }
+        return false
+    }
+
+    /// Returns the index of a "signature" line — the chorus hook,
+    /// usually. Heuristic: count repeated normalized lines; the most
+    /// frequent line that appears at least twice and is long enough to
+    /// be substantive (≥ 8 chars) wins. Tie-break by length. Used as a
+    /// fallback when the timestamp lands in the intro / metadata range
+    /// so the DJ comments on something the runner actually recognises
+    /// rather than a forgettable opening line.
+    static func signatureLineIndex(in lines: [String]) -> Int? {
+        guard lines.count >= 6 else { return nil }
+        struct Entry { var count: Int; var firstIndex: Int; var length: Int }
+        var byKey: [String: Entry] = [:]
+        for (i, line) in lines.enumerated() {
+            let key = normalizeForFrequency(line)
+            guard key.count >= 8 else { continue }
+            if var existing = byKey[key] {
+                existing.count += 1
+                byKey[key] = existing
+            } else {
+                byKey[key] = Entry(count: 1, firstIndex: i, length: line.count)
+            }
+        }
+        let candidates = byKey.values.filter { $0.count >= 2 }
+        let winner = candidates.max(by: { a, b in
+            if a.count != b.count { return a.count < b.count }
+            return a.length < b.length
+        })
+        return winner?.firstIndex
+    }
+
+    private static func normalizeForFrequency(_ line: String) -> String {
+        // Collapse to lowercase alphanumerics + Han characters; squeeze
+        // whitespace; that way "Oh, baby!" and "Oh baby" collapse to the
+        // same key so we count the chorus correctly across punctuation
+        // variations.
+        var out: [Character] = []
+        var lastWasSpace = false
+        for scalar in line.lowercased().unicodeScalars {
+            let v = scalar.value
+            let isAscii = (0x0061...0x007A).contains(v) || (0x0030...0x0039).contains(v)
+            let isHan = (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v)
+            if isAscii || isHan {
+                out.append(Character(scalar))
+                lastWasSpace = false
+            } else if !lastWasSpace, !out.isEmpty {
+                out.append(" ")
+                lastWasSpace = true
+            }
+        }
+        return String(out).trimmingCharacters(in: .whitespaces)
     }
 
     // MARK: - Wire types
