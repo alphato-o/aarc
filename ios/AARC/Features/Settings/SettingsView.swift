@@ -178,7 +178,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Lyric providers")
                 } footer: {
-                    Text("DJ commentary needs lyrics. AARC tries LRCLib first (free, synced when available), then Musixmatch if a key is set (free tier: 2000/day at developer.musixmatch.com — much broader catalog), then lyrics.ovh (free, English-leaning). Cache only stores hits — misses always retry.")
+                    Text("DJ commentary needs lyrics. AARC tries LRCLib first (free, synced when available), NetEase if the track has Han characters (free, best Mandopop coverage), then Musixmatch if a key is set (free tier: 2000/day at developer.musixmatch.com — much broader catalog), then lyrics.ovh (free, English-leaning). Cache only stores hits — misses always retry.")
                 }
 
                 Section("About") {
