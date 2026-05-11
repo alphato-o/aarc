@@ -8,9 +8,18 @@ import OSLog
 /// just the song title.
 ///
 /// API: https://lrclib.net/docs
-///   GET /api/get?artist_name=...&track_name=...[&album_name=...&duration=...]
-///   200 → { plainLyrics, syncedLyrics, instrumental, ... }
-///   404 → not found
+///   GET /api/get?track_name=...[&artist_name=...&album_name=...&duration=...]
+///     200 → { plainLyrics, syncedLyrics, instrumental, ... }
+///     404 → not found (params too strict, or genuinely missing)
+///   GET /api/search?track_name=...   → array of candidates
+///
+/// Fallback ladder (each step only runs if previous returned no lyrics):
+///   1. Strict get: first artist + title + album + duration
+///   2. Loose get:  first artist + title (drop album & duration)
+///   3. Normalize title (strip "- Remastered", "(feat. X)", etc.) and retry
+///   4. /search by title alone — catches covers and odd artist spellings;
+///      pick the candidate closest to the original duration that actually
+///      has lyrics.
 ///
 /// LRC format (per line):
 ///   [mm:ss.xx] Lyric text
@@ -40,77 +49,263 @@ actor LyricsClient {
         case error(String)
     }
 
-    private var cache: [Track: Lyrics] = [:]
+    /// Keyed by lowercased "<artist>|<title>" so trivial casing diffs
+    /// don't re-hit the network. Only positive results are cached —
+    /// .notFound and .error always retry so a transient miss doesn't
+    /// poison the rest of the song.
+    private var cache: [String: Lyrics] = [:]
     private let log = Logger(subsystem: "club.aarun.AARC", category: "LyricsClient")
 
     func fetch(track: Track) async -> Lyrics {
-        if let cached = cache[track] { return cached }
+        let key = cacheKey(for: track)
+        if let cached = cache[key], cached.isPositive { return cached }
 
+        let firstArtist = Self.firstArtist(track.artist)
+        let normalizedTitle = Self.normalizeTitle(track.title)
+        var sawInstrumental = false
+
+        func consider(_ wire: Wire?) -> Lyrics? {
+            guard let wire else { return nil }
+            if wire.instrumental == true {
+                sawInstrumental = true
+                return nil
+            }
+            if let synced = wire.syncedLyrics, !synced.isEmpty {
+                let parsed = Self.parseLRC(synced)
+                if !parsed.isEmpty { return .synced(lines: parsed) }
+            }
+            if let plain = wire.plainLyrics, !plain.isEmpty {
+                let lines = Self.splitPlainLyrics(plain)
+                if !lines.isEmpty { return .unsynced(lines: lines) }
+            }
+            return nil
+        }
+
+        // 1. Strict get — what the original commit did.
+        if let l = consider(await getExact(
+            artist: firstArtist,
+            title: track.title,
+            album: track.album,
+            duration: track.durationSeconds
+        )) {
+            cache[key] = l
+            return l
+        }
+
+        // 2. Loose get — drop album + duration. Spotify often serves
+        //    deluxe editions / region releases whose album names don't
+        //    match LRCLib's primary entry.
+        if let l = consider(await getExact(
+            artist: firstArtist,
+            title: track.title,
+            album: nil,
+            duration: nil
+        )) {
+            cache[key] = l
+            return l
+        }
+
+        // 3. Normalized title — strips "- Remastered 2011", "(feat. X)",
+        //    "- Acoustic", etc. that Spotify appends. Skip if already
+        //    identical.
+        if normalizedTitle != track.title {
+            if let l = consider(await getExact(
+                artist: firstArtist,
+                title: normalizedTitle,
+                album: nil,
+                duration: nil
+            )) {
+                cache[key] = l
+                return l
+            }
+            // 3b. Normalized title without artist either — catches the
+            // case where the artist string on Spotify ("Beyoncé, Jay-Z")
+            // doesn't match LRCLib's primary entry.
+            if let l = consider(await getExact(
+                artist: nil,
+                title: normalizedTitle,
+                album: nil,
+                duration: nil
+            )) {
+                cache[key] = l
+                return l
+            }
+        }
+
+        // 4. Search by title alone — returns ranked array, often picks
+        //    up covers + obscure entries the exact-match endpoint misses.
+        //    We pre-rank by duration closeness so a 4-minute cover doesn't
+        //    win when the original is 4:30.
+        let candidates = await searchByTitle(normalizedTitle, durationHint: track.durationSeconds)
+        for hit in candidates.prefix(8) {
+            if let l = consider(hit) {
+                cache[key] = l
+                return l
+            }
+        }
+
+        // Truly nothing. If we saw an instrumental entry along the way,
+        // report that explicitly so the coach skips politely rather than
+        // re-trying as if it were a transient miss. Don't cache it
+        // either — the user might switch to a non-instrumental edit.
+        return sawInstrumental ? .instrumental : .notFound
+    }
+
+    private func cacheKey(for track: Track) -> String {
+        "\(track.artist.lowercased())|\(track.title.lowercased())"
+    }
+
+    // MARK: - HTTP
+
+    private func getExact(
+        artist: String?,
+        title: String,
+        album: String?,
+        duration: Int?
+    ) async -> Wire? {
         var comps = URLComponents(string: "https://lrclib.net/api/get")!
-        var items: [URLQueryItem] = [
-            URLQueryItem(name: "artist_name", value: track.artist),
-            URLQueryItem(name: "track_name", value: track.title),
-        ]
-        if let album = track.album, !album.isEmpty {
+        var items: [URLQueryItem] = [URLQueryItem(name: "track_name", value: title)]
+        if let artist, !artist.isEmpty {
+            items.append(URLQueryItem(name: "artist_name", value: artist))
+        }
+        if let album, !album.isEmpty {
             items.append(URLQueryItem(name: "album_name", value: album))
         }
-        if let dur = track.durationSeconds {
-            items.append(URLQueryItem(name: "duration", value: String(dur)))
+        if let duration {
+            items.append(URLQueryItem(name: "duration", value: String(duration)))
         }
         comps.queryItems = items
-        guard let url = comps.url else {
-            return .error("could not build lrclib url")
-        }
+        guard let url = comps.url else { return nil }
+        return await fetchWire(at: url)
+    }
+
+    private func searchByTitle(_ title: String, durationHint: Int?) async -> [Wire] {
+        var comps = URLComponents(string: "https://lrclib.net/api/search")!
+        comps.queryItems = [URLQueryItem(name: "track_name", value: title)]
+        guard let url = comps.url else { return [] }
 
         var req = URLRequest(url: url)
         req.setValue("AARC/0.1 (https://aarun.club)", forHTTPHeaderField: "User-Agent")
         req.timeoutInterval = 8
 
-        let result: Lyrics
         do {
             let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else {
-                result = .error("non-HTTP response")
-                cache[track] = result
-                return result
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode) else { return [] }
+            var hits = try JSONDecoder().decode([Wire].self, from: data)
+            if let hint = durationHint {
+                let hintD = Double(hint)
+                hits.sort { a, b in
+                    let da = abs((a.duration ?? 0) - hintD)
+                    let db = abs((b.duration ?? 0) - hintD)
+                    if da != db { return da < db }
+                    let aSynced = !(a.syncedLyrics ?? "").isEmpty
+                    let bSynced = !(b.syncedLyrics ?? "").isEmpty
+                    if aSynced != bSynced { return aSynced }
+                    let aPlain = !(a.plainLyrics ?? "").isEmpty
+                    let bPlain = !(b.plainLyrics ?? "").isEmpty
+                    return aPlain && !bPlain
+                }
+            } else {
+                hits.sort { a, b in
+                    let aSynced = !(a.syncedLyrics ?? "").isEmpty
+                    let bSynced = !(b.syncedLyrics ?? "").isEmpty
+                    return aSynced && !bSynced
+                }
             }
-            if http.statusCode == 404 {
-                result = .notFound
-                cache[track] = result
-                return result
-            }
+            log.info("LRCLib search \"\(title, privacy: .public)\" → \(hits.count, privacy: .public) hits")
+            return hits
+        } catch {
+            log.info("LRCLib search error: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    private func fetchWire(at url: URL) async -> Wire? {
+        var req = URLRequest(url: url)
+        req.setValue("AARC/0.1 (https://aarun.club)", forHTTPHeaderField: "User-Agent")
+        req.timeoutInterval = 8
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else { return nil }
+            if http.statusCode == 404 { return nil }
             guard (200...299).contains(http.statusCode) else {
                 let body = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
-                log.info("LRCLib non-200 \(http.statusCode, privacy: .public) body=\(body, privacy: .public)")
-                result = .error("HTTP \(http.statusCode)")
-                cache[track] = result
-                return result
+                log.info("LRCLib get non-200 \(http.statusCode, privacy: .public) body=\(body, privacy: .public)")
+                return nil
             }
-            let wire = try JSONDecoder().decode(Wire.self, from: data)
-            if wire.instrumental == true {
-                result = .instrumental
-            } else if let synced = wire.syncedLyrics, !synced.isEmpty {
-                let parsed = Self.parseLRC(synced)
-                if parsed.isEmpty {
-                    if let plain = wire.plainLyrics, !plain.isEmpty {
-                        result = .unsynced(lines: Self.splitPlainLyrics(plain))
-                    } else {
-                        result = .notFound
-                    }
-                } else {
-                    result = .synced(lines: parsed)
-                }
-            } else if let plain = wire.plainLyrics, !plain.isEmpty {
-                result = .unsynced(lines: Self.splitPlainLyrics(plain))
-            } else {
-                result = .notFound
-            }
+            return try JSONDecoder().decode(Wire.self, from: data)
         } catch {
-            log.info("LRCLib error: \(error.localizedDescription, privacy: .public)")
-            result = .error(error.localizedDescription)
+            log.info("LRCLib get error: \(error.localizedDescription, privacy: .public)")
+            return nil
         }
-        cache[track] = result
-        return result
+    }
+
+    // MARK: - Title / artist normalization
+
+    private static func firstArtist(_ artist: String) -> String {
+        // Spotify joins multiple artists with ", " — LRCLib expects a
+        // single artist (primary). Take everything before the first
+        // separator we recognise.
+        let separators: [Character] = [",", "&", ";"]
+        for sep in separators {
+            if let idx = artist.firstIndex(of: sep) {
+                return String(artist[..<idx]).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return artist.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Strips Spotify suffixes that LRCLib's primary entry doesn't have.
+    /// Examples handled:
+    ///   "Bohemian Rhapsody - Remastered 2011"          → "Bohemian Rhapsody"
+    ///   "Shake It Off (feat. Bleachers)"                → "Shake It Off"
+    ///   "Levitating - Acoustic"                         → "Levitating"
+    ///   "Lose Yourself - From '8 Mile' Soundtrack"      → "Lose Yourself"
+    ///   "Hey Jude - Mono Version"                       → "Hey Jude"
+    static func normalizeTitle(_ raw: String) -> String {
+        var s = raw
+        let dashPatterns: [String] = [
+            #" - Remaster(ed)?( Version)?( \d{4})?$"#,
+            #" - \d{4} Remaster(ed)?( Version)?$"#,
+            #" - Live( at .+)?( \d{4})?$"#,
+            #" - Acoustic( Version)?$"#,
+            #" - Radio Edit$"#,
+            #" - Single Version$"#,
+            #" - Mono( Version)?$"#,
+            #" - Stereo( Version)?$"#,
+            #" - From .+$"#,
+            #" - Original .+$"#,
+            #" - Extended( Mix| Version)?$"#,
+            #" - Edit$"#,
+            #" - Demo$"#,
+            #" - Bonus Track$"#,
+        ]
+        for pat in dashPatterns {
+            if let r = s.range(of: pat, options: [.regularExpression, .caseInsensitive]) {
+                s.removeSubrange(r)
+            }
+        }
+        let parenPatterns: [String] = [
+            #" \(feat\.? [^)]+\)"#,
+            #" \(featuring [^)]+\)"#,
+            #" \(with [^)]+\)"#,
+            #" \(ft\.? [^)]+\)"#,
+            #" \(prod\.? [^)]+\)"#,
+            #" \(Remaster(ed)?( \d{4})?\)"#,
+            #" \(Live( at .+)?\)"#,
+            #" \(Acoustic( Version)?\)"#,
+            #" \(Radio Edit\)"#,
+            #" \(Single Version\)"#,
+            #" \(Mono( Version)?\)"#,
+            #" \(Bonus Track\)"#,
+        ]
+        for pat in parenPatterns {
+            while let r = s.range(of: pat, options: [.regularExpression, .caseInsensitive]) {
+                s.removeSubrange(r)
+            }
+        }
+        return s.trimmingCharacters(in: .whitespaces)
     }
 
     /// Pick a line of lyrics appropriate to roast right now. For synced
@@ -266,5 +461,22 @@ actor LyricsClient {
         let instrumental: Bool?
         let plainLyrics: String?
         let syncedLyrics: String?
+        /// Present on /search results; lets us prefer the candidate
+        /// closest to the original track duration.
+        let duration: Double?
+    }
+}
+
+extension LyricsClient.Lyrics {
+    /// True iff this is a usable answer that's worth caching. Negative
+    /// results (.notFound, .error) intentionally re-fetch on the next
+    /// probe so a transient miss can recover.
+    var isPositive: Bool {
+        switch self {
+        case .synced, .unsynced, .instrumental:
+            return true
+        case .notFound, .error:
+            return false
+        }
     }
 }
