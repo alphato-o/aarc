@@ -22,6 +22,8 @@ struct CoachPlayground: View {
     @State private var probedTrack: String?
     @State private var probedLyric: String?
     @State private var probedLanguage: String?
+    @State private var probedSource: String?
+    @State private var probedSynced: Bool = false
 
     var body: some View {
         Form {
@@ -63,10 +65,15 @@ struct CoachPlayground: View {
                 }
                 if let probedLyric {
                     VStack(alignment: .leading, spacing: 2) {
-                        HStack {
+                        HStack(spacing: 6) {
                             Text("Lyric line").font(.caption2).foregroundStyle(.secondary)
                             if let probedLanguage {
                                 Text("· \(probedLanguage)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            if let probedSource {
+                                Text("· \(probedSource)\(probedSynced ? " (synced)" : "")")
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                             }
@@ -141,14 +148,18 @@ struct CoachPlayground: View {
             Task { @MainActor in
                 probedLyric = nil
                 probedLanguage = nil
+                probedSource = nil
+                probedSynced = false
                 let resolved = await MusicLyricResolver.resolveCurrent()
                 switch resolved {
                 case .lyric(let t, let sel):
                     probedTrack = "Now playing: \(t.title) — \(t.artist)"
                     probedLyric = sel.line
                     probedLanguage = sel.language
+                    probedSource = sel.source
+                    probedSynced = sel.synced
                 case .songWithoutUsableLyric(let t):
-                    probedTrack = "Now playing: \(t.title) — \(t.artist) (no usable lyric — instrumental, language unsupported, or not on LRCLib)"
+                    probedTrack = "Now playing: \(t.title) — \(t.artist) (no usable lyric on any provider)"
                 case .unknownAudio:
                     probedTrack = "Other audio is playing (no metadata available)"
                 case .silent:
@@ -229,6 +240,8 @@ struct CoachPlayground: View {
         lastError = nil
         probedLyric = nil
         probedLanguage = nil
+        probedSource = nil
+        probedSynced = false
         Task { @MainActor in
             defer { busy = nil }
             let resolved = await MusicLyricResolver.resolveCurrent()
@@ -241,6 +254,8 @@ struct CoachPlayground: View {
                 probedTrack = "Now playing: \(t.title) — \(t.artist)"
                 probedLyric = sel.line
                 probedLanguage = sel.language
+                probedSource = sel.source
+                probedSynced = sel.synced
                 request = AIClient.MusicCommentRequest(
                     personalityId: "roast_coach",
                     track: AIClient.MusicTrack(title: t.title, artist: t.artist, album: t.album, isPlaying: t.isPlaying),

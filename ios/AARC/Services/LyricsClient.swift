@@ -1,25 +1,17 @@
 import Foundation
 import OSLog
 
-/// Fetches lyrics for a track from lrclib.net — a free, no-auth,
-/// community-maintained lyrics database that hosts both plain text
-/// and time-synced LRC format. Used to drive the DJ commentary so the
-/// coach can roast the specific line being sung right now rather than
-/// just the song title.
+/// Fetches lyrics for a track from a chain of free / freemium providers.
+/// First positive result wins.
 ///
-/// API: https://lrclib.net/docs
-///   GET /api/get?track_name=...[&artist_name=...&album_name=...&duration=...]
-///     200 → { plainLyrics, syncedLyrics, instrumental, ... }
-///     404 → not found (params too strict, or genuinely missing)
-///   GET /api/search?track_name=...   → array of candidates
-///
-/// Fallback ladder (each step only runs if previous returned no lyrics):
-///   1. Strict get: first artist + title + album + duration
-///   2. Loose get:  first artist + title (drop album & duration)
-///   3. Normalize title (strip "- Remastered", "(feat. X)", etc.) and retry
-///   4. /search by title alone — catches covers and odd artist spellings;
-///      pick the candidate closest to the original duration that actually
-///      has lyrics.
+/// Provider chain (each step only runs if previous returned nothing):
+///   1. LRCLib            (free, no key) — synced LRC when available.
+///                         Tries strict get → loose get → normalized
+///                         title → /search by title alone.
+///   2. Musixmatch        (free tier, 2000/day, requires API key in
+///                         Settings) — plain unsynced; broader catalog.
+///                         Skipped silently when no key is configured.
+///   3. lyrics.ovh        (free, no key) — plain unsynced; English-leaning.
 ///
 /// LRC format (per line):
 ///   [mm:ss.xx] Lyric text
@@ -42,9 +34,9 @@ actor LyricsClient {
     }
 
     enum Lyrics: Sendable {
-        case synced(lines: [SyncedLine])
-        case unsynced(lines: [String])
-        case instrumental
+        case synced(lines: [SyncedLine], source: String)
+        case unsynced(lines: [String], source: String)
+        case instrumental(source: String)
         case notFound
         case error(String)
     }
@@ -60,11 +52,68 @@ actor LyricsClient {
         let key = cacheKey(for: track)
         if let cached = cache[key], cached.isPositive { return cached }
 
+        var firstInstrumental: String?
+
+        // 1. LRCLib — broad ladder built in.
+        let lrclib = await fetchFromLRCLib(track: track)
+        switch lrclib {
+        case .synced, .unsynced:
+            cache[key] = lrclib
+            return lrclib
+        case .instrumental(let s):
+            firstInstrumental = firstInstrumental ?? s
+        case .notFound, .error:
+            break
+        }
+
+        // 2. Musixmatch — opt-in via Settings (free tier).
+        if let mxm = await fetchFromMusixmatch(track: track) {
+            switch mxm {
+            case .synced, .unsynced:
+                cache[key] = mxm
+                return mxm
+            case .instrumental(let s):
+                firstInstrumental = firstInstrumental ?? s
+            case .notFound, .error:
+                break
+            }
+        }
+
+        // 3. lyrics.ovh — free, no key.
+        let ovh = await fetchFromLyricsOvh(track: track)
+        switch ovh {
+        case .synced, .unsynced:
+            cache[key] = ovh
+            return ovh
+        case .instrumental(let s):
+            firstInstrumental = firstInstrumental ?? s
+        case .notFound, .error:
+            break
+        }
+
+        if let source = firstInstrumental {
+            return .instrumental(source: source)
+        }
+        return .notFound
+    }
+
+    private func cacheKey(for track: Track) -> String {
+        "\(track.artist.lowercased())|\(track.title.lowercased())"
+    }
+
+    // MARK: - Provider 1: LRCLib
+
+    /// Wrapper that walks the LRCLib ladder. Returns:
+    ///   .synced/.unsynced  → real lyrics
+    ///   .instrumental      → track is genuinely instrumental on LRCLib
+    ///   .notFound          → nothing matched (caller tries next provider)
+    ///   .error             → transient
+    private func fetchFromLRCLib(track: Track) async -> Lyrics {
         let firstArtist = Self.firstArtist(track.artist)
         let normalizedTitle = Self.normalizeTitle(track.title)
         var sawInstrumental = false
 
-        func consider(_ wire: Wire?) -> Lyrics? {
+        func consider(_ wire: LRCLibWire?) -> Lyrics? {
             guard let wire else { return nil }
             if wire.instrumental == true {
                 sawInstrumental = true
@@ -72,97 +121,52 @@ actor LyricsClient {
             }
             if let synced = wire.syncedLyrics, !synced.isEmpty {
                 let parsed = Self.parseLRC(synced)
-                if !parsed.isEmpty { return .synced(lines: parsed) }
+                if !parsed.isEmpty {
+                    return .synced(lines: parsed, source: "lrclib")
+                }
             }
             if let plain = wire.plainLyrics, !plain.isEmpty {
                 let lines = Self.splitPlainLyrics(plain)
-                if !lines.isEmpty { return .unsynced(lines: lines) }
+                if !lines.isEmpty {
+                    return .unsynced(lines: lines, source: "lrclib")
+                }
             }
             return nil
         }
 
-        // 1. Strict get — what the original commit did.
-        if let l = consider(await getExact(
-            artist: firstArtist,
-            title: track.title,
-            album: track.album,
-            duration: track.durationSeconds
-        )) {
-            cache[key] = l
-            return l
-        }
+        // 1. Strict.
+        if let l = consider(await lrclibGet(
+            artist: firstArtist, title: track.title,
+            album: track.album, duration: track.durationSeconds
+        )) { return l }
 
-        // 2. Loose get — drop album + duration. Spotify often serves
-        //    deluxe editions / region releases whose album names don't
-        //    match LRCLib's primary entry.
-        if let l = consider(await getExact(
-            artist: firstArtist,
-            title: track.title,
-            album: nil,
-            duration: nil
-        )) {
-            cache[key] = l
-            return l
-        }
+        // 2. Drop album + duration.
+        if let l = consider(await lrclibGet(
+            artist: firstArtist, title: track.title, album: nil, duration: nil
+        )) { return l }
 
-        // 3. Normalized title — strips "- Remastered 2011", "(feat. X)",
-        //    "- Acoustic", etc. that Spotify appends. Skip if already
-        //    identical.
+        // 3. Normalized title (strips "- Remastered N", "(feat. X)", etc.).
         if normalizedTitle != track.title {
-            if let l = consider(await getExact(
-                artist: firstArtist,
-                title: normalizedTitle,
-                album: nil,
-                duration: nil
-            )) {
-                cache[key] = l
-                return l
-            }
-            // 3b. Normalized title without artist either — catches the
-            // case where the artist string on Spotify ("Beyoncé, Jay-Z")
-            // doesn't match LRCLib's primary entry.
-            if let l = consider(await getExact(
-                artist: nil,
-                title: normalizedTitle,
-                album: nil,
-                duration: nil
-            )) {
-                cache[key] = l
-                return l
-            }
+            if let l = consider(await lrclibGet(
+                artist: firstArtist, title: normalizedTitle, album: nil, duration: nil
+            )) { return l }
+            if let l = consider(await lrclibGet(
+                artist: nil, title: normalizedTitle, album: nil, duration: nil
+            )) { return l }
         }
 
-        // 4. Search by title alone — returns ranked array, often picks
-        //    up covers + obscure entries the exact-match endpoint misses.
-        //    We pre-rank by duration closeness so a 4-minute cover doesn't
-        //    win when the original is 4:30.
-        let candidates = await searchByTitle(normalizedTitle, durationHint: track.durationSeconds)
+        // 4. Search by title alone — catches covers + odd spellings.
+        let candidates = await lrclibSearch(normalizedTitle, durationHint: track.durationSeconds)
         for hit in candidates.prefix(8) {
-            if let l = consider(hit) {
-                cache[key] = l
-                return l
-            }
+            if let l = consider(hit) { return l }
         }
 
-        // Truly nothing. If we saw an instrumental entry along the way,
-        // report that explicitly so the coach skips politely rather than
-        // re-trying as if it were a transient miss. Don't cache it
-        // either — the user might switch to a non-instrumental edit.
-        return sawInstrumental ? .instrumental : .notFound
+        return sawInstrumental ? .instrumental(source: "lrclib") : .notFound
     }
 
-    private func cacheKey(for track: Track) -> String {
-        "\(track.artist.lowercased())|\(track.title.lowercased())"
-    }
-
-    // MARK: - HTTP
-
-    private func getExact(
-        artist: String?,
-        title: String,
-        album: String?,
-        duration: Int?
-    ) async -> Wire? {
+    private func lrclibGet(
+        artist: String?, title: String, album: String?, duration: Int?
+    ) async -> LRCLibWire? {
         var comps = URLComponents(string: "https://lrclib.net/api/get")!
         var items: [URLQueryItem] = [URLQueryItem(name: "track_name", value: title)]
         if let artist, !artist.isEmpty {
@@ -176,54 +180,140 @@ actor LyricsClient {
         }
         comps.queryItems = items
         guard let url = comps.url else { return nil }
-        return await fetchWire(at: url)
+        return await fetchJSON(at: url, as: LRCLibWire.self, label: "lrclib.get")
     }
 
-    private func searchByTitle(_ title: String, durationHint: Int?) async -> [Wire] {
+    private func lrclibSearch(_ title: String, durationHint: Int?) async -> [LRCLibWire] {
         var comps = URLComponents(string: "https://lrclib.net/api/search")!
         comps.queryItems = [URLQueryItem(name: "track_name", value: title)]
         guard let url = comps.url else { return [] }
 
-        var req = URLRequest(url: url)
-        req.setValue("AARC/0.1 (https://aarun.club)", forHTTPHeaderField: "User-Agent")
-        req.timeoutInterval = 8
+        let hits = await fetchJSON(at: url, as: [LRCLibWire].self, label: "lrclib.search") ?? []
+        if hits.isEmpty { return [] }
 
-        do {
-            let (data, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode) else { return [] }
-            var hits = try JSONDecoder().decode([Wire].self, from: data)
-            if let hint = durationHint {
-                let hintD = Double(hint)
-                hits.sort { a, b in
-                    let da = abs((a.duration ?? 0) - hintD)
-                    let db = abs((b.duration ?? 0) - hintD)
-                    if da != db { return da < db }
-                    let aSynced = !(a.syncedLyrics ?? "").isEmpty
-                    let bSynced = !(b.syncedLyrics ?? "").isEmpty
-                    if aSynced != bSynced { return aSynced }
-                    let aPlain = !(a.plainLyrics ?? "").isEmpty
-                    let bPlain = !(b.plainLyrics ?? "").isEmpty
-                    return aPlain && !bPlain
-                }
-            } else {
-                hits.sort { a, b in
-                    let aSynced = !(a.syncedLyrics ?? "").isEmpty
-                    let bSynced = !(b.syncedLyrics ?? "").isEmpty
-                    return aSynced && !bSynced
-                }
+        var ranked = hits
+        if let hint = durationHint {
+            let hintD = Double(hint)
+            ranked.sort { a, b in
+                let da = abs((a.duration ?? 0) - hintD)
+                let db = abs((b.duration ?? 0) - hintD)
+                if da != db { return da < db }
+                let aSynced = !(a.syncedLyrics ?? "").isEmpty
+                let bSynced = !(b.syncedLyrics ?? "").isEmpty
+                if aSynced != bSynced { return aSynced }
+                let aPlain = !(a.plainLyrics ?? "").isEmpty
+                let bPlain = !(b.plainLyrics ?? "").isEmpty
+                return aPlain && !bPlain
             }
-            log.info("LRCLib search \"\(title, privacy: .public)\" → \(hits.count, privacy: .public) hits")
-            return hits
-        } catch {
-            log.info("LRCLib search error: \(error.localizedDescription, privacy: .public)")
-            return []
+        } else {
+            ranked.sort { a, b in
+                let aSynced = !(a.syncedLyrics ?? "").isEmpty
+                let bSynced = !(b.syncedLyrics ?? "").isEmpty
+                return aSynced && !bSynced
+            }
         }
+        log.info("LRCLib search \"\(title, privacy: .public)\" → \(ranked.count, privacy: .public) hits")
+        return ranked
     }
 
-    private func fetchWire(at url: URL) async -> Wire? {
+    // MARK: - Provider 2: Musixmatch
+
+    /// Returns nil when no API key is configured — so the chain treats
+    /// it as "skip silently" rather than "tried and failed".
+    private func fetchFromMusixmatch(track: Track) async -> Lyrics? {
+        guard let apiKey = UserDefaults.standard
+            .string(forKey: "musixmatch.apiKey")?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !apiKey.isEmpty else {
+            return nil
+        }
+
+        let artist = Self.firstArtist(track.artist)
+        let title = Self.normalizeTitle(track.title)
+
+        var comps = URLComponents(string: "https://api.musixmatch.com/ws/1.1/matcher.lyrics.get")!
+        comps.queryItems = [
+            URLQueryItem(name: "q_track", value: title),
+            URLQueryItem(name: "q_artist", value: artist),
+            URLQueryItem(name: "apikey", value: apiKey),
+        ]
+        guard let url = comps.url else { return .error("musixmatch URL build failed") }
+
+        guard let wire = await fetchJSON(at: url, as: MxmEnvelope.self, label: "musixmatch") else {
+            return .notFound
+        }
+        let status = wire.message.header.status_code
+        guard status == 200 else {
+            // 404 = not found. 401/402 = key issue. Don't spam; just bail.
+            log.info("Musixmatch status \(status, privacy: .public)")
+            return status == 404 ? .notFound : .error("musixmatch status \(status)")
+        }
+        guard let raw = wire.message.body?.lyrics?.lyrics_body, !raw.isEmpty else {
+            return .notFound
+        }
+        let cleaned = Self.cleanMusixmatchBody(raw)
+        let lines = Self.splitPlainLyrics(cleaned)
+        guard !lines.isEmpty else { return .notFound }
+        return .unsynced(lines: lines, source: "musixmatch")
+    }
+
+    /// Musixmatch free-tier bodies end with a watermark stanza:
+    ///     ...
+    ///     ******* This Lyrics is NOT for Commercial use *******
+    ///     (1409625334720)
+    /// Strip everything from the watermark down. Also strip trailing
+    /// "..." that signals the free-tier truncation.
+    private static func cleanMusixmatchBody(_ raw: String) -> String {
+        var kept: [Substring] = []
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.contains("This Lyrics is NOT for Commercial use") { break }
+            if trimmed.hasPrefix("****") { break }
+            if !trimmed.isEmpty,
+               trimmed.allSatisfy({ $0.isNumber || $0 == "(" || $0 == ")" }) {
+                // Pure numeric trailer like "(1409625334720)"
+                break
+            }
+            kept.append(line)
+        }
+        return kept.joined(separator: "\n")
+            .replacingOccurrences(of: "\n...", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Provider 3: lyrics.ovh
+
+    private func fetchFromLyricsOvh(track: Track) async -> Lyrics {
+        let artist = Self.firstArtist(track.artist)
+        let title = Self.normalizeTitle(track.title)
+        let allowed = CharacterSet.urlPathAllowed.subtracting(CharacterSet(charactersIn: "/"))
+        guard
+            let aEsc = artist.addingPercentEncoding(withAllowedCharacters: allowed),
+            let tEsc = title.addingPercentEncoding(withAllowedCharacters: allowed),
+            let url = URL(string: "https://api.lyrics.ovh/v1/\(aEsc)/\(tEsc)")
+        else {
+            return .error("lyrics.ovh URL build failed")
+        }
+
+        guard let wire = await fetchJSON(at: url, as: OvhWire.self, label: "lyrics.ovh") else {
+            return .notFound
+        }
+        guard let raw = wire.lyrics, !raw.isEmpty else { return .notFound }
+        let lines = Self.splitPlainLyrics(raw)
+        guard !lines.isEmpty else { return .notFound }
+        return .unsynced(lines: lines, source: "lyrics.ovh")
+    }
+
+    // MARK: - HTTP
+
+    private func fetchJSON<T: Decodable>(
+        at url: URL,
+        as type: T.Type,
+        label: String
+    ) async -> T? {
         var req = URLRequest(url: url)
         req.setValue("AARC/0.1 (https://aarun.club)", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.timeoutInterval = 8
         do {
             let (data, response) = try await URLSession.shared.data(for: req)
@@ -231,22 +321,134 @@ actor LyricsClient {
             if http.statusCode == 404 { return nil }
             guard (200...299).contains(http.statusCode) else {
                 let body = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
-                log.info("LRCLib get non-200 \(http.statusCode, privacy: .public) body=\(body, privacy: .public)")
+                log.info("\(label, privacy: .public) non-200 \(http.statusCode, privacy: .public) body=\(body, privacy: .public)")
                 return nil
             }
-            return try JSONDecoder().decode(Wire.self, from: data)
+            return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            log.info("LRCLib get error: \(error.localizedDescription, privacy: .public)")
+            log.info("\(label, privacy: .public) error: \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+
+    // MARK: - Pick line
+
+    /// Pick a line of lyrics appropriate to roast right now. For synced
+    /// lyrics this is the line being sung at `progressSec` (or just
+    /// before — we accept up to ~1.5s of lookahead grace). For unsynced
+    /// lyrics with a progress hint we approximate position by
+    /// (progress / duration) * lineCount.
+    func pickLine(
+        for track: Track,
+        lyrics: Lyrics,
+        progressSec: TimeInterval?,
+        rotation: Int = 0
+    ) -> Selection? {
+        switch lyrics {
+        case .synced(let lines, let source):
+            guard !lines.isEmpty else { return nil }
+            guard let progress = progressSec else {
+                let idx = abs(rotation) % lines.count
+                return contextSelection(lines: lines.map(\.text), index: idx, source: source, synced: true)
+            }
+            var chosenIndex: Int = 0
+            var found = false
+            for (i, line) in lines.enumerated() {
+                if line.timestamp <= progress + 1.5 {
+                    chosenIndex = i
+                    found = true
+                } else {
+                    break
+                }
+            }
+            if !found { chosenIndex = 0 }
+            return contextSelection(lines: lines.map(\.text), index: chosenIndex, source: source, synced: true)
+
+        case .unsynced(let lines, let source):
+            guard !lines.isEmpty else { return nil }
+            // Approximate sync via proportional position when we know the
+            // track duration; otherwise rotate.
+            let idx: Int
+            if let progress = progressSec,
+               let duration = track.durationSeconds, duration > 0 {
+                let frac = max(0, min(1, progress / TimeInterval(duration)))
+                idx = min(lines.count - 1, Int(Double(lines.count) * frac))
+            } else {
+                idx = abs(track.title.hashValue &+ rotation) % lines.count
+            }
+            return contextSelection(lines: lines, index: idx, source: source, synced: false)
+
+        case .instrumental, .notFound, .error:
+            return nil
+        }
+    }
+
+    struct Selection: Sendable {
+        /// The single line the DJ should roast.
+        let line: String
+        /// 2-3 lines around it (including the chosen line) for the LLM's
+        /// situational context.
+        let context: [String]
+        /// "en" | "zh" — the only two we ship in this commit.
+        let language: String
+        /// Which provider the line came from — surfaced in the playground
+        /// for debugging coverage gaps.
+        let source: String
+        /// True if the line was timestamped (LRC); false if we picked it
+        /// from unsynced text via proportional / rotation heuristics.
+        let synced: Bool
+    }
+
+    private func contextSelection(
+        lines: [String],
+        index: Int,
+        source: String,
+        synced: Bool
+    ) -> Selection? {
+        let pick = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pick.isEmpty else { return nil }
+        guard let language = detectLanguage(pick) else { return nil }
+        let lo = max(0, index - 1)
+        let hi = min(lines.count - 1, index + 1)
+        let context = Array(lines[lo...hi])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return Selection(
+            line: pick,
+            context: context,
+            language: language,
+            source: source,
+            synced: synced
+        )
+    }
+
+    /// Returns "en", "zh", or nil (skip). We're deliberately narrow per
+    /// product spec — Spanish/Japanese/etc. tracks are ignored for now.
+    private func detectLanguage(_ text: String) -> String? {
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            if (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) {
+                return "zh"
+            }
+        }
+        var letters = 0
+        var nonLatin = 0
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            if (0x0041...0x005A).contains(v) || (0x0061...0x007A).contains(v) {
+                letters += 1
+            } else if v > 0x007F && !scalar.properties.isWhitespace {
+                nonLatin += 1
+            }
+        }
+        guard letters >= 4 else { return nil }
+        if nonLatin > letters / 4 { return nil }
+        return "en"
     }
 
     // MARK: - Title / artist normalization
 
     private static func firstArtist(_ artist: String) -> String {
-        // Spotify joins multiple artists with ", " — LRCLib expects a
-        // single artist (primary). Take everything before the first
-        // separator we recognise.
         let separators: [Character] = [",", "&", ";"]
         for sep in separators {
             if let idx = artist.firstIndex(of: sep) {
@@ -256,7 +458,7 @@ actor LyricsClient {
         return artist.trimmingCharacters(in: .whitespaces)
     }
 
-    /// Strips Spotify suffixes that LRCLib's primary entry doesn't have.
+    /// Strips Spotify suffixes that lyric DBs' primary entries don't have.
     /// Examples handled:
     ///   "Bohemian Rhapsody - Remastered 2011"          → "Bohemian Rhapsody"
     ///   "Shake It Off (feat. Bleachers)"                → "Shake It Off"
@@ -308,111 +510,10 @@ actor LyricsClient {
         return s.trimmingCharacters(in: .whitespaces)
     }
 
-    /// Pick a line of lyrics appropriate to roast right now. For synced
-    /// lyrics this is the line being sung at `progressSec` (or just
-    /// before — we accept up to ~10s of lag). For unsynced lyrics it
-    /// returns a stable line based on a hash of the track + a rotation
-    /// counter so multiple riffs on the same song hit different lines.
-    func pickLine(
-        for track: Track,
-        lyrics: Lyrics,
-        progressSec: TimeInterval?,
-        rotation: Int = 0
-    ) -> Selection? {
-        switch lyrics {
-        case .synced(let lines):
-            guard !lines.isEmpty else { return nil }
-            guard let progress = progressSec else {
-                let idx = abs(rotation) % lines.count
-                return contextSelection(lines: lines.map(\.text), index: idx)
-            }
-            // Pick the most recent line whose timestamp <= progress.
-            var chosenIndex: Int = 0
-            var found = false
-            for (i, line) in lines.enumerated() {
-                if line.timestamp <= progress + 1.5 { // allow ~1.5s look-ahead grace
-                    chosenIndex = i
-                    found = true
-                } else {
-                    break
-                }
-            }
-            if !found {
-                // We're earlier than the very first line — pick line 0.
-                chosenIndex = 0
-            }
-            return contextSelection(lines: lines.map(\.text), index: chosenIndex)
-
-        case .unsynced(let lines):
-            guard !lines.isEmpty else { return nil }
-            // No timing info — rotate through the song. Hash of title +
-            // rotation lets us pick something stable but different each
-            // riff so the same song doesn't get the same line twice.
-            let idx = abs(track.title.hashValue &+ rotation) % lines.count
-            return contextSelection(lines: lines, index: idx)
-
-        case .instrumental, .notFound, .error:
-            return nil
-        }
-    }
-
-    struct Selection: Sendable {
-        /// The single line the DJ should roast.
-        let line: String
-        /// The 2-3 lines around it, including the chosen line, for the
-        /// LLM's situational context.
-        let context: [String]
-        /// "en" | "zh" — the only two we ship in this commit.
-        let language: String
-    }
-
-    private func contextSelection(lines: [String], index: Int) -> Selection? {
-        let pick = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !pick.isEmpty else { return nil }
-        guard let language = detectLanguage(pick) else { return nil }
-        let lo = max(0, index - 1)
-        let hi = min(lines.count - 1, index + 1)
-        let context = Array(lines[lo...hi])
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-        return Selection(line: pick, context: context, language: language)
-    }
-
-    /// Returns "en", "zh", or nil (skip). We're deliberately narrow per
-    /// product spec — Spanish/Japanese/etc. tracks are ignored for now.
-    private func detectLanguage(_ text: String) -> String? {
-        // Han characters → Chinese.
-        for scalar in text.unicodeScalars {
-            let v = scalar.value
-            if (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) {
-                return "zh"
-            }
-        }
-        // Strip whitespace/punctuation and check if the remaining
-        // characters are dominated by basic Latin letters.
-        var letters = 0
-        var nonLatin = 0
-        for scalar in text.unicodeScalars {
-            let v = scalar.value
-            if (0x0041...0x005A).contains(v) || (0x0061...0x007A).contains(v) {
-                letters += 1
-            } else if v > 0x007F && !scalar.properties.isWhitespace {
-                // Non-ASCII letter — could be French accent etc. We're
-                // conservative: a handful of accents is fine, but if the
-                // line is dominated by non-Latin, skip.
-                nonLatin += 1
-            }
-        }
-        guard letters >= 4 else { return nil }
-        if nonLatin > letters / 4 { return nil }
-        return "en"
-    }
-
     // MARK: - LRC parsing
 
     private static func parseLRC(_ raw: String) -> [SyncedLine] {
         var out: [SyncedLine] = []
-        // Match [mm:ss.xx] or [mm:ss.xxx] or [mm:ss]
         let pattern = #"\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return out }
 
@@ -422,9 +523,6 @@ actor LyricsClient {
             let range = NSRange(location: 0, length: nsLine.length)
             let matches = regex.matches(in: line, range: range)
             guard !matches.isEmpty else { continue }
-            // Strip metadata lines like [ar:Artist] — these don't match
-            // the timing pattern (letters not digits) so we already
-            // skipped them above.
             let lastEnd = matches.last!.range.upperBound
             let textNS = nsLine.substring(from: lastEnd)
             let text = textNS.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -455,15 +553,34 @@ actor LyricsClient {
             .filter { !$0.isEmpty }
     }
 
-    // MARK: - Wire
+    // MARK: - Wire types
 
-    private struct Wire: Decodable {
+    private struct LRCLibWire: Decodable {
         let instrumental: Bool?
         let plainLyrics: String?
         let syncedLyrics: String?
-        /// Present on /search results; lets us prefer the candidate
-        /// closest to the original track duration.
         let duration: Double?
+    }
+
+    private struct MxmEnvelope: Decodable {
+        let message: MxmMessage
+    }
+    private struct MxmMessage: Decodable {
+        let header: MxmHeader
+        let body: MxmBody?
+    }
+    private struct MxmHeader: Decodable {
+        let status_code: Int
+    }
+    private struct MxmBody: Decodable {
+        let lyrics: MxmLyrics?
+    }
+    private struct MxmLyrics: Decodable {
+        let lyrics_body: String?
+    }
+
+    private struct OvhWire: Decodable {
+        let lyrics: String?
     }
 }
 
