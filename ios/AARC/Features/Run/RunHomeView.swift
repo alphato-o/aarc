@@ -34,7 +34,18 @@ struct RunHomeView: View {
                 }
             }
             .navigationTitle("AARC")
+            .onAppear { schedulePreGen() }
+            .onChange(of: planStore.planKind) { _, _ in schedulePreGen() }
+            .onChange(of: planStore.distanceKm) { _, _ in schedulePreGen() }
+            .onChange(of: planStore.timeMinutes) { _, _ in schedulePreGen() }
+            .onChange(of: selectedPersonality) { _, _ in schedulePreGen() }
         }
+    }
+
+    /// Fire-and-forget speculative generation so the script is ready
+    /// (or close to ready) before the user taps Start.
+    private func schedulePreGen() {
+        orchestrator.schedulePreGenerate(personalityId: selectedPersonality.id)
     }
 
     // MARK: - Plan picker
@@ -129,9 +140,20 @@ struct RunHomeView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
-                Text("Start a run")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text("Start a run")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    if orchestrator.isPreGenerating {
+                        Image(systemName: "sparkles")
+                            .imageScale(.small)
+                            .foregroundStyle(.tint)
+                            .symbolEffect(.pulse)
+                        Text("coach pre-loading")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
 
                 HStack(spacing: 10) {
                     Button {

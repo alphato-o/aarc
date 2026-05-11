@@ -53,7 +53,10 @@ actor AIClient {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.timeoutInterval = 30
+        // Sonnet 4.5 via OpenRouter routinely takes 40-50s for the
+        // current output shape (10+ messages with variant pools and
+        // expressive tags). 30s was triggering false timeouts.
+        request.timeoutInterval = 90
         request.httpBody = try encoder.encode(plan)
 
         let (data, response) = try await session.data(for: request)
