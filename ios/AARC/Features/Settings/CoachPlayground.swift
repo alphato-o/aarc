@@ -20,6 +20,8 @@ struct CoachPlayground: View {
     @State private var lastError: String?
     @State private var customNote: String = ""
     @State private var probedTrack: String?
+    @State private var probedLyric: String?
+    @State private var probedLanguage: String?
 
     var body: some View {
         Form {
@@ -59,12 +61,27 @@ struct CoachPlayground: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
+                if let probedLyric {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text("Lyric line").font(.caption2).foregroundStyle(.secondary)
+                            if let probedLanguage {
+                                Text("· \(probedLanguage)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        Text("\u{201C}\(probedLyric)\u{201D}")
+                            .font(.caption)
+                            .italic()
+                    }
+                }
                 probeButton
                 musicCommentButton
             } header: {
                 Text("Music DJ commentary")
             } footer: {
-                Text("Probes the current music via Spotify Web API (or system audio if not connected), then asks /music-comment for a DJ-style roast of whatever you're playing.")
+                Text("Probes current Spotify track + fetches synced lyrics from lrclib.net, then asks /music-comment to roast the SPECIFIC LINE being sung. Skips if the song is instrumental, in an unsupported language, or has no lyrics on file.")
             }
 
             Section {
@@ -122,10 +139,16 @@ struct CoachPlayground: View {
     private var probeButton: some View {
         Button {
             Task { @MainActor in
-                let probe = await MusicProbe.shared.current()
-                switch probe {
-                case .track(let t):
+                probedLyric = nil
+                probedLanguage = nil
+                let resolved = await MusicLyricResolver.resolveCurrent()
+                switch resolved {
+                case .lyric(let t, let sel):
                     probedTrack = "Now playing: \(t.title) — \(t.artist)"
+                    probedLyric = sel.line
+                    probedLanguage = sel.language
+                case .songWithoutUsableLyric(let t):
+                    probedTrack = "Now playing: \(t.title) — \(t.artist) (no usable lyric — instrumental, language unsupported, or not on LRCLib)"
                 case .unknownAudio:
                     probedTrack = "Other audio is playing (no metadata available)"
                 case .silent:
@@ -204,20 +227,40 @@ struct CoachPlayground: View {
     private func fireMusic() {
         busy = "music"
         lastError = nil
+        probedLyric = nil
+        probedLanguage = nil
         Task { @MainActor in
             defer { busy = nil }
-            let probe = await MusicProbe.shared.current()
+            let resolved = await MusicLyricResolver.resolveCurrent()
             let request: AIClient.MusicCommentRequest
-            switch probe {
+            switch resolved {
             case .silent:
-                lastError = "Nothing playing — start Spotify (or any audio) and try again."
+                lastError = "Nothing playing — start Spotify and try again."
                 return
-            case .track(let t):
+            case .lyric(let t, let sel):
                 probedTrack = "Now playing: \(t.title) — \(t.artist)"
+                probedLyric = sel.line
+                probedLanguage = sel.language
                 request = AIClient.MusicCommentRequest(
                     personalityId: "roast_coach",
                     track: AIClient.MusicTrack(title: t.title, artist: t.artist, album: t.album, isPlaying: t.isPlaying),
                     unknownAudio: false,
+                    currentLyric: sel.line,
+                    lyricContext: sel.context.isEmpty ? nil : sel.context,
+                    lyricLanguage: sel.language,
+                    runContext: syntheticMusicContext(),
+                    recentDispatched: nil
+                )
+            case .songWithoutUsableLyric(let t):
+                probedTrack = "Now playing: \(t.title) — \(t.artist) (no usable lyric)"
+                lastError = "No usable lyric for this track (instrumental, unsupported language, or not on LRCLib). Production coach skips this case; the playground still fires a generic riff so you can hear something."
+                request = AIClient.MusicCommentRequest(
+                    personalityId: "roast_coach",
+                    track: AIClient.MusicTrack(title: t.title, artist: t.artist, album: t.album, isPlaying: t.isPlaying),
+                    unknownAudio: false,
+                    currentLyric: nil,
+                    lyricContext: nil,
+                    lyricLanguage: nil,
                     runContext: syntheticMusicContext(),
                     recentDispatched: nil
                 )
@@ -227,6 +270,9 @@ struct CoachPlayground: View {
                     personalityId: "roast_coach",
                     track: nil,
                     unknownAudio: true,
+                    currentLyric: nil,
+                    lyricContext: nil,
+                    lyricLanguage: nil,
                     runContext: syntheticMusicContext(),
                     recentDispatched: nil
                 )

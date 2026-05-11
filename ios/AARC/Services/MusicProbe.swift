@@ -16,6 +16,8 @@ struct MusicProbe {
         let artist: String
         let album: String?
         let isPlaying: Bool
+        let progressMs: Int?
+        let durationMs: Int?
     }
 
     enum State: Sendable {
@@ -32,7 +34,14 @@ struct MusicProbe {
         let spotify = await SpotifyClient.shared.currentlyPlaying()
         switch spotify {
         case .track(let t):
-            return .track(Track(title: t.title, artist: t.artist, album: t.album, isPlaying: t.isPlaying))
+            return .track(Track(
+                title: t.title,
+                artist: t.artist,
+                album: t.album,
+                isPlaying: t.isPlaying,
+                progressMs: t.progressMs,
+                durationMs: t.durationMs
+            ))
         case .nothingPlaying, .notConnected:
             // Fall through to the system probe.
             break

@@ -174,7 +174,18 @@ export const MusicCommentRequestSchema = z.object({
         .optional(),
     /// True when audio is detected but we don't have track metadata
     /// (e.g. Spotify isn't connected yet). The coach riffs generically.
+    /// Note: client-side now suppresses music_riff entirely when no
+    /// lyric is available, so this branch is reachable only via the
+    /// CoachPlayground tester / API consumers.
     unknownAudio: z.boolean().default(false),
+    /// The single lyric line being sung right now. If present, this is
+    /// what the DJ comments on — primary subject, not the track metadata.
+    currentLyric: z.string().min(1).max(500).optional(),
+    /// 1-3 surrounding lines so the model knows the flow.
+    lyricContext: z.array(z.string().min(1).max(500)).max(8).optional(),
+    /// "en" | "zh" — language of the lyric. Other languages are
+    /// filtered out client-side.
+    lyricLanguage: z.enum(["en", "zh"]).optional(),
     runContext: z.object({
         elapsedSeconds: z.number().nonnegative(),
         distanceMeters: z.number().nonnegative(),
