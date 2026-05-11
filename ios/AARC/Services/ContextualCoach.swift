@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 import OSLog
@@ -71,7 +72,19 @@ final class ContextualCoach {
 
     private var lastFireByTrigger: [AIClient.DynamicLineTrigger: Date] = [:]
     private var lastMusicRiffAt: Date?
-    private let musicRiffCooldown: TimeInterval = 360
+    /// Shorter than the 6-min cooldown of the original song-title-only
+    /// riff because lyric-driven riffs are more interesting per dispatch.
+    private let musicRiffCooldown: TimeInterval = 150
+    /// Backoff between music probes when the last probe didn't yield a
+    /// usable lyric (instrumental track, unsupported language, lyrics
+    /// not found, audio not from Spotify, etc.). Short enough to catch
+    /// the next song quickly.
+    private let musicRiffMissBackoff: TimeInterval = 45
+    /// "<artist>|<title>" of the song we riffed on last + the exact
+    /// lyric line we picked. Used to dedupe: we won't riff on the same
+    /// line of the same song twice in a row.
+    private var lastMusicTrackKey: String?
+    private var lastMusicLyric: String?
     /// Set while a /dynamic-line or /music-comment request is in flight
     /// so we don't double-fire.
     private var inFlight: Bool = false
@@ -90,6 +103,8 @@ final class ContextualCoach {
         paceSurgeStartedAt = nil
         lastFireByTrigger.removeAll()
         lastMusicRiffAt = nil
+        lastMusicTrackKey = nil
+        lastMusicLyric = nil
         inFlight = false
         lastFiredTrigger = nil
         lastFiredAt = nil
@@ -330,33 +345,38 @@ final class ContextualCoach {
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.inFlight = false }
-            let probe = await MusicProbe.shared.current()
-            switch probe {
-            case .silent:
-                // Nothing playing — back off the cooldown so we don't
-                // keep probing every tick.
-                self.lastMusicRiffAt = .now
-                return
-            case .track(let track):
-                await self.fireMusicComment(
-                    track: AIClient.MusicTrack(
-                        title: track.title,
-                        artist: track.artist,
-                        album: track.album,
-                        isPlaying: track.isPlaying
-                    ),
-                    unknownAudio: false,
-                    metrics: metrics
-                )
-            case .unknownAudio:
-                await self.fireMusicComment(track: nil, unknownAudio: true, metrics: metrics)
+            let resolved = await MusicLyricResolver.resolveCurrent()
+            switch resolved {
+            case .lyric(let track, let selection):
+                // Skip if we'd be repeating the same line of the same song.
+                let key = Self.trackKey(track: track)
+                if self.lastMusicTrackKey == key, self.lastMusicLyric == selection.line {
+                    self.lastMusicRiffAt = .now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
+                    self.log.info("ContextualCoach music_riff: same lyric on same song, skipping")
+                    return
+                }
+                self.lastMusicTrackKey = key
+                self.lastMusicLyric = selection.line
+                await self.fireMusicComment(track: track, selection: selection, metrics: metrics)
+
+            case .songWithoutUsableLyric:
+                // Track known but no English/Chinese lyric line we can
+                // ride. Skip — try again sooner in case the next song
+                // has lyrics.
+                self.lastMusicRiffAt = .now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
+                self.log.info("ContextualCoach music_riff: no usable lyric, short backoff")
+
+            case .unknownAudio, .silent:
+                // No Spotify metadata or nothing playing. Per product spec
+                // we don't fire riffs without a real lyric.
+                self.lastMusicRiffAt = .now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
             }
         }
     }
 
     private func fireMusicComment(
-        track: AIClient.MusicTrack?,
-        unknownAudio: Bool,
+        track: SpotifyClient.Track,
+        selection: LyricsClient.Selection,
         metrics: LiveMetrics
     ) async {
         let plan = ScriptPreviewStore.shared.currentPlan
@@ -371,8 +391,16 @@ final class ContextualCoach {
         let recent = ScriptEngine.shared.recentDispatchedLines
         let request = AIClient.MusicCommentRequest(
             personalityId: "roast_coach",
-            track: track,
-            unknownAudio: unknownAudio,
+            track: AIClient.MusicTrack(
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                isPlaying: track.isPlaying
+            ),
+            unknownAudio: false,
+            currentLyric: selection.line,
+            lyricContext: selection.context.isEmpty ? nil : selection.context,
+            lyricLanguage: selection.language,
             runContext: context,
             recentDispatched: recent.isEmpty ? nil : recent
         )
@@ -384,8 +412,7 @@ final class ContextualCoach {
                 lastFiredAt = .now
                 lastError = nil
             } else {
-                // Suppressed by cooldown — retry sooner than the full
-                // music_riff cooldown.
+                // Suppressed by global cooldown — retry sooner.
                 lastMusicRiffAt = .now.addingTimeInterval(-(musicRiffCooldown - 60))
                 log.info("ContextualCoach music_riff suppressed by ScriptEngine cooldown")
             }
@@ -393,6 +420,56 @@ final class ContextualCoach {
             lastError = error.localizedDescription
             log.error("ContextualCoach music_riff error: \(error.localizedDescription, privacy: .public)")
             lastMusicRiffAt = .now.addingTimeInterval(-(musicRiffCooldown - 60))
+        }
+    }
+
+    private static func trackKey(track: SpotifyClient.Track) -> String {
+        "\(track.artist)|\(track.title)"
+    }
+}
+
+// MARK: - Music lyric resolver
+
+/// Shared "what should the DJ riff on right now?" pipeline. Used by
+/// ContextualCoach during live runs AND by CoachPlayground for off-the-
+/// couch testing — same code path so the playground actually exercises
+/// what production will do.
+enum MusicLyricResolver {
+    enum Resolved: Sendable {
+        case lyric(SpotifyClient.Track, LyricsClient.Selection)
+        case songWithoutUsableLyric(SpotifyClient.Track)
+        case unknownAudio
+        case silent
+    }
+
+    static func resolveCurrent() async -> Resolved {
+        let track = await SpotifyClient.shared.currentlyPlaying()
+        switch track {
+        case .nothingPlaying:
+            return .silent
+        case .notConnected:
+            // Fall back to checking system audio so we at least know
+            // *something* is playing, even if we can't enrich it.
+            let other = AVAudioSession.sharedInstance().isOtherAudioPlaying
+            return other ? .unknownAudio : .silent
+        case .track(let t):
+            let lyricsTrack = LyricsClient.Track(
+                artist: t.artist,
+                title: t.title,
+                album: t.album,
+                durationSeconds: t.durationMs.map { Int(Double($0) / 1000.0) }
+            )
+            let lyrics = await LyricsClient.shared.fetch(track: lyricsTrack)
+            let progressSec = t.progressMs.map { Double($0) / 1000.0 }
+            let selection = await LyricsClient.shared.pickLine(
+                for: lyricsTrack,
+                lyrics: lyrics,
+                progressSec: progressSec
+            )
+            if let selection {
+                return .lyric(t, selection)
+            }
+            return .songWithoutUsableLyric(t)
         }
     }
 }

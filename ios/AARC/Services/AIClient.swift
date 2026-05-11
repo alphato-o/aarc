@@ -188,6 +188,13 @@ actor AIClient {
         var personalityId: String = "roast_coach"
         var track: MusicTrack?
         var unknownAudio: Bool = false
+        /// The single lyric line being sung right now. When present this
+        /// is the primary subject for the DJ — track metadata becomes
+        /// supporting context.
+        var currentLyric: String?
+        var lyricContext: [String]?
+        /// "en" | "zh" — gated on iOS side; we only ship these two.
+        var lyricLanguage: String?
         var runContext: MusicCommentContext
         var recentDispatched: [String]?
     }

@@ -103,17 +103,33 @@ export async function musicCommentHandler(
 function buildUserPrompt(req: MusicCommentRequest): string {
     const lines: string[] = [];
 
+    if (req.currentLyric) {
+        lines.push("LYRIC LINE BEING SUNG RIGHT NOW (your primary subject — roast THIS line):");
+        lines.push(`"${req.currentLyric}"`);
+        if (req.lyricLanguage) {
+            lines.push(`(language: ${req.lyricLanguage === "zh" ? "Chinese" : "English"})`);
+        }
+        if (req.lyricContext && req.lyricContext.length > 0) {
+            lines.push("");
+            lines.push("Surrounding lines (for flow only — do not riff on these unless they help the joke about the current line):");
+            for (const ctx of req.lyricContext) {
+                lines.push(`- "${ctx}"`);
+            }
+        }
+    }
+
     if (req.track && (req.track.title || req.track.artist)) {
-        lines.push("CURRENT TRACK:");
+        lines.push("");
+        lines.push("TRACK (supporting context only — don't lead with this):");
         if (req.track.title) lines.push(`- title: ${req.track.title}`);
         if (req.track.artist) lines.push(`- artist: ${req.track.artist}`);
         if (req.track.album) lines.push(`- album: ${req.track.album}`);
         if (req.track.isPlaying === false) {
             lines.push("- note: track is paused right now");
         }
-    } else if (req.unknownAudio) {
-        lines.push("AUDIO STATE: something is playing but we don't have track metadata (Spotify isn't connected, or the system can't tell us).");
-    } else {
+    } else if (req.unknownAudio && !req.currentLyric) {
+        lines.push("AUDIO STATE: something is playing but we don't have track metadata or a lyric line.");
+    } else if (!req.currentLyric && !req.track) {
         lines.push("AUDIO STATE: nothing detected playing.");
     }
 
@@ -140,7 +156,11 @@ function buildUserPrompt(req: MusicCommentRequest): string {
     }
 
     lines.push("");
-    lines.push("Generate ONE DJ commentary line about the current track. JSON only.");
+    if (req.currentLyric) {
+        lines.push("Generate ONE DJ commentary line reacting to the lyric line above. JSON only.");
+    } else {
+        lines.push("Generate ONE DJ commentary line about the current track. JSON only.");
+    }
     return lines.join("\n");
 }
 

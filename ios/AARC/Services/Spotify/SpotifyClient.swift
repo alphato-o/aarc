@@ -15,6 +15,10 @@ struct SpotifyClient {
         let artist: String
         let album: String?
         let isPlaying: Bool
+        /// Current playback position within the track. Used to look up
+        /// the line of synced lyrics being sung right now.
+        let progressMs: Int?
+        let durationMs: Int?
     }
 
     enum Result: Sendable {
@@ -57,7 +61,9 @@ struct SpotifyClient {
                 title: item.name,
                 artist: artist.isEmpty ? "Unknown artist" : artist,
                 album: item.album?.name,
-                isPlaying: wire.is_playing ?? true
+                isPlaying: wire.is_playing ?? true,
+                progressMs: wire.progress_ms,
+                durationMs: item.duration_ms
             ))
         } catch {
             log.error("Spotify currentlyPlaying error: \(error.localizedDescription, privacy: .public)")
@@ -69,6 +75,7 @@ struct SpotifyClient {
 
     private struct Wire: Decodable {
         let is_playing: Bool?
+        let progress_ms: Int?
         let item: Item?
     }
 
@@ -76,6 +83,7 @@ struct SpotifyClient {
         let name: String
         let artists: [Artist]
         let album: Album?
+        let duration_ms: Int?
     }
 
     private struct Artist: Decodable {
