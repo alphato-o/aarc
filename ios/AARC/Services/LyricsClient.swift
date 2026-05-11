@@ -8,10 +8,15 @@ import OSLog
 ///   1. LRCLib            (free, no key) — synced LRC when available.
 ///                         Tries strict get → loose get → normalized
 ///                         title → /search by title alone.
-///   2. Musixmatch        (free tier, 2000/day, requires API key in
+///   2. NetEase           (no key) — unofficial web endpoints
+///                         music.163.com/api/{search,song/lyric}. Best
+///                         Chinese coverage with synced LRC. Prioritised
+///                         over Musixmatch/ovh when the track's title or
+///                         artist contains Han characters.
+///   3. Musixmatch        (free tier, 2000/day, requires API key in
 ///                         Settings) — plain unsynced; broader catalog.
 ///                         Skipped silently when no key is configured.
-///   3. lyrics.ovh        (free, no key) — plain unsynced; English-leaning.
+///   4. lyrics.ovh        (free, no key) — plain unsynced; English-leaning.
 ///
 /// LRC format (per line):
 ///   [mm:ss.xx] Lyric text
@@ -53,48 +58,54 @@ actor LyricsClient {
         if let cached = cache[key], cached.isPositive { return cached }
 
         var firstInstrumental: String?
+        let looksChinese = Self.containsHan(track.title) || Self.containsHan(track.artist)
 
-        // 1. LRCLib — broad ladder built in.
-        let lrclib = await fetchFromLRCLib(track: track)
-        switch lrclib {
-        case .synced, .unsynced:
-            cache[key] = lrclib
-            return lrclib
-        case .instrumental(let s):
-            firstInstrumental = firstInstrumental ?? s
-        case .notFound, .error:
-            break
-        }
+        // Run each provider in sequence. NetEase moves to the front for
+        // Chinese tracks because LRCLib's Mandopop coverage is thin.
+        // Musixmatch is conditional on a key being configured; we treat
+        // a nil return as "skip silently, try next".
+        let providers: [LyricProvider] = looksChinese
+            ? [.netease, .lrclib, .musixmatch, .lyricsOvh]
+            : [.lrclib, .netease, .musixmatch, .lyricsOvh]
 
-        // 2. Musixmatch — opt-in via Settings (free tier).
-        if let mxm = await fetchFromMusixmatch(track: track) {
-            switch mxm {
-            case .synced, .unsynced:
-                cache[key] = mxm
-                return mxm
-            case .instrumental(let s):
-                firstInstrumental = firstInstrumental ?? s
-            case .notFound, .error:
-                break
+        for provider in providers {
+            let outcome: Lyrics?
+            switch provider {
+            case .lrclib:     outcome = await fetchFromLRCLib(track: track)
+            case .netease:    outcome = await fetchFromNetEase(track: track)
+            case .musixmatch: outcome = await fetchFromMusixmatch(track: track)
+            case .lyricsOvh:  outcome = await fetchFromLyricsOvh(track: track)
             }
-        }
-
-        // 3. lyrics.ovh — free, no key.
-        let ovh = await fetchFromLyricsOvh(track: track)
-        switch ovh {
-        case .synced, .unsynced:
-            cache[key] = ovh
-            return ovh
-        case .instrumental(let s):
-            firstInstrumental = firstInstrumental ?? s
-        case .notFound, .error:
-            break
+            guard let outcome else { continue }
+            switch outcome {
+            case .synced, .unsynced:
+                cache[key] = outcome
+                return outcome
+            case .instrumental(let s):
+                if firstInstrumental == nil { firstInstrumental = s }
+            case .notFound, .error:
+                continue
+            }
         }
 
         if let source = firstInstrumental {
             return .instrumental(source: source)
         }
         return .notFound
+    }
+
+    private enum LyricProvider {
+        case lrclib, netease, musixmatch, lyricsOvh
+    }
+
+    private static func containsHan(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            if (0x4E00...0x9FFF).contains(v) || (0x3400...0x4DBF).contains(v) {
+                return true
+            }
+        }
+        return false
     }
 
     private func cacheKey(for track: Track) -> String {
@@ -279,6 +290,155 @@ actor LyricsClient {
         return kept.joined(separator: "\n")
             .replacingOccurrences(of: "\n...", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Provider: NetEase Cloud Music (unofficial web endpoints)
+
+    /// Two-step: /api/search/get → song id → /api/song/lyric.
+    /// Both endpoints are the same calls the music.163.com web player
+    /// makes — no auth required, but the server insists on a Referer
+    /// header. We prefer the result with the closest duration to the
+    /// Spotify track so a cover doesn't displace the original.
+    private func fetchFromNetEase(track: Track) async -> Lyrics {
+        let firstArtist = Self.firstArtist(track.artist)
+        let normalizedTitle = Self.normalizeTitle(track.title)
+
+        // Try title + artist first; if that returns nothing usable, try
+        // title alone.  Each search returns ranked candidates we then
+        // probe for lyric content.
+        let queries = [
+            "\(normalizedTitle) \(firstArtist)",
+            normalizedTitle,
+        ]
+        var sawInstrumentalish = false
+
+        for query in queries {
+            let songs = await neteaseSearch(query: query)
+            // Sort by duration closeness when we know it. NetEase reports
+            // duration in ms.
+            let ranked: [NeteaseSong] = {
+                guard let dur = track.durationSeconds else { return songs }
+                let hintMs = Double(dur * 1000)
+                return songs.sorted { a, b in
+                    abs(Double(a.duration ?? 0) - hintMs) < abs(Double(b.duration ?? 0) - hintMs)
+                }
+            }()
+
+            for song in ranked.prefix(5) {
+                let lyric = await neteaseLyric(songId: song.id)
+                switch lyric {
+                case .synced, .unsynced:
+                    return lyric
+                case .instrumental:
+                    sawInstrumentalish = true
+                case .notFound, .error:
+                    continue
+                }
+            }
+        }
+        return sawInstrumentalish ? .instrumental(source: "netease") : .notFound
+    }
+
+    private struct NeteaseSong {
+        let id: Int
+        let name: String
+        let artistName: String
+        let duration: Int?   // ms
+    }
+
+    private func neteaseSearch(query: String) async -> [NeteaseSong] {
+        var comps = URLComponents(string: "https://music.163.com/api/search/get")!
+        comps.queryItems = [
+            URLQueryItem(name: "s", value: query),
+            URLQueryItem(name: "type", value: "1"),
+            URLQueryItem(name: "limit", value: "10"),
+        ]
+        guard let url = comps.url else { return [] }
+
+        var req = URLRequest(url: url)
+        req.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 8
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode) else { return [] }
+            let wire = try JSONDecoder().decode(NeteaseSearchWire.self, from: data)
+            let songs = wire.result?.songs ?? []
+            log.info("NetEase search \"\(query, privacy: .public)\" → \(songs.count, privacy: .public) hits")
+            return songs.map { s in
+                let artistName = (s.artists ?? []).compactMap(\.name).joined(separator: ", ")
+                return NeteaseSong(id: s.id, name: s.name ?? "", artistName: artistName, duration: s.duration)
+            }
+        } catch {
+            log.info("NetEase search error: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    private func neteaseLyric(songId: Int) async -> Lyrics {
+        var comps = URLComponents(string: "https://music.163.com/api/song/lyric")!
+        comps.queryItems = [
+            URLQueryItem(name: "id", value: String(songId)),
+            URLQueryItem(name: "lv", value: "1"),
+            URLQueryItem(name: "kv", value: "1"),
+            URLQueryItem(name: "tv", value: "-1"),
+        ]
+        guard let url = comps.url else { return .error("netease lyric URL build failed") }
+
+        var req = URLRequest(url: url)
+        req.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 8
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode) else {
+                return .notFound
+            }
+            let wire = try JSONDecoder().decode(NeteaseLyricWire.self, from: data)
+            // Signals NetEase uses for "no lyrics on file":
+            if wire.nolyric == true { return .notFound }
+            if wire.uncollected == true {
+                // Uncollected ≈ "we don't have this transcribed". Coach
+                // should treat as missing, not instrumental.
+                return .notFound
+            }
+            if let raw = wire.lrc?.lyric, !raw.isEmpty {
+                let parsed = Self.parseLRC(raw)
+                if !parsed.isEmpty {
+                    return .synced(lines: parsed, source: "netease")
+                }
+                // LRC field present but no timestamps — fall back to lines.
+                let lines = Self.splitPlainLyrics(Self.stripLRCTimestamps(raw))
+                if !lines.isEmpty {
+                    return .unsynced(lines: lines, source: "netease")
+                }
+            }
+            return .notFound
+        } catch {
+            log.info("NetEase lyric error: \(error.localizedDescription, privacy: .public)")
+            return .error(error.localizedDescription)
+        }
+    }
+
+    /// LRC lyrics on NetEase frequently include a `作词 : ...` (lyricist)
+    /// header block at top — kept here because users sometimes get
+    /// roasted for credits. parseLRC already handles header lines; this
+    /// helper is only for the unsynced fallback.
+    private static func stripLRCTimestamps(_ raw: String) -> String {
+        let pattern = #"\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return raw }
+        let ns = raw as NSString
+        return regex.stringByReplacingMatches(
+            in: raw,
+            range: NSRange(location: 0, length: ns.length),
+            withTemplate: ""
+        )
     }
 
     // MARK: - Provider 3: lyrics.ovh
@@ -581,6 +741,31 @@ actor LyricsClient {
 
     private struct OvhWire: Decodable {
         let lyrics: String?
+    }
+
+    private struct NeteaseSearchWire: Decodable {
+        let result: NeteaseSearchResult?
+    }
+    private struct NeteaseSearchResult: Decodable {
+        let songs: [NeteaseSearchSong]?
+    }
+    private struct NeteaseSearchSong: Decodable {
+        let id: Int
+        let name: String?
+        let artists: [NeteaseSearchArtist]?
+        let duration: Int?
+    }
+    private struct NeteaseSearchArtist: Decodable {
+        let name: String?
+    }
+
+    private struct NeteaseLyricWire: Decodable {
+        let lrc: NeteaseLrcBlock?
+        let nolyric: Bool?
+        let uncollected: Bool?
+    }
+    private struct NeteaseLrcBlock: Decodable {
+        let lyric: String?
     }
 }
 
