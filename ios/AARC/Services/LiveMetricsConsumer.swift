@@ -46,6 +46,10 @@ final class LiveMetricsConsumer {
         // Forward to the script engine so generated lines fire at the
         // right moments. No-op when the engine isn't active.
         ScriptEngine.shared.processTick(metrics)
+        // ContextualCoach evaluates the same tick for reactive triggers
+        // (HR spike, pace drop/surge, quiet stretch). It shares
+        // ScriptEngine's cooldown via tryInject, so no double-talk.
+        ContextualCoach.shared.processTick(metrics)
     }
 
     func ingestStarted(runId: UUID, startedAt: Date) {
@@ -63,6 +67,7 @@ final class LiveMetricsConsumer {
                 plan: ScriptPreviewStore.shared.currentPlan
             )
         }
+        ContextualCoach.shared.start()
     }
 
     func ingestPaused() {
@@ -81,6 +86,7 @@ final class LiveMetricsConsumer {
         // already have fired during a normal run. If the user ended
         // early, any unspoken lines just go quiet.
         ScriptEngine.shared.stop()
+        ContextualCoach.shared.stop()
 
         // Kick off persistence in the background. HK may take a few
         // seconds to propagate the workout from watch to iPhone, so the

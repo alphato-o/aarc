@@ -91,6 +91,80 @@ actor AIClient {
         let messages: [ScriptMessage]?
         let error: String?
     }
+
+    // MARK: - Dynamic line (/dynamic-line)
+
+    /// Triggers that the in-run ContextualCoach can fire. Keep aligned
+    /// with the proxy zod enum in `DynamicLineRequestSchema`.
+    enum DynamicLineTrigger: String, Codable, Sendable {
+        case hrSpike = "hr_spike"
+        case paceDrop = "pace_drop"
+        case paceSurge = "pace_surge"
+        case quietStretch = "quiet_stretch"
+        case custom
+    }
+
+    struct DynamicLineContext: Codable, Sendable {
+        var elapsedSeconds: Double
+        var distanceMeters: Double
+        var currentHR: Double?
+        var avgHR: Double?
+        var currentPaceSecPerKm: Double?
+        var avgPaceSecPerKm: Double?
+        var planKind: String          // "distance" | "time" | "open"
+        var planDistanceKm: Double?
+        var planTimeMinutes: Double?
+        var runType: String           // "outdoor" | "treadmill"
+    }
+
+    struct DynamicLineRequest: Codable, Sendable {
+        var personalityId: String = "roast_coach"
+        var trigger: DynamicLineTrigger
+        var runContext: DynamicLineContext
+        var recentDispatched: [String]?
+        var customNote: String?
+    }
+
+    struct DynamicLineResult: Sendable {
+        let text: String
+        let model: String
+    }
+
+    func generateDynamicLine(_ request: DynamicLineRequest) async throws -> DynamicLineResult {
+        let url = Config.apiBaseURL.appendingPathComponent("dynamic-line")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        // Reactive coaching must feel immediate. Haiku via OpenRouter
+        // typically returns in 2-5s, so 15s is generous without
+        // letting a stuck request silence the coach for too long.
+        urlRequest.timeoutInterval = 15
+        urlRequest.httpBody = try encoder.encode(request)
+
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw AIError.transport("non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw AIError.httpStatus(http.statusCode, body: body.prefix(500).description)
+        }
+        let envelope = try decoder.decode(DynamicEnvelope.self, from: data)
+        guard envelope.ok else {
+            throw AIError.proxy(envelope.error ?? "unknown")
+        }
+        guard let text = envelope.text, let model = envelope.model else {
+            throw AIError.proxy("missing fields in proxy response")
+        }
+        return DynamicLineResult(text: text, model: model)
+    }
+
+    private struct DynamicEnvelope: Decodable {
+        let ok: Bool
+        let text: String?
+        let model: String?
+        let error: String?
+    }
 }
 
 enum AIError: Error, LocalizedError {

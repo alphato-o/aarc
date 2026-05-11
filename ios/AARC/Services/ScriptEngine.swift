@@ -29,6 +29,16 @@ final class ScriptEngine {
     /// Last text dispatched — for diagnostic UIs.
     private(set) var lastDispatched: String?
 
+    /// Timestamp of the last dispatched line (scripted or injected).
+    /// Exposed so the ContextualCoach can decide whether to fire a
+    /// quiet-stretch line.
+    private(set) var lastDispatchAt: Date?
+
+    /// Ring buffer of the most recent dispatched lines. Sent to the
+    /// /dynamic-line endpoint so the model knows what NOT to repeat.
+    private(set) var recentDispatchedLines: [String] = []
+    private let recentRingCapacity = 5
+
     // MARK: - Configuration
 
     /// Minimum gap between two dispatched lines, in seconds.
@@ -46,7 +56,6 @@ final class ScriptEngine {
     /// message fires, used to rotate through the textVariants pool so
     /// per-km roasts never repeat back-to-back.
     private var variantCursorByMessageId: [String: Int] = [:]
-    private var lastDispatchAt: Date?
 
     // MARK: - API
 
@@ -59,6 +68,7 @@ final class ScriptEngine {
         self.lastDispatchAt = nil
         self.dispatchCount = 0
         self.lastDispatched = nil
+        self.recentDispatchedLines.removeAll()
         self.activeScriptId = script.scriptId
         self.isActive = true
     }
@@ -71,6 +81,27 @@ final class ScriptEngine {
         self.epochByMessageId.removeAll()
         self.variantCursorByMessageId.removeAll()
         self.lastDispatchAt = nil
+        self.recentDispatchedLines.removeAll()
+    }
+
+    /// Inject a dynamically-generated line into the run. Called by the
+    /// ContextualCoach when a reactive trigger (HR spike, pace drop,
+    /// quiet stretch, …) fires. Honors the same cooldown as scripted
+    /// lines so we don't talk over a per-km roast that just dispatched.
+    ///
+    /// Returns `true` if the line was actually spoken, `false` if it
+    /// was suppressed by cooldown or inactive state. The coach can use
+    /// the return value to keep its own cooldown bookkeeping honest.
+    @discardableResult
+    func tryInject(text: String, source: String) -> Bool {
+        guard isActive else { return false }
+        if let last = lastDispatchAt,
+           Date().timeIntervalSince(last) < cooldown {
+            return false
+        }
+        Speaker.shared.speak(text)
+        recordDispatch(text: text)
+        return true
     }
 
     /// Evaluate every trigger against the current snapshot. Called by
@@ -184,9 +215,17 @@ final class ScriptEngine {
     private func dispatch(_ message: ScriptMessage) {
         let text = nextVariantText(for: message)
         Speaker.shared.speak(text)
+        recordDispatch(text: text)
+    }
+
+    private func recordDispatch(text: String) {
         lastDispatchAt = .now
         lastDispatched = text
         dispatchCount += 1
+        recentDispatchedLines.append(text)
+        if recentDispatchedLines.count > recentRingCapacity {
+            recentDispatchedLines.removeFirst(recentDispatchedLines.count - recentRingCapacity)
+        }
     }
 
     /// Pick the next rotation candidate for a message. For one-shot
