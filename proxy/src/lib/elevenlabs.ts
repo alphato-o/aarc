@@ -3,11 +3,18 @@
  * client caches and plays via AVAudioPlayer.
  *
  * Model choice:
- *   eleven_multilingual_v2  — best quality, ~3-5s latency
- *   eleven_turbo_v2_5       — faster, slightly lower quality
+ *   eleven_v3                — flagship, supports inline audio tags
+ *                              ([shouting], [whispering], [laughs],
+ *                              [sighs], [mockingly], [enthusiastic])
+ *                              for dynamic theatrical control. The
+ *                              script-gen prompt sprinkles these on
+ *                              moments that warrant them.
+ *   eleven_multilingual_v2   — previous default, no tags, more stable.
+ *   eleven_turbo_v2_5        — fastest, lowest quality.
  *
- * Voice settings tuned for Roast Coach: low-ish stability for expressive
- * delivery, higher style for theatrical sass.
+ * Voice settings tuned for Roast Coach: v3 handles emotion primarily
+ * via inline tags, so the per-line `style` matters less; we keep a
+ * moderate value and lean on the model emitting tags where it counts.
  */
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
@@ -26,11 +33,11 @@ export async function callElevenLabs(params: ElevenLabsParams): Promise<ArrayBuf
     const url = `${ELEVENLABS_BASE}/text-to-speech/${encodeURIComponent(params.voiceId)}`;
     const body = {
         text: params.text,
-        model_id: params.modelId ?? "eleven_multilingual_v2",
+        model_id: params.modelId ?? "eleven_v3",
         voice_settings: {
-            stability: params.stability ?? 0.4,
+            stability: params.stability ?? 0.5,
             similarity_boost: params.similarityBoost ?? 0.75,
-            style: params.style ?? 0.7,
+            style: params.style ?? 0.5,
             use_speaker_boost: true,
         },
     };

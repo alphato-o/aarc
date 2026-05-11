@@ -42,6 +42,10 @@ final class ScriptEngine {
     /// Per-message epoch counter for recurring triggers
     /// (distance.everyMeters and time.everySeconds).
     private var epochByMessageId: [String: Int] = [:]
+    /// Per-message variant cursor — increments each time a looping
+    /// message fires, used to rotate through the textVariants pool so
+    /// per-km roasts never repeat back-to-back.
+    private var variantCursorByMessageId: [String: Int] = [:]
     private var lastDispatchAt: Date?
 
     // MARK: - API
@@ -51,6 +55,7 @@ final class ScriptEngine {
         self.plan = plan
         self.firedMessageIds.removeAll()
         self.epochByMessageId.removeAll()
+        self.variantCursorByMessageId.removeAll()
         self.lastDispatchAt = nil
         self.dispatchCount = 0
         self.lastDispatched = nil
@@ -64,6 +69,7 @@ final class ScriptEngine {
         self.activeScriptId = nil
         self.firedMessageIds.removeAll()
         self.epochByMessageId.removeAll()
+        self.variantCursorByMessageId.removeAll()
         self.lastDispatchAt = nil
     }
 
@@ -176,9 +182,20 @@ final class ScriptEngine {
     // MARK: - Dispatch
 
     private func dispatch(_ message: ScriptMessage) {
-        Speaker.shared.speak(message.text)
+        let text = nextVariantText(for: message)
+        Speaker.shared.speak(text)
         lastDispatchAt = .now
-        lastDispatched = message.text
+        lastDispatched = text
         dispatchCount += 1
+    }
+
+    /// Pick the next rotation candidate for a message. For one-shot
+    /// messages (no variants) this always returns `text`. For looping
+    /// messages with variants, cycles through [text, *textVariants].
+    private func nextVariantText(for message: ScriptMessage) -> String {
+        let pool = message.rotationPool
+        let cursor = variantCursorByMessageId[message.id] ?? 0
+        variantCursorByMessageId[message.id] = cursor + 1
+        return pool[cursor % pool.count]
     }
 }

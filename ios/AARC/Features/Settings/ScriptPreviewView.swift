@@ -110,6 +110,29 @@ struct ScriptPreviewView: View {
                             }
                             Text(message.text)
                                 .font(.callout)
+
+                            if let variants = message.textVariants, !variants.isEmpty {
+                                DisclosureGroup("\(variants.count) variants") {
+                                    ForEach(Array(variants.enumerated()), id: \.offset) { idx, variant in
+                                        HStack(alignment: .top, spacing: 6) {
+                                            Text("\(idx + 1).")
+                                                .font(.caption2.monospacedDigit())
+                                                .foregroundStyle(.tertiary)
+                                            Text(variant)
+                                                .font(.caption)
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                            Button {
+                                                Speaker.shared.speak(variant)
+                                            } label: {
+                                                Image(systemName: "speaker.wave.2.fill")
+                                            }
+                                            .buttonStyle(.borderless)
+                                        }
+                                    }
+                                }
+                                .font(.caption.bold())
+                            }
+
                             HStack {
                                 Text("priority \(message.priority)")
                                 if !message.playOnce { Text("· loops") }
