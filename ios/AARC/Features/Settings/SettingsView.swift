@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var preferRemoteVoice: Bool = Speaker.shared.preferRemoteVoice
     @State private var spotifyAuth = SpotifyAuth.shared
     @State private var spotifyBusy = false
+    @State private var musixmatchKey: String = UserDefaults.standard.string(forKey: "musixmatch.apiKey") ?? ""
 
     var body: some View {
         NavigationStack {
@@ -150,6 +151,34 @@ struct SettingsView: View {
                     Text("Spotify")
                 } footer: {
                     Text("Used for in-run DJ commentary. AARC reads only the currently-playing track. Redirect URI: aarc://spotify-callback — must match the Spotify Developer Dashboard exactly.")
+                }
+
+                Section {
+                    SecureField("Musixmatch API key (optional)", text: $musixmatchKey)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .onChange(of: musixmatchKey) { _, newValue in
+                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if trimmed.isEmpty {
+                                UserDefaults.standard.removeObject(forKey: "musixmatch.apiKey")
+                            } else {
+                                UserDefaults.standard.set(trimmed, forKey: "musixmatch.apiKey")
+                            }
+                        }
+                    if musixmatchKey.isEmpty {
+                        Label("Not configured — only LRCLib + lyrics.ovh will be used", systemImage: "info.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label("Configured (\(musixmatchKey.count) chars)", systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+                } header: {
+                    Text("Lyric providers")
+                } footer: {
+                    Text("DJ commentary needs lyrics. AARC tries LRCLib first (free, synced when available), then Musixmatch if a key is set (free tier: 2000/day at developer.musixmatch.com — much broader catalog), then lyrics.ovh (free, English-leaning). Cache only stores hits — misses always retry.")
                 }
 
                 Section("About") {
