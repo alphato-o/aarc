@@ -18,6 +18,7 @@ import AARCKit
 ///   - pace_drop     pace > rolling avg + 30 s/km sustained 30s, cooldown 5 min
 ///   - pace_surge    pace < rolling avg - 20 s/km sustained 30s, cooldown 5 min
 ///   - quiet_stretch >4 min since last ScriptEngine dispatch, cooldown 4 min
+///   - music_riff    every ~6 min while audio is detected, cooldown 6 min
 ///
 /// Rolling averages use a 90s window so they react to "what's normal
 /// right now" rather than "what's normal for the whole run."
@@ -69,7 +70,10 @@ final class ContextualCoach {
     private var paceSurgeStartedAt: Date?
 
     private var lastFireByTrigger: [AIClient.DynamicLineTrigger: Date] = [:]
-    /// Set while a /dynamic-line request is in flight so we don't double-fire.
+    private var lastMusicRiffAt: Date?
+    private let musicRiffCooldown: TimeInterval = 360
+    /// Set while a /dynamic-line or /music-comment request is in flight
+    /// so we don't double-fire.
     private var inFlight: Bool = false
     private var latestMetrics: LiveMetrics?
 
@@ -85,6 +89,7 @@ final class ContextualCoach {
         paceDropStartedAt = nil
         paceSurgeStartedAt = nil
         lastFireByTrigger.removeAll()
+        lastMusicRiffAt = nil
         inFlight = false
         lastFiredTrigger = nil
         lastFiredAt = nil
@@ -123,6 +128,15 @@ final class ContextualCoach {
 
         if let trigger = evaluateTriggers(now: now, metrics: metrics) {
             fire(trigger: trigger, metrics: metrics)
+            return
+        }
+        // Music riff is opportunistic — only check it if no priority
+        // trigger fired this tick. The probe is async, so the call site
+        // is a Task that re-locks `inFlight`.
+        if shouldCheckMusicRiff(now: now) {
+            inFlight = true
+            lastMusicRiffAt = now
+            checkAndFireMusicRiff(now: now, metrics: metrics)
         }
     }
 
@@ -298,6 +312,87 @@ final class ContextualCoach {
                 // trigger for its full cooldown.
                 self.lastFireByTrigger[trigger] = .now.addingTimeInterval(-((self.cooldownByTrigger[trigger] ?? 240) - 30))
             }
+        }
+    }
+
+    // MARK: - Music riff
+
+    private func shouldCheckMusicRiff(now: Date) -> Bool {
+        if let last = lastMusicRiffAt,
+           now.timeIntervalSince(last) < musicRiffCooldown {
+            return false
+        }
+        return true
+    }
+
+    private func checkAndFireMusicRiff(now: Date, metrics: LiveMetrics) {
+        log.info("ContextualCoach probing music for riff")
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.inFlight = false }
+            let probe = await MusicProbe.shared.current()
+            switch probe {
+            case .silent:
+                // Nothing playing — back off the cooldown so we don't
+                // keep probing every tick.
+                self.lastMusicRiffAt = .now
+                return
+            case .track(let track):
+                await self.fireMusicComment(
+                    track: AIClient.MusicTrack(
+                        title: track.title,
+                        artist: track.artist,
+                        album: track.album,
+                        isPlaying: track.isPlaying
+                    ),
+                    unknownAudio: false,
+                    metrics: metrics
+                )
+            case .unknownAudio:
+                await self.fireMusicComment(track: nil, unknownAudio: true, metrics: metrics)
+            }
+        }
+    }
+
+    private func fireMusicComment(
+        track: AIClient.MusicTrack?,
+        unknownAudio: Bool,
+        metrics: LiveMetrics
+    ) async {
+        let plan = ScriptPreviewStore.shared.currentPlan
+        let context = AIClient.MusicCommentContext(
+            elapsedSeconds: metrics.elapsed,
+            distanceMeters: metrics.distanceMeters,
+            currentHR: metrics.currentHeartRate,
+            currentPaceSecPerKm: metrics.currentPaceSecPerKm,
+            planKind: plan.kind.rawValue,
+            runType: "outdoor"
+        )
+        let recent = ScriptEngine.shared.recentDispatchedLines
+        let request = AIClient.MusicCommentRequest(
+            personalityId: "roast_coach",
+            track: track,
+            unknownAudio: unknownAudio,
+            runContext: context,
+            recentDispatched: recent.isEmpty ? nil : recent
+        )
+        do {
+            let result = try await AIClient.shared.generateMusicComment(request)
+            let injected = ScriptEngine.shared.tryInject(text: result.text, source: "coach:music_riff")
+            if injected {
+                lastFiredTrigger = "music_riff"
+                lastFiredAt = .now
+                lastError = nil
+            } else {
+                // Suppressed by cooldown — retry sooner than the full
+                // music_riff cooldown.
+                lastMusicRiffAt = .now.addingTimeInterval(-(musicRiffCooldown - 60))
+                log.info("ContextualCoach music_riff suppressed by ScriptEngine cooldown")
+            }
+        } catch {
+            lastError = error.localizedDescription
+            log.error("ContextualCoach music_riff error: \(error.localizedDescription, privacy: .public)")
+            lastMusicRiffAt = .now.addingTimeInterval(-(musicRiffCooldown - 60))
         }
     }
 }

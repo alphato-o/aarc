@@ -7,6 +7,8 @@ struct SettingsView: View {
     @State private var pinging = false
 
     @State private var preferRemoteVoice: Bool = Speaker.shared.preferRemoteVoice
+    @State private var spotifyAuth = SpotifyAuth.shared
+    @State private var spotifyBusy = false
 
     var body: some View {
         NavigationStack {
@@ -16,6 +18,7 @@ struct SettingsView: View {
                 Section("Diagnostics") {
                     NavigationLink("Permissions") { PermissionsView() }
                     NavigationLink("Script Preview (AI)") { ScriptPreviewView() }
+                    NavigationLink("Coach Playground") { CoachPlayground() }
                     Button(action: ping) {
                         HStack {
                             Text("Ping API")
@@ -109,6 +112,44 @@ struct SettingsView: View {
                     Text("Contextual Coach")
                 } footer: {
                     Text("Reactive in-run companion. Watches HR/pace drift and gaps in the script; calls the dynamic-line endpoint with the current run state and injects a fresh one-liner. Shares the global cooldown with scripted lines, so no double-talk.")
+                }
+
+                Section {
+                    LabeledContent("State", value: spotifyAuth.statusDetail)
+                    if let cid = spotifyAuth.clientID {
+                        LabeledContent("Client ID", value: String(cid.prefix(8)) + "…")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                    if let err = spotifyAuth.lastError {
+                        Text(err).font(.caption2).foregroundStyle(.orange)
+                    }
+                    if spotifyAuth.isConnected {
+                        Button(role: .destructive) {
+                            spotifyAuth.disconnect()
+                        } label: {
+                            Label("Disconnect Spotify", systemImage: "xmark.circle")
+                        }
+                    } else {
+                        Button {
+                            spotifyBusy = true
+                            Task { @MainActor in
+                                await spotifyAuth.connect()
+                                spotifyBusy = false
+                            }
+                        } label: {
+                            HStack {
+                                Label("Connect Spotify", systemImage: "music.note")
+                                Spacer()
+                                if spotifyBusy { ProgressView() }
+                            }
+                        }
+                        .disabled(spotifyBusy)
+                    }
+                } header: {
+                    Text("Spotify")
+                } footer: {
+                    Text("Used for in-run DJ commentary. AARC reads only the currently-playing track. Redirect URI: aarc://spotify-callback — must match the Spotify Developer Dashboard exactly.")
                 }
 
                 Section("About") {

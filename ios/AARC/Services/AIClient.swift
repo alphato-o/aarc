@@ -165,6 +165,63 @@ actor AIClient {
         let model: String?
         let error: String?
     }
+
+    // MARK: - Music comment (/music-comment)
+
+    struct MusicTrack: Codable, Sendable {
+        var title: String?
+        var artist: String?
+        var album: String?
+        var isPlaying: Bool?
+    }
+
+    struct MusicCommentContext: Codable, Sendable {
+        var elapsedSeconds: Double
+        var distanceMeters: Double
+        var currentHR: Double?
+        var currentPaceSecPerKm: Double?
+        var planKind: String          // "distance" | "time" | "open"
+        var runType: String           // "outdoor" | "treadmill"
+    }
+
+    struct MusicCommentRequest: Codable, Sendable {
+        var personalityId: String = "roast_coach"
+        var track: MusicTrack?
+        var unknownAudio: Bool = false
+        var runContext: MusicCommentContext
+        var recentDispatched: [String]?
+    }
+
+    struct MusicCommentResult: Sendable {
+        let text: String
+        let model: String
+    }
+
+    func generateMusicComment(_ request: MusicCommentRequest) async throws -> MusicCommentResult {
+        let url = Config.apiBaseURL.appendingPathComponent("music-comment")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        urlRequest.timeoutInterval = 15
+        urlRequest.httpBody = try encoder.encode(request)
+
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw AIError.transport("non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw AIError.httpStatus(http.statusCode, body: body.prefix(500).description)
+        }
+        let envelope = try decoder.decode(DynamicEnvelope.self, from: data)
+        guard envelope.ok else {
+            throw AIError.proxy(envelope.error ?? "unknown")
+        }
+        guard let text = envelope.text, let model = envelope.model else {
+            throw AIError.proxy("missing fields in proxy response")
+        }
+        return MusicCommentResult(text: text, model: model)
+    }
 }
 
 enum AIError: Error, LocalizedError {

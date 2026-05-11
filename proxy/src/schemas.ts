@@ -157,3 +157,42 @@ export interface DynamicLineResponse {
     text: string;
     model: string;
 }
+
+// ---------------------------------------------------------------------------
+// /music-comment — DJ commentary about the currently-playing track
+// ---------------------------------------------------------------------------
+
+export const MusicCommentRequestSchema = z.object({
+    personalityId: z.string().default("roast_coach"),
+    track: z
+        .object({
+            title: z.string().min(1).max(200).optional(),
+            artist: z.string().min(1).max(200).optional(),
+            album: z.string().min(1).max(200).optional(),
+            isPlaying: z.boolean().optional(),
+        })
+        .optional(),
+    /// True when audio is detected but we don't have track metadata
+    /// (e.g. Spotify isn't connected yet). The coach riffs generically.
+    unknownAudio: z.boolean().default(false),
+    runContext: z.object({
+        elapsedSeconds: z.number().nonnegative(),
+        distanceMeters: z.number().nonnegative(),
+        currentHR: z.number().positive().optional(),
+        currentPaceSecPerKm: z.number().positive().optional(),
+        planKind: z.enum(["distance", "time", "open"]),
+        runType: z.enum(["outdoor", "treadmill"]),
+    }),
+    recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
+});
+
+export type MusicCommentRequest = z.infer<typeof MusicCommentRequestSchema>;
+
+export const MusicCommentModelOutputSchema = z.object({
+    text: z.string().min(1).max(500),
+});
+
+export interface MusicCommentResponse {
+    text: string;
+    model: string;
+}
