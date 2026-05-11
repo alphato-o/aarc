@@ -99,6 +99,11 @@ export const ScriptMessageSchema = z.object({
     id: z.string().min(1).max(64),
     triggerSpec: TriggerSpecSchema,
     text: z.string().min(1).max(500),
+    /// Additional rotation candidates for looping triggers
+    /// (distance.everyMeters, time.everySeconds). ScriptEngine cycles
+    /// through [text, *textVariants] so the per-km loop doesn't
+    /// repeat itself. Empty/omitted for one-shot messages.
+    textVariants: z.array(z.string().min(1).max(500)).max(20).optional(),
     priority: z.number().int().min(0).max(100).default(50),
     playOnce: z.boolean().default(true),
 });

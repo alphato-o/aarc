@@ -110,14 +110,31 @@ final class RunOrchestrator {
     /// cheap. Best-effort; failures are silent (live speak() will retry
     /// or fall back to LocalTTS).
     private func prefetchEarlyLines(script: GeneratedScript) {
-        let earlyTexts: [String] = script.messages.compactMap { message in
-            guard message.triggerSpec.type == .time else { return nil }
-            guard let s = message.triggerSpec.atSeconds, s <= 90 else { return nil }
-            return message.text
+        // Warmup texts: any time.atSeconds <= 90, plus the FIRST entry
+        // of the per-km / per-interval rotation pool (it fires by the
+        // first km / first interval which is often the second line the
+        // runner hears). Don't prefetch the whole pool — that gets paid
+        // on demand as the runner laps the trigger.
+        var early: Set<String> = []
+        for message in script.messages {
+            switch message.triggerSpec.type {
+            case .time:
+                if let s = message.triggerSpec.atSeconds, s <= 90 {
+                    for variant in message.rotationPool { early.insert(variant) }
+                } else if message.triggerSpec.everySeconds != nil {
+                    if let first = message.rotationPool.first { early.insert(first) }
+                }
+            case .distance:
+                if message.triggerSpec.everyMeters != nil {
+                    if let first = message.rotationPool.first { early.insert(first) }
+                }
+            default:
+                break
+            }
         }
-        guard !earlyTexts.isEmpty else { return }
+        guard !early.isEmpty else { return }
         Task {
-            for text in earlyTexts {
+            for text in early {
                 await RemoteTTS.shared.prefetch(text)
             }
         }

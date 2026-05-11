@@ -64,6 +64,10 @@ public struct ScriptMessage: Codable, Sendable, Hashable, Identifiable {
     public let id: String
     public let triggerSpec: TriggerSpec
     public let text: String
+    /// Additional rotation candidates for looping triggers. ScriptEngine
+    /// cycles through [text, *textVariants] so the per-km / per-interval
+    /// loop never sounds repetitive. Empty / nil for one-shot messages.
+    public let textVariants: [String]?
     public let priority: Int
     public let playOnce: Bool
 
@@ -71,14 +75,25 @@ public struct ScriptMessage: Codable, Sendable, Hashable, Identifiable {
         id: String,
         triggerSpec: TriggerSpec,
         text: String,
+        textVariants: [String]? = nil,
         priority: Int = 50,
         playOnce: Bool = true
     ) {
         self.id = id
         self.triggerSpec = triggerSpec
         self.text = text
+        self.textVariants = textVariants
         self.priority = priority
         self.playOnce = playOnce
+    }
+
+    /// Convenience: the full rotation pool — primary text plus any
+    /// variants. Always at least one entry.
+    public var rotationPool: [String] {
+        if let variants = textVariants, !variants.isEmpty {
+            return [text] + variants
+        }
+        return [text]
     }
 }
 
