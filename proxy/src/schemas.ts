@@ -117,3 +117,43 @@ export interface GenerateScriptResponse {
     model: string;
     messages: ScriptMessage[];
 }
+
+// ---------------------------------------------------------------------------
+// /dynamic-line — short reactive lines fired in-run by the ContextualCoach
+// ---------------------------------------------------------------------------
+
+export const DynamicLineRequestSchema = z.object({
+    personalityId: z.string().default("roast_coach"),
+    trigger: z.enum([
+        "hr_spike",
+        "pace_drop",
+        "pace_surge",
+        "quiet_stretch",
+        "custom",
+    ]),
+    runContext: z.object({
+        elapsedSeconds: z.number().nonnegative(),
+        distanceMeters: z.number().nonnegative(),
+        currentHR: z.number().positive().optional(),
+        avgHR: z.number().positive().optional(),
+        currentPaceSecPerKm: z.number().positive().optional(),
+        avgPaceSecPerKm: z.number().positive().optional(),
+        planKind: z.enum(["distance", "time", "open"]),
+        planDistanceKm: z.number().positive().optional(),
+        planTimeMinutes: z.number().positive().optional(),
+        runType: z.enum(["outdoor", "treadmill"]),
+    }),
+    recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
+    customNote: z.string().max(300).optional(),
+});
+
+export type DynamicLineRequest = z.infer<typeof DynamicLineRequestSchema>;
+
+export const DynamicLineModelOutputSchema = z.object({
+    text: z.string().min(1).max(500),
+});
+
+export interface DynamicLineResponse {
+    text: string;
+    model: string;
+}

@@ -83,6 +83,34 @@ struct SettingsView: View {
                     Text("Activates automatically when the watch starts a workout, using the most-recently generated script in Script Preview. Fires lines as live metrics cross the trigger thresholds.")
                 }
 
+                Section {
+                    LabeledContent("State", value: ContextualCoach.shared.isRunning ? "Watching" : "Idle")
+                    if let trigger = ContextualCoach.shared.lastFiredTrigger,
+                       let firedAt = ContextualCoach.shared.lastFiredAt {
+                        LabeledContent("Last trigger", value: trigger)
+                            .font(.caption)
+                        LabeledContent(
+                            "Fired",
+                            value: relativeTime(since: firedAt)
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    } else {
+                        Text("No reactive lines fired yet.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let err = ContextualCoach.shared.lastError {
+                        Text("Last error: \(err)")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Contextual Coach")
+                } footer: {
+                    Text("Reactive in-run companion. Watches HR/pace drift and gaps in the script; calls the dynamic-line endpoint with the current run state and injects a fresh one-liner. Shares the global cooldown with scripted lines, so no double-talk.")
+                }
+
                 Section("About") {
                     LabeledContent("Version", value: AppVersion.versionString)
                     LabeledContent("API", value: Config.apiBaseURL.absoluteString)
@@ -99,6 +127,13 @@ struct SettingsView: View {
             get: { AudioPlaybackManager.shared.isMuted },
             set: { AudioPlaybackManager.shared.isMuted = $0 }
         )
+    }
+
+    private func relativeTime(since date: Date) -> String {
+        let elapsed = Int(Date().timeIntervalSince(date))
+        if elapsed < 60 { return "\(elapsed)s ago" }
+        if elapsed < 3600 { return "\(elapsed / 60)m ago" }
+        return "\(elapsed / 3600)h ago"
     }
 
     private func ping() {

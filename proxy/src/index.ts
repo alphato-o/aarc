@@ -1,4 +1,5 @@
 import { generateScriptHandler } from "./routes/generateScript";
+import { dynamicLineHandler } from "./routes/dynamicLine";
 import { ttsHandler } from "./routes/tts";
 
 interface Env {
@@ -25,6 +26,10 @@ export default {
 
         if (request.method === "POST" && url.pathname === "/generate-script") {
             return generateScriptHandler(request, env);
+        }
+
+        if (request.method === "POST" && url.pathname === "/dynamic-line") {
+            return dynamicLineHandler(request, env);
         }
 
         if (request.method === "POST" && url.pathname === "/tts") {
