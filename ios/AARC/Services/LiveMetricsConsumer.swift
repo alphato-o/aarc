@@ -183,7 +183,7 @@ final class LiveMetricsConsumer {
             startedAt: startedAt ?? .now,
             endedAt: .now,
             personality: "roast_coach",
-            isTestData: true,
+            isTestData: false,
             healthKitWorkoutUUID: workoutUUID,
             runTypeRaw: latest?.lastSplit == nil ? "outdoor" : "outdoor",
             cachedDistanceMeters: latest?.distanceMeters ?? 0,

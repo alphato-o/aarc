@@ -161,6 +161,19 @@ actor HealthKitReader {
         return UUID(uuidString: s)
     }
 
+    /// Delete the workout (and any associated route / samples HK
+    /// cascades) by UUID. Returns true if a workout was found and the
+    /// delete succeeded; false if HK couldn't find it (e.g. the user
+    /// already removed it from Apple Fitness or Health).
+    @discardableResult
+    func deleteWorkout(uuid: UUID) async throws -> Bool {
+        guard let workout = try await fetchWorkout(uuid: uuid) else {
+            return false
+        }
+        try await store.delete(workout)
+        return true
+    }
+
     private func sample(of type: HKSampleType, predicate: NSPredicate, limit: Int) async throws -> [HKSample] {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKSample], Error>) in
             let query = HKSampleQuery(

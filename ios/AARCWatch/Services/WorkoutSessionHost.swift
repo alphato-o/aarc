@@ -87,7 +87,7 @@ final class WorkoutSessionHost: NSObject {
     func beginRun(
         runType: RunType,
         runId: UUID = UUID(),
-        isTestData: Bool = true,
+        isTestData: Bool = false,
         skipHealthKitWrite: Bool = false,
         personalityId: String = "roast_coach",
         prepareScriptOnPhone: Bool = true
