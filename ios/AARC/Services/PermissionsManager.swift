@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 import HealthKit
 import AVFoundation
 import Speech
@@ -16,6 +17,8 @@ final class PermissionsManager {
     var speechAuthorized: Bool = false
     var notificationsAuthorized: Bool = false
     private(set) var notificationStatus: UNAuthorizationStatus = .notDetermined
+    var locationAuthorized: Bool = false
+    private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
 
     var healthKitDescription: String {
         HKHealthStore.isHealthDataAvailable()
@@ -49,6 +52,16 @@ final class PermissionsManager {
         @unknown default: return "Unknown"
         }
     }
+    var locationDescription: String {
+        switch locationStatus {
+        case .authorizedAlways: return "Always"
+        case .authorizedWhenInUse: return "When in use"
+        case .denied: return "Denied"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not requested"
+        @unknown default: return "Unknown"
+        }
+    }
 
     func refresh() async {
         microphoneAuthorized = AVAudioApplication.shared.recordPermission == .granted
@@ -59,6 +72,8 @@ final class PermissionsManager {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         notificationStatus = settings.authorizationStatus
         notificationsAuthorized = (notificationStatus == .authorized || notificationStatus == .provisional)
+        locationStatus = CLLocationManager().authorizationStatus
+        locationAuthorized = (locationStatus == .authorizedAlways || locationStatus == .authorizedWhenInUse)
     }
 
     func requestHealthKit() async {
@@ -94,6 +109,37 @@ final class PermissionsManager {
     func requestNotifications() async {
         _ = await PhoneNotificationCenter.shared.requestAuthorizationIfNeeded()
         await refresh()
+    }
+
+    /// Phone-only outdoor runs need location while the iPhone is the
+    /// tracker. "When in use" is enough because we keep a Live Activity
+    /// running during the workout, which keeps the app "in use" for the
+    /// system. Background updates work via the `location` UIBackgroundMode.
+    func requestLocation() async {
+        // CLLocationManager.requestWhenInUseAuthorization is non-async;
+        // the result arrives via the delegate. We just request and let
+        // refresh() pick up the new status when called by the UI.
+        await Self.requestLocationAuthorization()
+        await refresh()
+    }
+
+    nonisolated private static func requestLocationAuthorization() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            // The auth request must be sent on a thread that owns a
+            // run loop attached to the location manager's delegate.
+            // Doing it on the main queue + immediately resuming is the
+            // simplest correct shape — the actual status arrives via
+            // delegate later and our refresh() picks it up.
+            DispatchQueue.main.async {
+                let manager = CLLocationManager()
+                manager.requestWhenInUseAuthorization()
+                // Give the auth dialog a moment to register the new
+                // status before refresh() reads it back.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    continuation.resume()
+                }
+            }
+        }
     }
 
     /// Off-MainActor helper. SFSpeechRecognizer's callback fires on an
