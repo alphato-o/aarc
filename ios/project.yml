@@ -20,7 +20,7 @@ settings:
     DEVELOPMENT_TEAM: GK7889VKDF
     ENABLE_HARDENED_RUNTIME: NO
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "29"
+    CURRENT_PROJECT_VERSION: "30"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 
@@ -52,6 +52,8 @@ targets:
       - package: AARCKit
       - target: AARCWatch
         embed: true
+      - target: AARCLiveActivity
+        embed: true
     postBuildScripts:
       - name: Stamp Build Number
         basedOnDependencyAnalysis: false
@@ -60,6 +62,32 @@ targets:
           # "<source-version>.<HHMMSS>" so each Xcode build is uniquely
           # identifiable on-device. Runs before code signing seals the
           # bundle, so the modification is signed.
+          set -e
+          buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"
+          plutil -replace CFBundleVersion -string "$buildStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          echo "Stamped CFBundleVersion = $buildStamp"
+
+  AARCLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: AARCLiveActivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: club.aarun.AARC.LiveActivity
+        PRODUCT_NAME: AARCLiveActivity
+        INFOPLIST_FILE: AARCLiveActivity/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SKIP_INSTALL: NO
+        # Live Activity widget; bundle is loaded by the host iOS app.
+        ENABLE_PREVIEWS: YES
+    dependencies:
+      - package: AARCKit
+    postBuildScripts:
+      - name: Stamp Build Number
+        basedOnDependencyAnalysis: false
+        script: |
           set -e
           buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"
           plutil -replace CFBundleVersion -string "$buildStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
