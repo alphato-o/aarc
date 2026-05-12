@@ -123,6 +123,34 @@ If you find a task is wrong, missing, or out of order: **edit the phase doc**. T
 
 ---
 
+## Secrets
+
+The repo is **public**. No secrets — API keys, tokens, client secrets, JWT
+signing keys — ever land in source control. Where each lives:
+
+| Secret                       | Lives in                                  | Set by                                                  |
+| ---------------------------- | ----------------------------------------- | ------------------------------------------------------- |
+| `OPENROUTER_API_KEY`         | Cloudflare Worker env                     | `npx wrangler secret put OPENROUTER_API_KEY`            |
+| `ANTHROPIC_API_KEY` (alt)    | Cloudflare Worker env                     | `npx wrangler secret put ANTHROPIC_API_KEY`             |
+| `ELEVENLABS_API_KEY`         | Cloudflare Worker env                     | `npx wrangler secret put ELEVENLABS_API_KEY`            |
+| Spotify Client ID            | iOS device `UserDefaults`                 | Settings → Spotify → Client ID                          |
+| Spotify OAuth tokens         | iOS device Keychain (`club.aarun.AARC.spotify`) | Set automatically after Settings → Connect Spotify |
+| Musixmatch API key           | iOS device `UserDefaults`                 | Settings → Lyric providers → Musixmatch API key         |
+
+Operational notes:
+
+- `wrangler secret list` shows what's set on the Worker; values are never
+  printable.
+- For local proxy dev with `wrangler dev`, copy `proxy/.dev.vars.example`
+  to `proxy/.dev.vars` and fill in. `.dev.vars` is gitignored.
+- Never paste a key into chat, a PR, an issue, or a commit body. If you
+  do by accident, rotate immediately at the provider, then re-set via
+  `wrangler secret put`.
+- `.gitignore` blocks `.env`, `.env.*`, `*.key`, `secrets.json`,
+  `proxy/.dev.vars`. Don't add file patterns that bypass this.
+- iOS UserDefaults / Keychain values are per-device and never sync to
+  the repo. The user re-enters them on each install.
+
 ## Domain & deployment targets
 
 - App: bundle IDs `club.aarun.AARC` (iOS) and `club.aarun.AARC.watchkitapp` (watch). TestFlight from end of Phase 0.
