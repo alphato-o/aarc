@@ -19,6 +19,12 @@ final class LiveMetricsConsumer {
     /// Run identity supplied by the watch's `workoutStarted` event.
     var currentRunId: UUID?
     var startedAt: Date?
+    /// Stashed by PhoneSession when it sees prepareWorkout (watch-initiated)
+    /// or by RunOrchestrator when starting from the phone, so the Live
+    /// Activity can label the run "Treadmill" / "Outdoor" correctly.
+    /// Defaults to outdoor when unknown.
+    var pendingRunType: RunType = .outdoor
+    var pendingPersonalityId: String = "roast_coach"
 
     /// HK workout UUID supplied by `workoutEnded`.
     var lastFinishedWorkoutUUID: UUID?
@@ -50,6 +56,12 @@ final class LiveMetricsConsumer {
         // (HR spike, pace drop/surge, quiet stretch). It shares
         // ScriptEngine's cooldown via tryInject, so no double-talk.
         ContextualCoach.shared.processTick(metrics)
+        // Live Activity (lock screen + Dynamic Island). Throttled
+        // internally to ~1Hz.
+        LiveActivityController.shared.update(
+            from: metrics,
+            plan: ScriptPreviewStore.shared.currentPlan
+        )
     }
 
     func ingestStarted(runId: UUID, startedAt: Date) {
@@ -68,6 +80,13 @@ final class LiveMetricsConsumer {
             )
         }
         ContextualCoach.shared.start()
+        LiveActivityController.shared.start(
+            runId: runId,
+            personalityId: pendingPersonalityId,
+            runType: pendingRunType,
+            plan: ScriptPreviewStore.shared.currentPlan,
+            startedAt: startedAt
+        )
     }
 
     func ingestPaused() {
@@ -87,6 +106,7 @@ final class LiveMetricsConsumer {
         // early, any unspoken lines just go quiet.
         ScriptEngine.shared.stop()
         ContextualCoach.shared.stop()
+        LiveActivityController.shared.end()
 
         // Kick off persistence in the background. HK may take a few
         // seconds to propagate the workout from watch to iPhone, so the

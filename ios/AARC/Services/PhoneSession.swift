@@ -77,7 +77,11 @@ final class PhoneSession: NSObject {
             LiveMetricsConsumer.shared.ingestEnded(workoutUUID: workoutUUID)
 
         case .prepareWorkout(let runId, let runType, let personalityId):
-            // Watch user just hit Start. Generate a script for them.
+            // Watch user just hit Start. Stash run type so the Live
+            // Activity can render the right label, then generate a
+            // script for them.
+            LiveMetricsConsumer.shared.pendingRunType = runType
+            LiveMetricsConsumer.shared.pendingPersonalityId = personalityId
             Task {
                 await RunOrchestrator.shared.handlePrepareFromWatch(
                     runId: runId,

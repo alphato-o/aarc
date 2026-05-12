@@ -52,6 +52,11 @@ final class RunOrchestrator {
         phase = .generating
         lastError = nil
 
+        // Stash so the Live Activity (started later from ingestStarted)
+        // can render the right label.
+        LiveMetricsConsumer.shared.pendingRunType = runType
+        LiveMetricsConsumer.shared.pendingPersonalityId = personalityId
+
         let plan = ScriptPreviewStore.shared.currentPlan
         let key = makeKey(plan: plan, personalityId: personalityId)
         let runId = UUID()
