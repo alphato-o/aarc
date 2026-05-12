@@ -99,14 +99,17 @@ final class PhoneNotificationCenter: NSObject {
         content.sound = .default
         // High relevance so the watch surfaces it prominently.
         content.relevanceScore = 1.0
-        if #available(iOS 16.0, *) {
-            content.interruptionLevel = .timeSensitive
-        }
+        // Stay at the default .active interruption level. .timeSensitive
+        // requires an Apple-granted entitlement; without it iOS silently
+        // downgrades the notification to .passive, which suppresses banner +
+        // sound — including the watch mirror's tappable card. .active is the
+        // standard alert level and works without entitlements.
 
-        // 1s trigger (UN requires >0). Long enough for the system to
-        // schedule reliably; short enough that the user feels it
-        // immediately on the wrist.
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        // 4-second trigger so the user has time to lock the phone after
+        // tapping Start. iOS only mirrors notifications to the watch when
+        // the iPhone is locked or off-wrist; firing immediately with the
+        // phone in hand kills the mirror condition.
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 4, repeats: false)
         let request = UNNotificationRequest(
             identifier: Identifier.startCue,
             content: content,

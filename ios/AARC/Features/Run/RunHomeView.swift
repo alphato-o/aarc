@@ -121,31 +121,11 @@ struct RunHomeView: View {
     // MARK: - Start
 
     /// Card shown after a phone-initiated Start has been dispatched.
-    /// Spells out the watch-launch handoff so the user understands they
-    /// just need to tap the notification on their wrist.
+    /// Includes a countdown because iOS only mirrors a notification to
+    /// the Apple Watch when the iPhone is locked or off-wrist — if the
+    /// user keeps staring at the phone, the wrist card never appears.
     private var sentToWatchCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "applewatch.radiowaves.left.and.right")
-                    .imageScale(.medium)
-                    .foregroundStyle(.green)
-                Text("Sent to your watch")
-                    .font(.callout.weight(.semibold))
-            }
-            Text("Your watch will buzz. Tap the AARC notification on your wrist to start the workout. (iOS won't let apps force-open a watch app — the notification is the handoff.)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Button {
-                Task { await PhoneNotificationCenter.shared.scheduleStartCue() }
-            } label: {
-                Label("Re-tap my wrist", systemImage: "bell.badge")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding()
-        .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        SentToWatchCard()
     }
 
     @ViewBuilder
@@ -221,6 +201,79 @@ struct RunHomeView: View {
         km.truncatingRemainder(dividingBy: 1) == 0
             ? String(format: "%.0f", km)
             : String(format: "%.1f", km)
+    }
+}
+
+/// Self-contained card with a live countdown. Lives outside the parent
+/// view so its 1Hz timer doesn't redraw the entire RunHomeView.
+private struct SentToWatchCard: View {
+    /// 4 to match PhoneNotificationCenter's scheduleStartCue trigger.
+    @State private var remaining: Int = 4
+    @State private var timer: Timer?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "applewatch.radiowaves.left.and.right")
+                    .imageScale(.medium)
+                    .foregroundStyle(.green)
+                Text("Sent to your watch")
+                    .font(.callout.weight(.semibold))
+            }
+
+            if remaining > 0 {
+                HStack(spacing: 8) {
+                    Image(systemName: "lock.iphone")
+                        .imageScale(.medium)
+                        .foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Lock your iPhone now").font(.caption.weight(.semibold))
+                        Text("Watch will buzz in \(remaining)s — iOS only mirrors to the wrist when the phone is locked.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } else {
+                HStack(spacing: 8) {
+                    Image(systemName: "applewatch")
+                        .imageScale(.medium)
+                        .foregroundStyle(.green)
+                    Text("Look at your wrist — tap the AARC card to begin.")
+                        .font(.caption)
+                }
+            }
+
+            Button {
+                Task { await PhoneNotificationCenter.shared.scheduleStartCue() }
+                remaining = 4
+                startTimer()
+            } label: {
+                Label("Re-buzz my wrist", systemImage: "bell.badge")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding()
+        .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .onAppear { startTimer() }
+        .onDisappear { timer?.invalidate(); timer = nil }
+    }
+
+    private func startTimer() {
+        timer?.invalidate()
+        let newTimer = Timer(timeInterval: 1, repeats: true) { _ in
+            Task { @MainActor in
+                if remaining > 0 {
+                    remaining -= 1
+                } else {
+                    timer?.invalidate()
+                    timer = nil
+                }
+            }
+        }
+        timer = newTimer
+        RunLoop.main.add(newTimer, forMode: .common)
     }
 }
 
