@@ -45,6 +45,38 @@ final class RunOrchestrator {
     private var preGenTask: Task<GeneratedScript, Error>?
     private var preGenKey: String?
 
+    /// Phone tapped Start in PHONE-ONLY mode. Phone tracks the run via
+    /// CoreLocation + HKWorkoutBuilder (no watch involvement). Same
+    /// downstream pipeline (ScriptEngine, ContextualCoach, Live Activity)
+    /// because PhoneWorkoutSession publishes the same LiveMetrics shape.
+    func startPhoneOnly(runType: RunType, personalityId: String = "roast_coach") async {
+        guard phase != .generating else { return }
+        phase = .generating
+        lastError = nil
+
+        let plan = ScriptPreviewStore.shared.currentPlan
+        let key = makeKey(plan: plan, personalityId: personalityId)
+        let runId = UUID()
+
+        do {
+            let script = try await resolveScript(plan: plan, runType: runType, personalityId: personalityId, key: key)
+            ScriptPreviewStore.shared.latest = script
+            prefetchEarlyLines(script: script)
+
+            try await PhoneWorkoutSession.shared.start(
+                runType: runType,
+                runId: runId,
+                personalityId: personalityId
+            )
+            // No watch involvement — no startWorkout WC message, no
+            // wrist-cue notification. The phone is tracking, done.
+            phase = .idle
+        } catch {
+            phase = .error
+            lastError = error.localizedDescription
+        }
+    }
+
     /// Phone tapped Start. Use the pre-gen result if it's for the
     /// current plan/personality, else generate fresh.
     func startFromPhone(runType: RunType, personalityId: String = "roast_coach") async {

@@ -44,7 +44,10 @@
 	<array>
 		<string>audio</string>
 		<string>fetch</string>
+		<string>location</string>
 	</array>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>AARC uses your location while you're running on the phone to record distance, pace, and route — same as the Apple Watch does for outdoor workouts. Tracking stops when the run ends.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>AARC reads workouts your Apple Watch records so it can show your run history and personalise your AI companion. AARC does not write its own workouts on the phone.</string>
 	<key>NSHealthUpdateUsageDescription</key>

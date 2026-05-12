@@ -2,9 +2,25 @@ import SwiftUI
 import AARCKit
 
 struct RunHomeView: View {
+    enum TrackingSource: String, CaseIterable, Identifiable {
+        case watch, phone
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .watch: return "Watch"
+            case .phone: return "Phone only"
+            }
+        }
+    }
+
     @State private var selectedPersonality: Personality = .roastCoach
     @State private var orchestrator = RunOrchestrator.shared
     @State private var planStore = ScriptPreviewStore.shared
+    @AppStorage("aarc.trackingSource") private var trackingSourceRaw: String = TrackingSource.watch.rawValue
+
+    private var trackingSource: TrackingSource {
+        TrackingSource(rawValue: trackingSourceRaw) ?? .watch
+    }
 
     var body: some View {
         @Bindable var planStore = planStore
@@ -120,20 +136,12 @@ struct RunHomeView: View {
 
     // MARK: - Start
 
-    /// Card shown after a phone-initiated Start has been dispatched.
-    /// Includes a countdown because iOS only mirrors a notification to
-    /// the Apple Watch when the iPhone is locked or off-wrist — if the
-    /// user keeps staring at the phone, the wrist card never appears.
-    private var sentToWatchCard: some View {
-        SentToWatchCard()
-    }
-
     @ViewBuilder
     private var startSection: some View {
         let phase = orchestrator.phase
         let isBusy = phase == .generating
 
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             if isBusy {
                 ProgressView()
                 Text("Coach loading…")
@@ -143,6 +151,7 @@ struct RunHomeView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } else {
+                trackingSourcePicker
                 HStack(spacing: 6) {
                     Text("Start a run")
                         .font(.callout)
@@ -160,7 +169,7 @@ struct RunHomeView: View {
 
                 HStack(spacing: 10) {
                     Button {
-                        Task { await orchestrator.startFromPhone(runType: .treadmill, personalityId: selectedPersonality.id) }
+                        Task { await startTapped(.treadmill) }
                     } label: {
                         Label("Treadmill", systemImage: "figure.run.treadmill")
                             .frame(maxWidth: .infinity)
@@ -168,9 +177,10 @@ struct RunHomeView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.green)
+                    .disabled(trackingSource == .phone) // CMPedometer support TBD
 
                     Button {
-                        Task { await orchestrator.startFromPhone(runType: .outdoor, personalityId: selectedPersonality.id) }
+                        Task { await startTapped(.outdoor) }
                     } label: {
                         Label("Outdoor", systemImage: "figure.run")
                             .frame(maxWidth: .infinity)
@@ -179,8 +189,13 @@ struct RunHomeView: View {
                     .buttonStyle(.bordered)
                 }
 
-                if phase == .sentToWatch {
-                    sentToWatchCard
+                if trackingSource == .phone {
+                    Text("Phone is the tracker. GPS distance + pace + route saved to Apple Health. No watch required.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                } else if phase == .sentToWatch {
+                    SentToWatchCard()
                 }
             }
 
@@ -197,6 +212,26 @@ struct RunHomeView: View {
         }
     }
 
+    private var trackingSourcePicker: some View {
+        VStack(spacing: 4) {
+            Picker("Tracking source", selection: $trackingSourceRaw) {
+                ForEach(TrackingSource.allCases) { src in
+                    Text(src.label).tag(src.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
+    private func startTapped(_ runType: RunType) async {
+        switch trackingSource {
+        case .watch:
+            await orchestrator.startFromPhone(runType: runType, personalityId: selectedPersonality.id)
+        case .phone:
+            await orchestrator.startPhoneOnly(runType: runType, personalityId: selectedPersonality.id)
+        }
+    }
+
     private func formatKm(_ km: Double) -> String {
         km.truncatingRemainder(dividingBy: 1) == 0
             ? String(format: "%.0f", km)
@@ -204,15 +239,12 @@ struct RunHomeView: View {
     }
 }
 
-/// Self-contained card with a live countdown. Lives outside the parent
-/// view so its 1Hz timer doesn't redraw the entire RunHomeView.
+/// Compact "you're using watch mode, here's what to do" card.
+/// No more lock-phone gymnastics — if you don't want to deal with the
+/// watch handoff, switch the tracking source to "Phone only" above.
 private struct SentToWatchCard: View {
-    /// 4 to match PhoneNotificationCenter's scheduleStartCue trigger.
-    @State private var remaining: Int = 4
-    @State private var timer: Timer?
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "applewatch.radiowaves.left.and.right")
                     .imageScale(.medium)
@@ -220,60 +252,12 @@ private struct SentToWatchCard: View {
                 Text("Sent to your watch")
                     .font(.callout.weight(.semibold))
             }
-
-            if remaining > 0 {
-                HStack(spacing: 8) {
-                    Image(systemName: "lock.iphone")
-                        .imageScale(.medium)
-                        .foregroundStyle(.tint)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Lock your iPhone now").font(.caption.weight(.semibold))
-                        Text("Watch will buzz in \(remaining)s — iOS only mirrors to the wrist when the phone is locked.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            } else {
-                HStack(spacing: 8) {
-                    Image(systemName: "applewatch")
-                        .imageScale(.medium)
-                        .foregroundStyle(.green)
-                    Text("Look at your wrist — tap the AARC card to begin.")
-                        .font(.caption)
-                }
-            }
-
-            Button {
-                Task { await PhoneNotificationCenter.shared.scheduleStartCue() }
-                remaining = 4
-                startTimer()
-            } label: {
-                Label("Re-buzz my wrist", systemImage: "bell.badge")
-                    .font(.caption)
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            Text("Open AARC on your Apple Watch to begin. iOS does not let apps force-open watch apps — if that's friction, switch the tracking source above to **Phone only**.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding()
         .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-        .onAppear { startTimer() }
-        .onDisappear { timer?.invalidate(); timer = nil }
-    }
-
-    private func startTimer() {
-        timer?.invalidate()
-        let newTimer = Timer(timeInterval: 1, repeats: true) { _ in
-            Task { @MainActor in
-                if remaining > 0 {
-                    remaining -= 1
-                } else {
-                    timer?.invalidate()
-                    timer = nil
-                }
-            }
-        }
-        timer = newTimer
-        RunLoop.main.add(newTimer, forMode: .common)
     }
 }
 

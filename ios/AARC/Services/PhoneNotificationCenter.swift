@@ -82,8 +82,8 @@ final class PhoneNotificationCenter: NSObject {
     /// body, replacing any pending start-cue. iOS mirrors to the watch
     /// when the phone is locked / screen off / off-wrist.
     func scheduleStartCue(
-        title: String = "Open AARC on your watch",
-        body: String = "Tap to begin tracking your run."
+        title: String = "AARC run ready",
+        body: String = "Open AARC on your Apple Watch to start tracking."
     ) async {
         let status = await requestAuthorizationIfNeeded()
         guard status == .authorized || status == .provisional else {
