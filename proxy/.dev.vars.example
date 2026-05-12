@@ -1,0 +1,18 @@
+# Local-dev secrets for `wrangler dev`. Copy to .dev.vars and fill in.
+# .dev.vars is gitignored (covered by .env / .env.* patterns at repo root —
+# also explicitly ignored in proxy/.gitignore). NEVER commit real keys.
+#
+# Production secrets live in Cloudflare and are managed with:
+#   npx wrangler secret put <NAME>
+# `wrangler secret list` shows what's set. None of these values ever land
+# in the repo.
+
+# Pick ONE LLM provider:
+OPENROUTER_API_KEY=sk-or-v1-REPLACE_ME
+# OPENROUTER_MODEL=anthropic/claude-sonnet-4.5         # optional override
+
+# ANTHROPIC_API_KEY=sk-ant-REPLACE_ME                  # alternative
+# ANTHROPIC_MODEL=claude-sonnet-4-6
+
+# Required if you exercise /tts locally:
+ELEVENLABS_API_KEY=REPLACE_ME
