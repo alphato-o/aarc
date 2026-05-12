@@ -14,8 +14,6 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                TestDataSettingsSection()
-
                 Section("Diagnostics") {
                     NavigationLink("Permissions") { PermissionsView() }
                     NavigationLink("Script Preview (AI)") { ScriptPreviewView() }

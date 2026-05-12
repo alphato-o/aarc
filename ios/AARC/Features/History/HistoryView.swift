@@ -3,7 +3,12 @@ import SwiftData
 import AARCKit
 
 struct HistoryView: View {
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \RunRecord.startedAt, order: .reverse) private var runs: [RunRecord]
+
+    @State private var pendingDelete: RunRecord?
+    @State private var deletingId: PersistentIdentifier?
+    @State private var deleteError: String?
 
     var body: some View {
         NavigationStack {
@@ -15,17 +20,82 @@ struct HistoryView: View {
                         description: Text("Finish a run on your Apple Watch and it will appear here within a few seconds.")
                     )
                 } else {
-                    List(runs) { run in
-                        NavigationLink {
-                            RunDetailView(run: run)
-                        } label: {
-                            RunListRow(run: run)
+                    List {
+                        ForEach(runs) { run in
+                            NavigationLink {
+                                RunDetailView(run: run)
+                            } label: {
+                                RunListRow(run: run)
+                            }
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                Button(role: .destructive) {
+                                    pendingDelete = run
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                            .opacity(deletingId == run.persistentModelID ? 0.4 : 1)
                         }
                     }
                     .listStyle(.plain)
                 }
             }
             .navigationTitle("History")
+            .alert(
+                "Delete this run from AARC and Apple Health?",
+                isPresented: Binding(
+                    get: { pendingDelete != nil },
+                    set: { if !$0 { pendingDelete = nil } }
+                ),
+                presenting: pendingDelete
+            ) { run in
+                Button("Delete", role: .destructive) {
+                    Task { await delete(run) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { run in
+                Text("Removes the AARC row AND the underlying workout in Apple Fitness / Health (HR, distance, route). This can't be undone.")
+            }
+            .alert(
+                "Couldn't fully delete",
+                isPresented: Binding(
+                    get: { deleteError != nil },
+                    set: { if !$0 { deleteError = nil } }
+                ),
+                presenting: deleteError
+            ) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { detail in
+                Text(detail)
+            }
+        }
+    }
+
+    private func delete(_ run: RunRecord) async {
+        deletingId = run.persistentModelID
+        defer { deletingId = nil }
+
+        var hkFailure: String?
+        if let uuid = run.healthKitWorkoutUUID {
+            do {
+                _ = try await HealthKitReader.shared.deleteWorkout(uuid: uuid)
+                // (returns false if HK already lost it — that's fine,
+                // user might have deleted it from Apple Fitness first.)
+            } catch {
+                hkFailure = error.localizedDescription
+            }
+        }
+
+        modelContext.delete(run)
+        do {
+            try modelContext.save()
+        } catch {
+            deleteError = "AARC row delete failed: \(error.localizedDescription)"
+            return
+        }
+
+        if let hkFailure {
+            deleteError = "AARC row removed, but Apple Health deletion failed: \(hkFailure). Open Apple Fitness or Health to remove it manually."
         }
     }
 }
@@ -35,12 +105,8 @@ private struct RunListRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(run.startedAt, format: .dateTime.weekday().day().month(.abbreviated).hour().minute())
-                    .font(.subheadline.bold())
-                Spacer()
-                if run.isTestData { TestBadge() }
-            }
+            Text(run.startedAt, format: .dateTime.weekday().day().month(.abbreviated).hour().minute())
+                .font(.subheadline.bold())
 
             HStack(spacing: 12) {
                 Label(formatDistance(run.cachedDistanceMeters), systemImage: "ruler")

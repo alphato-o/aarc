@@ -22,7 +22,6 @@ struct RunDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 titleSection
-                if run.isTestData { testBanner }
                 statsGrid
                 if run.runTypeRaw == "outdoor" {
                     mapSection
@@ -56,17 +55,6 @@ struct RunDetailView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-    }
-
-    private var testBanner: some View {
-        Label("Test data — tagged in Apple Health for cleanup", systemImage: "flask.fill")
-            .font(.caption.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(LinearGradient(colors: [.orange, .pink], startPoint: .leading, endPoint: .trailing))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var statsGrid: some View {

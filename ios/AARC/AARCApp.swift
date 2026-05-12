@@ -17,6 +17,12 @@ struct AARCApp: App {
                     // speak.
                     _ = AudioPlaybackManager.shared
                     _ = LocalTTS.shared
+                    // Touch the notification center so its init runs and
+                    // registers as UNUserNotificationCenter.delegate before
+                    // anything tries to schedule. Without an early delegate
+                    // hookup, iOS suppresses foreground banners (and the
+                    // watch mirror with them).
+                    _ = PhoneNotificationCenter.shared
                     // Best-effort HealthKit auth on launch so the watch's
                     // workouts can be read back into our history. If the
                     // user has already responded, this is a no-op; if they

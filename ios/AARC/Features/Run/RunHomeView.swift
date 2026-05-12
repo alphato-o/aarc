@@ -3,7 +3,6 @@ import AARCKit
 
 struct RunHomeView: View {
     @State private var selectedPersonality: Personality = .roastCoach
-    @State private var settings = TestDataSettings.shared
     @State private var orchestrator = RunOrchestrator.shared
     @State private var planStore = ScriptPreviewStore.shared
 
@@ -13,10 +12,6 @@ struct RunHomeView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
-                    if settings.isAnySafetyModeOn {
-                        TestRunBanner(skipHealthKit: settings.skipHealthKitWrite)
-                    }
-
                     VStack(spacing: 20) {
                         LiveRunTile()
 

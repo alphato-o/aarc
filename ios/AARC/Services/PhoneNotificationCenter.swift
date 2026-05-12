@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OSLog
+import UIKit
 import UserNotifications
 
 /// Thin wrapper around UNUserNotificationCenter for the "open AARC on
@@ -16,8 +17,18 @@ import UserNotifications
 /// queued startWorkout from WatchConnectivity and begins the workout.
 @Observable
 @MainActor
-final class PhoneNotificationCenter {
+final class PhoneNotificationCenter: NSObject {
     static let shared = PhoneNotificationCenter()
+
+    override init() {
+        super.init()
+        // Become the UNUserNotificationCenter delegate so the visual UI
+        // (lock-screen banner + Notification Center entry + watch mirror)
+        // shows even while AARC is in the foreground. Without a delegate,
+        // iOS silently drops the visible alert while the app is active —
+        // which manifests as "the watch buzzes but no card appears".
+        UNUserNotificationCenter.current().delegate = self
+    }
 
     /// Latest known authorization status. Refreshed on each schedule
     /// attempt and on app foregrounding.
@@ -122,5 +133,37 @@ final class PhoneNotificationCenter {
             .removePendingNotificationRequests(withIdentifiers: [Identifier.startCue])
         UNUserNotificationCenter.current()
             .removeDeliveredNotifications(withIdentifiers: [Identifier.startCue])
+    }
+}
+
+// MARK: - UNUserNotificationCenterDelegate
+
+extension PhoneNotificationCenter: UNUserNotificationCenterDelegate {
+    /// Called for every notification the system is about to present
+    /// while the host app is in the foreground. The default behaviour
+    /// is to suppress the visual UI entirely — which also suppresses
+    /// the Apple Watch mirror in many cases. We explicitly request
+    /// banner + list + sound so the notification surfaces on the
+    /// phone AND mirrors to the watch as a real, tappable card.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler:
+            @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound])
+    }
+
+    /// The user tapped the notification (on iPhone or, after mirror,
+    /// on the watch). On iPhone the app is already open; on the watch
+    /// watchOS launches AARCWatch, which on launch consumes the queued
+    /// WC startWorkout message. We don't need to do anything in this
+    /// handler beyond clearing the notification.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        completionHandler()
     }
 }
