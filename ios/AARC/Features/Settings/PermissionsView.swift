@@ -15,8 +15,11 @@ struct PermissionsView: View {
                 permissionRow("Speech recognition", status: manager.speechDescription) {
                     Task { await manager.requestSpeechRecognition() }
                 }
+                permissionRow("Notifications", status: manager.notificationDescription) {
+                    Task { await manager.requestNotifications() }
+                }
             } footer: {
-                Text("AARC needs HealthKit to read workouts written by your Apple Watch and to write companion metadata. Microphone and speech recognition power voice notes (Phase 2).")
+                Text("HealthKit reads workouts written by your Apple Watch. Microphone and speech recognition power voice notes (Phase 2). Notifications are how the iPhone taps your wrist when you start a run from the phone — without them, you'll need to open the watch app manually.")
             }
         }
         .navigationTitle("Permissions")
