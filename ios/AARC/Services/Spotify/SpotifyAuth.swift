@@ -48,34 +48,20 @@ final class SpotifyAuth: NSObject {
         // Surface "connected" status if a token already lives in the keychain.
         self.isConnected = (try? SpotifyTokenStore.shared.load()) != nil
         self.statusDetail = self.isConnected ? "Connected" : "Not connected"
+        // Clean up the legacy per-device override now that the Client ID
+        // lives in source. Harmless no-op once removed.
+        UserDefaults.standard.removeObject(forKey: "spotify.clientID")
     }
 
     // MARK: - Public
 
-    /// Spotify Web API Client ID. Public by design (PKCE flow has no
-    /// client secret), so safe to ship in the binary. Override with a
-    /// UserDefaults value to point a debug build at a different
-    /// Spotify app registration.
-    static let defaultClientID = "5c05af0532894aeb90d3318a667829ab"
-
-    var clientID: String? {
-        get {
-            let stored = UserDefaults.standard.string(forKey: "spotify.clientID")?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .nilIfEmpty
-            return stored ?? Self.defaultClientID
-        }
-        set {
-            UserDefaults.standard.set(newValue?.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "spotify.clientID")
-        }
-    }
+    /// Spotify Web API Client ID. Sourced from `SpotifyConfig.clientID`
+    /// (public per PKCE, baked into the binary).
+    var clientID: String { SpotifyConfig.clientID }
 
     /// Begin OAuth. Surfaces success/failure via @Observable properties.
     func connect() async {
-        guard let clientID, !clientID.isEmpty else {
-            lastError = "Set Client ID first"
-            return
-        }
+        let clientID = self.clientID
         lastError = nil
         do {
             let verifier = Self.makePKCEVerifier()
@@ -131,10 +117,6 @@ final class SpotifyAuth: NSObject {
             return tokens.accessToken
         }
         // Refresh.
-        guard let clientID, !clientID.isEmpty else {
-            isConnected = false
-            return nil
-        }
         do {
             tokens = try await refreshTokens(refreshToken: tokens.refreshToken, clientID: clientID)
             try? SpotifyTokenStore.shared.save(tokens)
@@ -292,6 +274,3 @@ extension SpotifyAuth: ASWebAuthenticationPresentationContextProviding {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}

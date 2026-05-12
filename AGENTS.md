@@ -133,9 +133,13 @@ signing keys — ever land in source control. Where each lives:
 | `OPENROUTER_API_KEY`         | Cloudflare Worker env                     | `npx wrangler secret put OPENROUTER_API_KEY`            |
 | `ANTHROPIC_API_KEY` (alt)    | Cloudflare Worker env                     | `npx wrangler secret put ANTHROPIC_API_KEY`             |
 | `ELEVENLABS_API_KEY`         | Cloudflare Worker env                     | `npx wrangler secret put ELEVENLABS_API_KEY`            |
-| Spotify Client ID            | iOS device `UserDefaults`                 | Settings → Spotify → Client ID                          |
 | Spotify OAuth tokens         | iOS device Keychain (`club.aarun.AARC.spotify`) | Set automatically after Settings → Connect Spotify |
 | Musixmatch API key           | iOS device `UserDefaults`                 | Settings → Lyric providers → Musixmatch API key         |
+
+Spotify Client ID (`5c05af0532894aeb90d3318a667829ab`) lives in
+`ios/AARC/Services/Spotify/SpotifyConfig.swift`. **Public** per the
+OAuth/PKCE spec — Spotify designs Client IDs to be embedded in client
+binaries, no quota or billing attached. Committed intentionally.
 
 Operational notes:
 

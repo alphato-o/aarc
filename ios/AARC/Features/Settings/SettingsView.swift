@@ -9,7 +9,6 @@ struct SettingsView: View {
     @State private var preferRemoteVoice: Bool = Speaker.shared.preferRemoteVoice
     @State private var spotifyAuth = SpotifyAuth.shared
     @State private var spotifyBusy = false
-    @State private var spotifyClientIDInput: String = SpotifyAuth.shared.clientID ?? ""
     @State private var musixmatchKey: String = UserDefaults.standard.string(forKey: "musixmatch.apiKey") ?? ""
 
     var body: some View {
@@ -118,19 +117,6 @@ struct SettingsView: View {
 
                 Section {
                     LabeledContent("State", value: spotifyAuth.statusDetail)
-                    SecureField("Client ID", text: $spotifyClientIDInput)
-                        .textContentType(.password)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .onChange(of: spotifyClientIDInput) { _, newValue in
-                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                            spotifyAuth.clientID = trimmed.isEmpty ? nil : trimmed
-                        }
-                    if let cid = spotifyAuth.clientID {
-                        LabeledContent("Saved", value: String(cid.prefix(8)) + "…")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
                     if let err = spotifyAuth.lastError {
                         Text(err).font(.caption2).foregroundStyle(.orange)
                     }
