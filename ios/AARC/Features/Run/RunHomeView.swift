@@ -125,6 +125,34 @@ struct RunHomeView: View {
 
     // MARK: - Start
 
+    /// Card shown after a phone-initiated Start has been dispatched.
+    /// Spells out the watch-launch handoff so the user understands they
+    /// just need to tap the notification on their wrist.
+    private var sentToWatchCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "applewatch.radiowaves.left.and.right")
+                    .imageScale(.medium)
+                    .foregroundStyle(.green)
+                Text("Sent to your watch")
+                    .font(.callout.weight(.semibold))
+            }
+            Text("Your watch will buzz. Tap the AARC notification on your wrist to start the workout. (iOS won't let apps force-open a watch app — the notification is the handoff.)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button {
+                Task { await PhoneNotificationCenter.shared.scheduleStartCue() }
+            } label: {
+                Label("Re-tap my wrist", systemImage: "bell.badge")
+                    .font(.caption)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding()
+        .background(Color.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     @ViewBuilder
     private var startSection: some View {
         let phase = orchestrator.phase
@@ -177,10 +205,7 @@ struct RunHomeView: View {
                 }
 
                 if phase == .sentToWatch {
-                    Text("Look at your watch — tap notification to confirm Start.")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                        .multilineTextAlignment(.center)
+                    sentToWatchCard
                 }
             }
 

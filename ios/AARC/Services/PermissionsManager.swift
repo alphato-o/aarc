@@ -2,6 +2,7 @@ import Foundation
 import HealthKit
 import AVFoundation
 import Speech
+import UserNotifications
 
 @Observable
 @MainActor
@@ -13,6 +14,8 @@ final class PermissionsManager {
     var healthKitAuthorized: Bool = false
     var microphoneAuthorized: Bool = false
     var speechAuthorized: Bool = false
+    var notificationsAuthorized: Bool = false
+    private(set) var notificationStatus: UNAuthorizationStatus = .notDetermined
 
     var healthKitDescription: String {
         HKHealthStore.isHealthDataAvailable()
@@ -36,6 +39,16 @@ final class PermissionsManager {
         @unknown default: return "Unknown"
         }
     }
+    var notificationDescription: String {
+        switch notificationStatus {
+        case .authorized: return "Authorized"
+        case .provisional: return "Provisional"
+        case .ephemeral: return "Ephemeral"
+        case .denied: return "Denied"
+        case .notDetermined: return "Not requested"
+        @unknown default: return "Unknown"
+        }
+    }
 
     func refresh() async {
         microphoneAuthorized = AVAudioApplication.shared.recordPermission == .granted
@@ -43,6 +56,9 @@ final class PermissionsManager {
         // HK status is per-type; we treat "any read+write granted" as a soft signal here.
         healthKitAuthorized = HKHealthStore.isHealthDataAvailable()
             && healthStore.authorizationStatus(for: HKObjectType.workoutType()) == .sharingAuthorized
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationStatus = settings.authorizationStatus
+        notificationsAuthorized = (notificationStatus == .authorized || notificationStatus == .provisional)
     }
 
     func requestHealthKit() async {
@@ -72,6 +88,11 @@ final class PermissionsManager {
 
     func requestSpeechRecognition() async {
         _ = await Self.requestSpeechRecognitionAuthorization()
+        await refresh()
+    }
+
+    func requestNotifications() async {
+        _ = await PhoneNotificationCenter.shared.requestAuthorizationIfNeeded()
         await refresh()
     }
 

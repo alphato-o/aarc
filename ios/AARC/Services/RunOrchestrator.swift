@@ -69,6 +69,14 @@ final class RunOrchestrator {
             PhoneSession.shared.sendStateEvent(
                 .startWorkout(runId: runId, runType: runType, personalityId: personalityId)
             )
+            // Buzz the wrist + leave a tappable card on the watch (via
+            // iOS->Apple Watch notification mirroring) so the user
+            // doesn't have to manually launch the watch app. Tapping
+            // the watch notification launches AARCWatch, which consumes
+            // the queued startWorkout via WatchConnectivity.
+            Task { @MainActor in
+                await PhoneNotificationCenter.shared.scheduleStartCue()
+            }
             phase = .sentToWatch
         } catch {
             phase = .error
