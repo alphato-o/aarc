@@ -46,12 +46,28 @@ final class PhoneSession: NSObject {
         session.sendMessageData(data, replyHandler: nil) { _ in }
     }
 
-    /// Send a state event to the watch. Uses transferUserInfo so the
-    /// message is queued and guaranteed to deliver, even if the watch
-    /// app isn't reachable at the instant of send.
+    /// Send a state event to the watch.
+    ///
+    /// Two-tier delivery:
+    /// 1. If `isReachable` is true (watch app in dock / recently used /
+    ///    foreground), use `sendMessageData` — the watch's WC delegate
+    ///    fires immediately. The delegate starts an HKWorkoutSession,
+    ///    which watchOS auto-foregrounds the app for. This is the
+    ///    NRC-style "watch app pops up by itself" path.
+    /// 2. Either way, queue via `transferUserInfo` so a cold watch
+    ///    eventually picks it up on next launch. Belt-and-braces — the
+    ///    duplicate is harmless because the receiver dedupes by runId.
     func sendStateEvent(_ event: WCMessage) {
         guard let session, session.activationState == .activated else { return }
         guard let data = try? encoder.encode(event) else { return }
+
+        if session.isReachable {
+            session.sendMessageData(data, replyHandler: nil) { error in
+                // sendMessage failed (race with the watch going away).
+                // transferUserInfo below still covers us.
+                _ = error
+            }
+        }
         session.transferUserInfo([Self.userInfoMessageKey: data])
     }
 

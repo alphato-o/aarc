@@ -239,9 +239,11 @@ struct RunHomeView: View {
     }
 }
 
-/// Compact "you're using watch mode, here's what to do" card.
-/// No more lock-phone gymnastics — if you don't want to deal with the
-/// watch handoff, switch the tracking source to "Phone only" above.
+/// Compact "you're using watch mode" status card. If the watch app is
+/// in the dock / recently used (reachable), AARC delivers the start
+/// signal via WC sendMessage and watchOS auto-foregrounds the app when
+/// it spins up its HKWorkoutSession. If the watch app is cold, the
+/// signal is queued — the user has to tap the app on the watch.
 private struct SentToWatchCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -252,7 +254,7 @@ private struct SentToWatchCard: View {
                 Text("Sent to your watch")
                     .font(.callout.weight(.semibold))
             }
-            Text("Open AARC on your Apple Watch to begin. iOS does not let apps force-open watch apps — if that's friction, switch the tracking source above to **Phone only**.")
+            Text("If AARC is in your watch dock or was recently used, the watch app pops up by itself. If not, open it manually — or switch the tracking source above to **Phone only**.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
