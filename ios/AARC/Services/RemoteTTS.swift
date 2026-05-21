@@ -9,6 +9,10 @@ import Observation
 ///
 /// On any network or upstream failure the call falls back to LocalTTS
 /// so the runner is never silent on race day if signal flakes.
+///
+/// Playback is now serialised by `VoiceFeedbackQueue`. The public entry
+/// point is `play(text:)`, which fetches/decodes/plays and only returns
+/// once the audio is fully finished — so the queue can advance cleanly.
 @MainActor
 @Observable
 final class RemoteTTS: NSObject {
@@ -26,12 +30,15 @@ final class RemoteTTS: NSObject {
     private(set) var lastError: String?
 
     private var player: AVAudioPlayer?
+    /// Continuation resumed when the current AVAudioPlayer finishes (or
+    /// fails / is stopped). Owned by `play(text:)`.
+    private var playbackContinuation: CheckedContinuation<Void, Never>?
 
-    /// Speak a single line. Asynchronous: first call for a given text
-    /// pays the network round-trip; subsequent calls play from cache.
-    func speak(_ text: String) async {
+    /// Speak a single line and return only once the audio is fully done
+    /// playing (or has failed and fallen back to LocalTTS, which also
+    /// awaits completion). Called by the queue's serial playback loop.
+    func play(text: String) async {
         guard !text.isEmpty else { return }
-        guard !AudioPlaybackManager.shared.isMuted else { return }
 
         let key = AudioCache.key(voiceId: Self.voiceId, text: text)
         let url: URL
@@ -48,36 +55,45 @@ final class RemoteTTS: NSObject {
                 lastError = nil
             } catch {
                 // Network / upstream failure → speak with the local
-                // synthesizer so the runner isn't silent.
+                // synthesizer so the runner isn't silent. Await completion
+                // so the queue's serial loop stays serial.
                 lastError = error.localizedDescription
-                LocalTTS.shared.speak(text)
+                await LocalTTS.shared.play(text: text)
                 return
             }
         }
 
-        AudioPlaybackManager.shared.activate()
         do {
             let p = try AVAudioPlayer(contentsOf: url)
             p.delegate = self
             self.player = p
             p.prepareToPlay()
-            p.play()
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                self.playbackContinuation = cont
+                p.play()
+            }
         } catch {
             lastError = "AVAudioPlayer: \(error.localizedDescription)"
-            LocalTTS.shared.speak(text)
+            await LocalTTS.shared.play(text: text)
         }
     }
 
+    /// Stop the currently-playing audio immediately. Used by the queue
+    /// when a higher-priority item preempts. Resumes any in-flight
+    /// continuation so the awaiting playback loop unblocks.
     func stopAll() {
         player?.stop()
         player = nil
+        if let cont = playbackContinuation {
+            playbackContinuation = nil
+            cont.resume()
+        }
     }
 
-    /// Download + cache the audio for a line WITHOUT playing it.
-    /// Used by RunOrchestrator to warm the cache during the prepare
-    /// phase so the warmup at t=0 plays instantly. Best-effort; on
-    /// failure the live `speak(_:)` path will retry or fall back to
-    /// LocalTTS.
+    /// Download + cache the audio for a line WITHOUT playing it. Used by
+    /// RunOrchestrator to warm the cache during the prepare phase so the
+    /// warmup at t=0 plays instantly. Best-effort; on failure the live
+    /// `play(text:)` path will retry or fall back to LocalTTS.
     func prefetch(_ text: String) async {
         guard !text.isEmpty else { return }
         let key = AudioCache.key(voiceId: Self.voiceId, text: text)
@@ -115,13 +131,13 @@ final class RemoteTTS: NSObject {
 
 extension RemoteTTS: @preconcurrency AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        // Don't capture the AVAudioPlayer parameter into the Task — it's
-        // not Sendable. We just need to know "speaking is over"; the
-        // MainActor check on self.player handles the rest.
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(800))
-            if self.player?.isPlaying != true {
-                AudioPlaybackManager.shared.deactivate()
+            // Resume the awaiter. The queue (or caller) decides what to do
+            // next; we don't touch the audio session here any more — the
+            // queue owns activate/deactivate.
+            if let cont = self.playbackContinuation {
+                self.playbackContinuation = nil
+                cont.resume()
             }
         }
     }

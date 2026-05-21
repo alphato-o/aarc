@@ -5,13 +5,19 @@ import AARCKit
 /// The "brain" that turns the watch's 1 Hz `LiveMetrics` stream into
 /// spoken lines at the right moments. Subscribes to whatever script is
 /// currently active, evaluates each message's `triggerSpec` against
-/// every metric tick, and dispatches matching messages to
-/// `Speaker.shared.speak()`.
+/// every metric tick, and dispatches matching messages to the
+/// `VoiceFeedbackQueue` (via `Speaker`) at `.milestone` priority.
 ///
 /// Plan-aware: `halfway`, `near_finish`, and `finish` triggers
 /// evaluate against distance for `.distance` plans, against elapsed
 /// time for `.time` plans, and never fire for `.open` plans (the
 /// model is instructed not to emit them in that case anyway).
+///
+/// Playback serialisation is now owned by `VoiceFeedbackQueue` — this
+/// engine just enqueues and trusts the queue to keep things tidy. The
+/// old 10s time-based cooldown is gone; instead, per-message epoch
+/// tracking and `playOnce` gates prevent the same milestone from being
+/// enqueued twice.
 @Observable
 @MainActor
 final class ScriptEngine {
@@ -29,20 +35,14 @@ final class ScriptEngine {
     /// Last text dispatched — for diagnostic UIs.
     private(set) var lastDispatched: String?
 
-    /// Timestamp of the last dispatched line (scripted or injected).
-    /// Exposed so the ContextualCoach can decide whether to fire a
-    /// quiet-stretch line.
+    /// Timestamp of the last enqueued line (scripted or injected).
+    /// Used by ContextualCoach to detect quiet stretches.
     private(set) var lastDispatchAt: Date?
 
     /// Ring buffer of the most recent dispatched lines. Sent to the
     /// /dynamic-line endpoint so the model knows what NOT to repeat.
     private(set) var recentDispatchedLines: [String] = []
     private let recentRingCapacity = 5
-
-    // MARK: - Configuration
-
-    /// Minimum gap between two dispatched lines, in seconds.
-    private let cooldown: TimeInterval = 10
 
     // MARK: - Run state
 
@@ -71,6 +71,7 @@ final class ScriptEngine {
         self.recentDispatchedLines.removeAll()
         self.activeScriptId = script.scriptId
         self.isActive = true
+        VoiceFeedbackQueue.shared.resetStats()
     }
 
     func stop() {
@@ -82,24 +83,34 @@ final class ScriptEngine {
         self.variantCursorByMessageId.removeAll()
         self.lastDispatchAt = nil
         self.recentDispatchedLines.removeAll()
+        VoiceFeedbackQueue.shared.stopAll()
     }
 
     /// Inject a dynamically-generated line into the run. Called by the
     /// ContextualCoach when a reactive trigger (HR spike, pace drop,
-    /// quiet stretch, …) fires. Honors the same cooldown as scripted
-    /// lines so we don't talk over a per-km roast that just dispatched.
+    /// quiet stretch, lyric riff …) fires. Goes into the same queue as
+    /// scripted lines at the priority the caller specifies; the queue
+    /// arbitrates ordering and preemption.
     ///
-    /// Returns `true` if the line was actually spoken, `false` if it
-    /// was suppressed by cooldown or inactive state. The coach can use
-    /// the return value to keep its own cooldown bookkeeping honest.
+    /// Returns `true` if the line was accepted by the queue. With the
+    /// queue model this is almost always true — only dedup or muted
+    /// state cause a drop, and the engine doesn't observe that result.
     @discardableResult
-    func tryInject(text: String, source: String) -> Bool {
+    func tryInject(
+        text: String,
+        source: String,
+        priority: VoicePriority = .coaching,
+        dedupKey: String? = nil,
+        expiresAfter: TimeInterval? = nil
+    ) -> Bool {
         guard isActive else { return false }
-        if let last = lastDispatchAt,
-           Date().timeIntervalSince(last) < cooldown {
-            return false
-        }
-        Speaker.shared.speak(text)
+        Speaker.shared.speak(
+            text,
+            priority: priority,
+            source: source,
+            dedupKey: dedupKey,
+            expiresAfter: expiresAfter
+        )
         recordDispatch(text: text)
         return true
     }
@@ -110,14 +121,13 @@ final class ScriptEngine {
     func processTick(_ metrics: LiveMetrics) {
         guard isActive, let script else { return }
 
-        if let last = lastDispatchAt,
-           Date().timeIntervalSince(last) < cooldown {
-            return
-        }
-
         for message in script.messages {
             if shouldFire(message: message, metrics: metrics) {
-                dispatch(message)
+                dispatch(message, metrics: metrics)
+                // One milestone per tick. The queue handles back-to-back
+                // dispatches cleanly, but firing 5 milestones from a
+                // single tick (e.g., catching up after a stall) would
+                // overwhelm; one per second matches the metric cadence.
                 return
             }
         }
@@ -212,9 +222,33 @@ final class ScriptEngine {
 
     // MARK: - Dispatch
 
-    private func dispatch(_ message: ScriptMessage) {
+    private func dispatch(_ message: ScriptMessage, metrics: LiveMetrics) {
+        // For milestone-class triggers, prefix with a short, factual,
+        // cacheable announcement so distance updates are always explicit
+        // (e.g., "3 kilometres.") before the persona riff fires. The
+        // announcement enters the queue first, then the riff right after;
+        // both at .milestone priority so neither can be preempted by
+        // lyric / pace banter.
+        let announcement = MilestoneAnnouncement.text(
+            for: message,
+            plan: plan,
+            distanceMeters: metrics.distanceMeters,
+            elapsedSeconds: metrics.elapsed
+        )
+        if let announcement {
+            Speaker.shared.speak(
+                announcement,
+                priority: .milestone,
+                source: "script:announce:\(message.id)"
+            )
+        }
+
         let text = nextVariantText(for: message)
-        Speaker.shared.speak(text)
+        Speaker.shared.speak(
+            text,
+            priority: .milestone,
+            source: "script:\(message.id)"
+        )
         recordDispatch(text: text)
     }
 

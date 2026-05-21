@@ -309,17 +309,19 @@ final class ContextualCoach {
             defer { self.inFlight = false }
             do {
                 let result = try await AIClient.shared.generateDynamicLine(request)
-                let injected = ScriptEngine.shared.tryInject(text: result.text, source: "coach:\(trigger.rawValue)")
-                if injected {
-                    self.lastFiredTrigger = trigger.rawValue
-                    self.lastFiredAt = .now
-                    self.lastError = nil
-                } else {
-                    // Suppressed by ScriptEngine cooldown — back off the
-                    // per-trigger cooldown so we re-try sooner.
-                    self.lastFireByTrigger[trigger] = .now.addingTimeInterval(-((self.cooldownByTrigger[trigger] ?? 240) - 30))
-                    self.log.info("ContextualCoach injection suppressed by ScriptEngine cooldown")
-                }
+                // Coaching observations expire if they sit behind a long
+                // milestone burst — a pace_drop comment 2 minutes late is
+                // noise. Milestones at the front of the queue take priority
+                // and may even preempt a coaching line that's mid-play.
+                ScriptEngine.shared.tryInject(
+                    text: result.text,
+                    source: "coach:\(trigger.rawValue)",
+                    priority: .coaching,
+                    expiresAfter: 120
+                )
+                self.lastFiredTrigger = trigger.rawValue
+                self.lastFiredAt = .now
+                self.lastError = nil
             } catch {
                 self.lastError = error.localizedDescription
                 self.log.error("ContextualCoach error: \(error.localizedDescription, privacy: .public)")
@@ -406,16 +408,22 @@ final class ContextualCoach {
         )
         do {
             let result = try await AIClient.shared.generateMusicComment(request)
-            let injected = ScriptEngine.shared.tryInject(text: result.text, source: "coach:music_riff")
-            if injected {
-                lastFiredTrigger = "music_riff"
-                lastFiredAt = .now
-                lastError = nil
-            } else {
-                // Suppressed by global cooldown — retry sooner.
-                lastMusicRiffAt = .now.addingTimeInterval(-(musicRiffCooldown - 60))
-                log.info("ContextualCoach music_riff suppressed by ScriptEngine cooldown")
-            }
+            // Music banter is the lowest-priority class: yields to milestones
+            // (km splits, halfway, finish) and coaching observations, and is
+            // dropped if it sits in the queue too long because by then the
+            // song will have moved on.  dedupKey prevents queueing the same
+            // line of the same song twice across rapid re-probes.
+            let dedup = "music:\(track.artist)|\(track.title)|\(selection.line)"
+            ScriptEngine.shared.tryInject(
+                text: result.text,
+                source: "coach:music_riff",
+                priority: .banter,
+                dedupKey: dedup,
+                expiresAfter: 60
+            )
+            lastFiredTrigger = "music_riff"
+            lastFiredAt = .now
+            lastError = nil
         } catch {
             lastError = error.localizedDescription
             log.error("ContextualCoach music_riff error: \(error.localizedDescription, privacy: .public)")

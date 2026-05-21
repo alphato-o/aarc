@@ -2,17 +2,20 @@ import Foundation
 import AVFoundation
 
 /// Wraps `AVSpeechSynthesizer` to speak companion lines. Picks the
-/// highest-quality installed voice for the user's locale, ducks
-/// surrounding audio via `AudioPlaybackManager`, and deactivates the
-/// session shortly after the queue empties so other apps recover their
-/// volume cleanly.
+/// highest-quality installed voice for the user's locale. The audio
+/// session and serialisation are owned by `VoiceFeedbackQueue`; this
+/// class just speaks a single utterance and returns when it's done.
 @MainActor
 final class LocalTTS: NSObject {
     static let shared = LocalTTS()
 
     private let synthesizer = AVSpeechSynthesizer()
     private let preferredVoice: AVSpeechSynthesisVoice?
-    private var pendingDeactivate: Task<Void, Never>?
+
+    /// Resumed when the current utterance finishes (or is cancelled by
+    /// `stopAll`). The queue's serial playback loop awaits this so the
+    /// next item only starts once the current one is fully spoken.
+    private var playbackContinuation: CheckedContinuation<Void, Never>?
 
     /// Read-only summary of the chosen voice for diagnostic UI.
     var voiceDescription: String {
@@ -33,16 +36,11 @@ final class LocalTTS: NSObject {
         self.synthesizer.delegate = self
     }
 
-    /// Speak a line. No-op when muted. Activates the audio session so
-    /// background music ducks, queues the utterance via the system
-    /// synthesizer.
-    func speak(_ text: String) {
+    /// Speak a single line and return once the utterance is fully spoken
+    /// (or cancelled). Mute is handled upstream by VoiceFeedbackQueue —
+    /// muted lines never reach here.
+    func play(text: String) async {
         guard !text.isEmpty else { return }
-        guard !AudioPlaybackManager.shared.isMuted else { return }
-
-        AudioPlaybackManager.shared.activate()
-        cancelPendingDeactivate()
-
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = preferredVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
@@ -50,14 +48,21 @@ final class LocalTTS: NSObject {
         // clip the first or last syllable.
         utterance.preUtteranceDelay = 0.2
         utterance.postUtteranceDelay = 0.2
-        synthesizer.speak(utterance)
+
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            self.playbackContinuation = cont
+            synthesizer.speak(utterance)
+        }
     }
 
-    /// Stop everything immediately, drop the queue.
+    /// Stop everything immediately, drop the queue. Resumes the in-flight
+    /// continuation so the queue's playback loop unblocks.
     func stopAll() {
         synthesizer.stopSpeaking(at: .immediate)
-        cancelPendingDeactivate()
-        AudioPlaybackManager.shared.deactivate()
+        if let cont = playbackContinuation {
+            playbackContinuation = nil
+            cont.resume()
+        }
     }
 
     // MARK: - Voice selection
@@ -70,36 +75,26 @@ final class LocalTTS: NSObject {
         if let enhanced = candidates.first(where: { $0.quality == .enhanced }) { return enhanced }
         return candidates.first ?? AVSpeechSynthesisVoice(language: "en-US")
     }
-
-    // MARK: - Lazy deactivate
-
-    /// Schedule a delayed deactivate. If another utterance is enqueued
-    /// before the delay elapses, we cancel and the session stays hot.
-    private func scheduleDeactivate() {
-        cancelPendingDeactivate()
-        pendingDeactivate = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(800))
-            guard let self, !Task.isCancelled else { return }
-            if !self.synthesizer.isSpeaking {
-                AudioPlaybackManager.shared.deactivate()
-            }
-        }
-    }
-
-    private func cancelPendingDeactivate() {
-        pendingDeactivate?.cancel()
-        pendingDeactivate = nil
-    }
 }
 
 extension LocalTTS: @preconcurrency AVSpeechSynthesizerDelegate {
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                        didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.scheduleDeactivate() }
+        Task { @MainActor in
+            if let cont = self.playbackContinuation {
+                self.playbackContinuation = nil
+                cont.resume()
+            }
+        }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                        didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.scheduleDeactivate() }
+        Task { @MainActor in
+            if let cont = self.playbackContinuation {
+                self.playbackContinuation = nil
+                cont.resume()
+            }
+        }
     }
 }

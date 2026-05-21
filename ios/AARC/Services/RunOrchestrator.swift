@@ -225,6 +225,16 @@ final class RunOrchestrator {
 
     /// Warm the cache for any line likely to fire in the first ~90 seconds
     /// of the run. The warmup at t=0 must play instantly.
+    ///
+    /// Two layers:
+    ///   1. **Script lines** — first variant of each looping trigger plus
+    ///      any time.atSeconds line within the warmup window. Personality
+    ///      content; cache hit only on identical text, so per-run novelty
+    ///      means we usually pay the network round-trip once.
+    ///   2. **Milestone announcements** — deterministic, factual prefixes
+    ///      ("3 kilometres.", "Halfway through.", "Run complete."). Same
+    ///      text every run → cached on disk after the first run, instant
+    ///      playback forever after. Covered by `MilestoneAnnouncement`.
     private func prefetchEarlyLines(script: GeneratedScript) {
         var early: Set<String> = []
         for message in script.messages {
@@ -243,6 +253,10 @@ final class RunOrchestrator {
                 break
             }
         }
+        let plan = ScriptPreviewStore.shared.currentPlan
+        let announcements = MilestoneAnnouncement.prefetchTexts(for: plan)
+        early.formUnion(announcements)
+
         guard !early.isEmpty else { return }
         Task {
             for text in early {

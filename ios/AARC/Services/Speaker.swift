@@ -1,11 +1,11 @@
 import Foundation
 import Observation
 
-/// Single dispatch point for "speak this line". Picks the user's
-/// preferred backend (premium ElevenLabs voice or Apple AVSpeech).
-/// Anything in the app that wants AARC to say something should call
-/// `Speaker.shared.speak(text)` rather than reaching into a TTS impl
-/// directly.
+/// Single dispatch point for "speak this line." Enqueues the request into
+/// `VoiceFeedbackQueue`, which serialises playback and applies priority
+/// + preemption + staleness rules. Picks the user's preferred backend
+/// (premium ElevenLabs voice or Apple AVSpeech) when the queue actually
+/// plays the item.
 @Observable
 @MainActor
 final class Speaker {
@@ -28,18 +28,52 @@ final class Speaker {
         self.preferRemoteVoice = store.bool(forKey: Self.kPreferRemoteVoice)
     }
 
-    /// Speak the line via the user's chosen backend. Always async-safe;
-    /// RemoteTTS network calls happen in a detached Task.
-    func speak(_ text: String) {
-        if preferRemoteVoice {
-            Task { await RemoteTTS.shared.speak(text) }
+    /// Enqueue a line for the queue to play when it's safe. Returns
+    /// immediately — actual audio is dispatched by VoiceFeedbackQueue's
+    /// serial playback loop and may be delayed (waiting on higher-priority
+    /// items), dropped (stale / dedup), or preempted (lower-priority lines
+    /// cut off by a milestone).
+    func speak(
+        _ text: String,
+        priority: VoicePriority = .coaching,
+        source: String = "speaker",
+        dedupKey: String? = nil,
+        expiresAfter: TimeInterval? = nil
+    ) {
+        let item = VoiceItem(
+            text: text,
+            priority: priority,
+            source: source,
+            dedupKey: dedupKey,
+            expiresAfter: expiresAfter
+        )
+        VoiceFeedbackQueue.shared.enqueue(item)
+    }
+
+    /// Stop everything currently speaking and clear the queue.
+    func stopAll() {
+        VoiceFeedbackQueue.shared.stopAll()
+    }
+
+    // MARK: - Queue-internal helpers
+
+    /// Called by VoiceFeedbackQueue's serial loop to actually emit one
+    /// item's audio. Returns when the audio is fully done playing (or
+    /// has fallen back to LocalTTS, which also awaits). Not part of the
+    /// public Speaker API; callers should always go through `speak(_:)`.
+    func playSync(text: String, preferRemoteOverride: Bool? = nil) async {
+        let useRemote = preferRemoteOverride ?? preferRemoteVoice
+        if useRemote {
+            await RemoteTTS.shared.play(text: text)
         } else {
-            LocalTTS.shared.speak(text)
+            await LocalTTS.shared.play(text: text)
         }
     }
 
-    /// Stop everything currently speaking, drop any queued audio.
-    func stopAll() {
+    /// Stop the currently-playing backend without touching the queue.
+    /// Used by VoiceFeedbackQueue's preemption path: clear the active
+    /// utterance so the higher-priority item can take over.
+    func stopActiveBackend() {
         RemoteTTS.shared.stopAll()
         LocalTTS.shared.stopAll()
     }
