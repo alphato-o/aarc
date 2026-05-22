@@ -19,25 +19,28 @@ struct LiveSubtitleBar: View {
     let onToggleHeart: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
-                statusDot
-                MarqueeText(
-                    line.text,
-                    size: 15,
-                    weight: .semibold,
-                    design: .rounded,
-                    color: .white
-                )
-                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
-
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 8) {
+                    statusDot
+                    Spacer(minLength: 0)
+                }
+                Text(line.text)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(4)
+                    .truncationMode(.tail)
+                    .minimumScaleFactor(0.65)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 heartButton
             }
+            Spacer(minLength: 0)
             reactionWindowBar
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 10)
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
         .overlay(
             RoundedRectangle(cornerRadius: 18)

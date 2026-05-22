@@ -1,18 +1,26 @@
 import Foundation
 import AVFoundation
 import Observation
+import OSLog
 
 /// Cloud TTS via the Worker proxy → ElevenLabs. Caches per (voiceId, text)
-/// hash so repeated lines never pay a second time. Plays through
-/// AVAudioPlayer, which sits inside the same AVAudioSession as Apple's
-/// AVSpeechSynthesizer — Spotify ducking still works identically.
+/// hash so repeated lines never pay a second time.
 ///
-/// On any network or upstream failure the call falls back to LocalTTS
-/// so the runner is never silent on race day if signal flakes.
+/// **Playback path — amplified.** Audio is fed through an AVAudioEngine
+/// graph with `mainMixerNode.outputVolume = 1.4` (~+3 dB). This lifts
+/// the coach voice cleanly above the ducked-music-plus-ambient floor
+/// that the runner is competing with on the treadmill / outdoors. The
+/// engine stays warm across lines so per-utterance latency is small.
+/// If the engine fails to start (rare — usually an audio-route change
+/// mid-session), we fall back to a regular AVAudioPlayer at unity gain
+/// so the runner is never silent. If THAT also fails we fall back to
+/// LocalTTS.
 ///
-/// Playback is now serialised by `VoiceFeedbackQueue`. The public entry
-/// point is `play(text:)`, which fetches/decodes/plays and only returns
-/// once the audio is fully finished — so the queue can advance cleanly.
+/// **Cancellation discipline.** Every catch and every await checks
+/// `Task.isCancelled` before falling through to the next layer. When
+/// the queue is stopped (run ended, mute, audio interruption), nothing
+/// downstream — Apple voice, audio session reactivation, anything —
+/// should start as a result of an in-flight error.
 @MainActor
 @Observable
 final class RemoteTTS: NSObject {
@@ -29,14 +37,48 @@ final class RemoteTTS: NSObject {
     /// Last upstream error string, if the most recent attempt fell back.
     private(set) var lastError: String?
 
-    private var player: AVAudioPlayer?
-    /// Continuation resumed when the current AVAudioPlayer finishes (or
-    /// fails / is stopped). Owned by `play(text:)`.
+    // MARK: - Amplified engine path
+
+    private let engine = AVAudioEngine()
+    private let playerNode = AVAudioPlayerNode()
+    /// Output-mixer gain above unity. 1.4 ≈ +3 dB — perceptibly louder
+    /// without significant clipping on already-hot ElevenLabs renders.
+    /// Bump this up to ~1.6 if the runner still finds it too quiet;
+    /// past ~1.8 audible clipping kicks in on louder syllables.
+    private let amplifyGain: Float = 1.4
+    private var engineConfigured: Bool = false
+
+    // MARK: - Fallback AVAudioPlayer path
+
+    /// Used only when the AVAudioEngine path fails to start. Plays at
+    /// unity gain; quieter than the engine path but safer.
+    private var fallbackPlayer: AVAudioPlayer?
+
+    /// Continuation resumed when the current playback finishes (whether
+    /// via natural end, preemption, or queue.stopAll). Owned by `play`.
     private var playbackContinuation: CheckedContinuation<Void, Never>?
 
+    private let log = Logger(subsystem: "club.aarun.AARC", category: "RemoteTTS")
+
+    override init() {
+        super.init()
+        // Reset the audio engine when iOS hands us a configuration
+        // change (route change, AirPods swap, etc.). Without this the
+        // engine can silently stop producing audio after a route swap.
+        NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.engineConfigured = false
+            }
+        }
+    }
+
     /// Speak a single line and return only once the audio is fully done
-    /// playing (or has failed and fallen back to LocalTTS, which also
-    /// awaits completion). Called by the queue's serial playback loop.
+    /// playing (or has fallen through every fallback). Called by the
+    /// queue's serial playback loop.
     func play(text: String) async {
         guard !text.isEmpty else { return }
 
@@ -54,57 +96,124 @@ final class RemoteTTS: NSObject {
                 lastWasCacheHit = false
                 lastError = nil
             } catch {
-                // Network / upstream failure → speak with the local
-                // synthesizer so the runner isn't silent. Await completion
-                // so the queue's serial loop stays serial.
+                // CRITICAL: if the run was stopped mid-fetch, URLSession
+                // throws a cancellation error here. Falling through to
+                // LocalTTS would speak the line via Apple's voice AFTER
+                // the user explicitly killed the voice pipeline — which
+                // is exactly the bug we saw on the treadmill End tap.
+                if Task.isCancelled { return }
                 lastError = error.localizedDescription
                 await LocalTTS.shared.play(text: text)
                 return
             }
         }
 
-        // Activate the audio session BEFORE constructing the player.
-        // This is the original (pre-queue) ordering — `prepareToPlay`
-        // and the player's internal gain calibration both pick up the
-        // active session state. Activating *after* prepareToPlay (as I
-        // had it briefly) yielded perceptibly quieter playback because
-        // the player warmed up against an inactive session.
-        // Activation is synchronous + ~ms; ducking starts essentially
-        // simultaneously with player init+play, so the user perceives
-        // duck-in and the first syllable as one event.
         AudioPlaybackManager.shared.activate()
+
+        // Primary path: AVAudioEngine with amplified mixer.
         do {
-            let p = try AVAudioPlayer(contentsOf: url)
-            p.delegate = self
-            p.volume = 1.0
-            self.player = p
-            p.prepareToPlay()
-            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                self.playbackContinuation = cont
-                p.play()
-            }
+            try await playViaEngine(url: url)
+            return
         } catch {
+            if Task.isCancelled { return }
+            log.error("Engine path failed: \(error.localizedDescription, privacy: .public). Falling back to AVAudioPlayer.")
+        }
+
+        // Fallback path: AVAudioPlayer at unity gain. Slightly quieter
+        // but more compatible across odd audio routes.
+        do {
+            try await playViaAVAudioPlayer(url: url)
+            return
+        } catch {
+            if Task.isCancelled { return }
             lastError = "AVAudioPlayer: \(error.localizedDescription)"
             await LocalTTS.shared.play(text: text)
         }
     }
 
+    // MARK: - Engine path
+
+    private func playViaEngine(url: URL) async throws {
+        let file = try AVAudioFile(forReading: url)
+        try ensureEngineStarted()
+        if playerNode.isPlaying { playerNode.stop() }
+
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            self.playbackContinuation = cont
+            playerNode.scheduleFile(
+                file,
+                at: nil,
+                completionCallbackType: .dataPlayedBack
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    if let cont = self.playbackContinuation {
+                        self.playbackContinuation = nil
+                        cont.resume()
+                    }
+                }
+            }
+            playerNode.play()
+        }
+    }
+
+    private func ensureEngineStarted() throws {
+        if !engineConfigured {
+            // Detach an attached node before attaching again to avoid
+            // duplicate attachments after a configuration change.
+            if engine.attachedNodes.contains(playerNode) {
+                engine.detach(playerNode)
+            }
+            engine.attach(playerNode)
+            // format: nil → AVAudioEngine derives the format from the
+            // playerNode's natural output, which matches whatever file
+            // we schedule next (engine resamples internally if needed).
+            engine.connect(playerNode, to: engine.mainMixerNode, format: nil)
+            engine.mainMixerNode.outputVolume = amplifyGain
+            engineConfigured = true
+        }
+        if !engine.isRunning {
+            try engine.start()
+        }
+    }
+
+    // MARK: - AVAudioPlayer fallback path
+
+    private func playViaAVAudioPlayer(url: URL) async throws {
+        let p = try AVAudioPlayer(contentsOf: url)
+        p.delegate = self
+        p.volume = 1.0
+        self.fallbackPlayer = p
+        p.prepareToPlay()
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            self.playbackContinuation = cont
+            p.play()
+        }
+    }
+
+    // MARK: - Stop
+
     /// Stop the currently-playing audio immediately. Used by the queue
-    /// when a higher-priority item preempts. Resumes any in-flight
-    /// continuation so the awaiting playback loop unblocks.
+    /// when a higher-priority item preempts OR when the run ends.
+    /// Resumes any in-flight continuation so the awaiting playback loop
+    /// unblocks. Doesn't tear down the engine — keeping it warm cuts
+    /// the first-syllable latency on the next line.
     func stopAll() {
-        player?.stop()
-        player = nil
+        if playerNode.isPlaying { playerNode.stop() }
+        fallbackPlayer?.stop()
+        fallbackPlayer = nil
         if let cont = playbackContinuation {
             playbackContinuation = nil
             cont.resume()
         }
     }
 
+    // MARK: - Prefetch
+
     /// Download + cache the audio for a line WITHOUT playing it. Used by
     /// RunOrchestrator to warm the cache during the prepare phase so the
     /// warmup at t=0 plays instantly. Best-effort; on failure the live
-    /// `play(text:)` path will retry or fall back to LocalTTS.
+    /// `play(text:)` path will retry or fall back.
     func prefetch(_ text: String) async {
         guard !text.isEmpty else { return }
         let key = AudioCache.key(voiceId: Self.voiceId, text: text)
@@ -118,6 +227,8 @@ final class RemoteTTS: NSObject {
             lastError = error.localizedDescription
         }
     }
+
+    // MARK: - Network
 
     private func fetchAudio(text: String) async throws -> Data {
         let url = Config.apiBaseURL.appendingPathComponent("tts")
@@ -143,9 +254,6 @@ final class RemoteTTS: NSObject {
 extension RemoteTTS: @preconcurrency AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
-            // Resume the awaiter. The queue (or caller) decides what to do
-            // next; we don't touch the audio session here any more — the
-            // queue owns activate/deactivate.
             if let cont = self.playbackContinuation {
                 self.playbackContinuation = nil
                 cont.resume()

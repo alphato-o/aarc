@@ -81,21 +81,27 @@ struct ActiveRunView: View {
     /// transport). While the coach is speaking (and for the few-second
     /// dwell window after), the slot transforms into the subtitle bar
     /// so the runner can see the line and react with the heart button.
-    @ViewBuilder
+    ///
+    /// Fixed height so the chart above never reshuffles on swap. Both
+    /// subviews fill the same 180pt-high frame; only the content
+    /// inside the rounded card changes.
     private var bottomWidget: some View {
-        if let line = subtitleStore.currentLine {
-            LiveSubtitleBar(line: line) {
-                subtitleStore.toggleLike()
+        ZStack {
+            if let line = subtitleStore.currentLine {
+                LiveSubtitleBar(line: line) {
+                    subtitleStore.toggleLike()
+                }
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .move(edge: .bottom)),
+                    removal: .opacity
+                ))
+                .id(line.id)
+            } else {
+                mediaCommand
+                    .transition(.opacity)
             }
-            .transition(.asymmetric(
-                insertion: .opacity.combined(with: .move(edge: .bottom)),
-                removal: .opacity
-            ))
-            .id(line.id)
-        } else {
-            mediaCommand
-                .transition(.opacity)
         }
+        .frame(height: 180)
     }
 
     /// Slim status indicator strip. No interactive controls here — they
@@ -247,6 +253,7 @@ struct ActiveRunView: View {
             }
 
             progressBar
+            Spacer(minLength: 0)
             controls
 
             if let err = nowPlaying.lastControlError {
@@ -257,13 +264,12 @@ struct ActiveRunView: View {
             }
         }
         .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18))
         .overlay(
             RoundedRectangle(cornerRadius: 18)
                 .stroke(.white.opacity(0.10), lineWidth: 1)
         )
-        .padding(.top, 8)
-        .padding(.bottom, 6)
     }
 
     @ViewBuilder

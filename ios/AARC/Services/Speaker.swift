@@ -62,6 +62,9 @@ final class Speaker {
     /// has fallen back to LocalTTS, which also awaits). Not part of the
     /// public Speaker API; callers should always go through `speak(_:)`.
     func playSync(text: String, preferRemoteOverride: Bool? = nil) async {
+        // Defensive early-out: the queue cancels playbackTask on
+        // stopAll, and we don't want to start a backend mid-cancel.
+        if Task.isCancelled { return }
         let useRemote = preferRemoteOverride ?? preferRemoteVoice
         if useRemote {
             await RemoteTTS.shared.play(text: text)

@@ -33,11 +33,21 @@ final class AudioPlaybackManager {
     }
 
     /// One-time category configuration. Idempotent.
+    ///
+    /// Note: `mode: .default` is deliberate — NOT `.spokenAudio`. The
+    /// .spokenAudio mode runs the audio through Apple's
+    /// "speech-intelligibility" signal chain, which is essentially a
+    /// soft compressor + EQ. That compressor squashes peaks, so on hot
+    /// ElevenLabs renders (which are already mastered loud) the coach
+    /// voice perceptibly drops in level. Switching to .default leaves
+    /// the audio alone and the runner hears the file as it was
+    /// rendered — which is what we want when we're competing with
+    /// ducked-but-still-present background music + ambient noise.
     private func configureCategory() {
         do {
             try session.setCategory(
                 .playback,
-                mode: .spokenAudio,
+                mode: .default,
                 options: [.mixWithOthers, .duckOthers]
             )
         } catch {
