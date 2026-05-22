@@ -17,6 +17,8 @@ import AARCKit
 struct ActiveRunView: View {
     @Environment(LiveMetricsConsumer.self) private var consumer
     @State private var nowPlaying = NowPlayingStore.shared
+    @State private var micCapture = MicAudioCapture.shared
+    @AppStorage("aarc.micEqualizer.enabled") private var micEqualizerEnabled: Bool = false
     @State private var showEndConfirm = false
 
     var onDismiss: () -> Void = {}
@@ -31,10 +33,14 @@ struct ActiveRunView: View {
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             nowPlaying.start()
+            if micEqualizerEnabled {
+                Task { await micCapture.start() }
+            }
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             nowPlaying.stop()
+            micCapture.stop()
         }
         .alert("End this run?", isPresented: $showEndConfirm) {
             Button("End", role: .destructive) { endRun() }
@@ -192,11 +198,12 @@ struct ActiveRunView: View {
         let metrics = consumer.latest
         return KineticVisualizer(
             heartRateBPM: metrics?.currentHeartRate,
-            paceSecPerKm: metrics?.currentPaceSecPerKm,
+            cadenceStepsPerMinute: metrics?.cadenceStepsPerMinute,
             distanceMeters: metrics?.distanceMeters ?? 0,
             workoutState: workoutStateLike(metrics?.state),
+            micBins: micCapture.bins,
+            isMicCapturing: micCapture.isCapturing,
             musicBPM: nowPlaying.tempoBPM,
-            musicEnergy: nowPlaying.musicEnergy,
             isMusicPlaying: nowPlaying.track?.isPlaying == true
         )
         .frame(maxWidth: .infinity)
@@ -366,6 +373,25 @@ struct ActiveRunView: View {
     // MARK: - End run
 
     private func endRun() {
+        // Kill the entire voice pipeline IMMEDIATELY so nothing
+        // queued, in-flight, or pre-fetched can start playing during
+        // the few seconds between tapping End and the watch's
+        // workoutEnded actually arriving.
+        //
+        // Order matters:
+        //   1. ContextualCoach.stop() — cancels in-flight /dynamic-line
+        //      and /music-comment requests (their callbacks would have
+        //      injected lines into the queue otherwise).
+        //   2. ScriptEngine.stop() — flips isActive=false so any race
+        //      with a still-running task can't inject after the cancel.
+        //      Also calls VoiceFeedbackQueue.stopAll() internally to
+        //      clear the queue and stop the active backend.
+        //   3. NowPlayingStore.stop() — done in onDisappear, no Spotify
+        //      polling traffic after dismiss.
+        ContextualCoach.shared.stop()
+        ScriptEngine.shared.stop()
+        VoiceFeedbackQueue.shared.stopAll()
+
         // Phone-only run: tell PhoneWorkoutSession to end.
         Task { @MainActor in
             await PhoneWorkoutSession.shared.end()

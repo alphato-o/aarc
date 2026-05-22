@@ -106,6 +106,12 @@ final class ContextualCoach {
     /// Set while a /dynamic-line or /music-comment request is in flight
     /// so we don't double-fire.
     private var inFlight: Bool = false
+    /// Strong handle on the currently-firing trigger / music-riff task
+    /// so `stop()` can yank it. Without this, in-flight network
+    /// requests still complete after the run ends and try to inject
+    /// a line — which the queue then plays via LocalTTS fallback if
+    /// the audio session has already changed state.
+    private var inFlightTask: Task<Void, Never>?
     private var latestMetrics: LiveMetrics?
 
     private let log = Logger(subsystem: "club.aarun.AARC", category: "ContextualCoach")
@@ -139,6 +145,8 @@ final class ContextualCoach {
         hrSamples.removeAll()
         paceSamples.removeAll()
         inFlight = false
+        inFlightTask?.cancel()
+        inFlightTask = nil
         log.info("ContextualCoach stopped")
     }
 
@@ -373,11 +381,16 @@ final class ContextualCoach {
 
         log.info("ContextualCoach firing trigger=\(trigger.rawValue, privacy: .public)")
 
-        Task { @MainActor [weak self] in
+        inFlightTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.inFlight = false }
+            defer {
+                self.inFlight = false
+                self.inFlightTask = nil
+            }
             do {
                 let result = try await AIClient.shared.generateDynamicLine(request)
+                // If the run ended while we were waiting, don't talk.
+                guard self.isRunning, !Task.isCancelled else { return }
                 // Coaching observations expire if they sit behind a long
                 // milestone burst — a pace_drop comment 2 minutes late is
                 // noise. Milestones at the front of the queue take priority
@@ -392,6 +405,7 @@ final class ContextualCoach {
                 self.lastFiredAt = .now
                 self.lastError = nil
             } catch {
+                if Task.isCancelled { return }
                 self.lastError = error.localizedDescription
                 self.log.error("ContextualCoach error: \(error.localizedDescription, privacy: .public)")
                 // Back off so a transient failure doesn't lock the
@@ -413,10 +427,15 @@ final class ContextualCoach {
 
     private func checkAndFireMusicRiff(now: Date, metrics: LiveMetrics) {
         log.info("ContextualCoach probing music for riff")
-        Task { @MainActor [weak self] in
+        inFlightTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer { self.inFlight = false }
+            defer {
+                self.inFlight = false
+                self.inFlightTask = nil
+            }
             let resolved = await MusicLyricResolver.resolveCurrent()
+            // If the run ended during the resolve, drop quietly.
+            guard self.isRunning, !Task.isCancelled else { return }
             switch resolved {
             case .lyric(let track, let selection):
                 // Skip if we'd be repeating the same line of the same song.
