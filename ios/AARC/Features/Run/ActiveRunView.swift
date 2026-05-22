@@ -70,7 +70,11 @@ struct ActiveRunView: View {
             statusStrip
             cockpit
             liveChart
+            // Extra breathing room above the music / subtitle widget so
+            // it visually separates from the chart card. VStack spacing
+            // alone read as cramped on real hardware.
             bottomWidget
+                .padding(.top, 6)
             endLink
         }
         .padding(.horizontal, 20)

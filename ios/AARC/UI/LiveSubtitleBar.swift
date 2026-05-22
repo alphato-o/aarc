@@ -21,14 +21,14 @@ struct LiveSubtitleBar: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 10) {
-                Text(line.text)
-                    .font(.system(size: 19, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .multilineTextAlignment(.leading)
-                    .minimumScaleFactor(0.55)
-                    .lineSpacing(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                // VerticalRollingText pinned to the available frame —
+                // never grows the container, just rolls inside it.
+                VerticalRollingText(
+                    line.text,
+                    font: .system(size: 19, weight: .semibold, design: .rounded),
+                    color: .white
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 reactionWindowBar
             }
             heartButton
