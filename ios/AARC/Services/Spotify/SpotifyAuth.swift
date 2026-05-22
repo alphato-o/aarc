@@ -31,7 +31,12 @@ final class SpotifyAuth: NSObject {
     private(set) var statusDetail: String = "Not connected"
 
     private let redirectURI = "aarc://spotify-callback"
-    private let scope = "user-read-currently-playing user-read-playback-state"
+    /// `user-modify-playback-state` is needed for the in-run media
+    /// controls (play / pause / next / previous). The existing read
+    /// scopes power the currentlyPlaying poll. Existing tokens
+    /// minted under the old scope continue to work for *reads* but
+    /// will get 403 on writes until the user reconnects.
+    private let scope = "user-read-currently-playing user-read-playback-state user-modify-playback-state"
     private let tokenEndpoint = URL(string: "https://accounts.spotify.com/api/token")!
     private let authEndpoint = URL(string: "https://accounts.spotify.com/authorize")!
 
