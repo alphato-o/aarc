@@ -56,6 +56,9 @@ final class LiveMetricsConsumer {
         // (HR spike, pace drop/surge, quiet stretch). It shares
         // ScriptEngine's cooldown via tryInject, so no double-talk.
         ContextualCoach.shared.processTick(metrics)
+        // Snapshot into the per-100m live chart store. No-op if no
+        // new bucket has been crossed.
+        LiveRunChartStore.shared.ingest(metrics)
         // Live Activity (lock screen + Dynamic Island). Throttled
         // internally to ~1Hz.
         LiveActivityController.shared.update(
@@ -73,6 +76,9 @@ final class LiveMetricsConsumer {
         // can begin firing lines on the upcoming live-metrics ticks.
         // The plan (distance / time / open) lives in ScriptPreviewStore
         // and was the basis for the script's structure.
+        // Wipe the previous run's chart so the new run starts clean.
+        LiveRunChartStore.shared.reset()
+
         if let script = ScriptPreviewStore.shared.latest {
             ScriptEngine.shared.start(
                 script: script,

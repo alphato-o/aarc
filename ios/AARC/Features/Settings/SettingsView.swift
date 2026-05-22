@@ -11,7 +11,6 @@ struct SettingsView: View {
     @State private var spotifyBusy = false
     @State private var musixmatchKey: String = UserDefaults.standard.string(forKey: "musixmatch.apiKey") ?? ""
     @State private var personalContext: PersonalContextStore = PersonalContextStore.shared
-    @AppStorage("aarc.micEqualizer.enabled") private var micEqualizerEnabled: Bool = false
 
     var body: some View {
         NavigationStack {
@@ -69,14 +68,6 @@ struct SettingsView: View {
                     Text("Audio")
                 } footer: {
                     Text("ElevenLabs gives a punchy neural voice for the companion. Each line is downloaded once and cached on this device — repeats are free. Falls back to Apple's voice automatically if the network drops.")
-                }
-
-                Section {
-                    Toggle("Live mic equalizer", isOn: $micEqualizerEnabled)
-                } header: {
-                    Text("In-run visualizer")
-                } footer: {
-                    Text("When ON, the top half of the in-run equalizer reacts in real time to ambient audio via the iPhone microphone — phone-speaker music, Bluetooth speakers, treadmill TV, anything audible to the room. Music played hermetically through Bluetooth earbuds never reaches the mic, so in that case the equalizer falls back to a Spotify-tempo-driven stylized animation. iOS does not let third-party apps tap another app's audio buffer (DRM); this mic route is the closest a public-SDK app can get to a real EQ. Audio is processed entirely on-device and never sent anywhere.")
                 }
 
                 Section {

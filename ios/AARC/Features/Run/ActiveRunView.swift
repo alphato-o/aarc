@@ -4,43 +4,40 @@ import AARCKit
 /// In-run cockpit — full screen, dark, glanceable. Three vertical
 /// sections:
 ///
-///   A. PERFORMANCE COCKPIT  — large mm:ss elapsed + 4-tile grid
-///      (distance, pace, HR, kcal).
-///   B. KINETIC VISUALIZER   — neon bars + pulsing heart, modulated by
-///      heart rate (always) and music BPM (when Spotify gives it).
-///   C. MEDIA COMMAND        — album art + track + progress + play /
-///      pause / next / prev controls.
+///   A. PERFORMANCE COCKPIT — TIME + DIST hero numbers, 4 minor tiles
+///      below (pace, HR, kcal, cadence).
+///   B. LIVE CHART          — per-100m HR + pace bars, auto-scaling
+///      from 1 km up to 50 km as the run extends. Frontier dot
+///      pulses at the current distance.
+///   C. MEDIA COMMAND       — album art + track + progress + transport.
 ///
 /// Idle timer is disabled while this view is on screen — the runner
-/// puts the phone on the treadmill console and stares at it. Mute
-/// toggle and End-run are tucked into a compact top bar.
+/// puts the phone on the treadmill console and stares at it. End-run
+/// sits as a discreet text link at the very bottom.
 struct ActiveRunView: View {
     @Environment(LiveMetricsConsumer.self) private var consumer
     @State private var nowPlaying = NowPlayingStore.shared
-    @State private var micCapture = MicAudioCapture.shared
-    @AppStorage("aarc.micEqualizer.enabled") private var micEqualizerEnabled: Bool = false
+    @State private var chartStore = LiveRunChartStore.shared
     @State private var showEndConfirm = false
 
     var onDismiss: () -> Void = {}
 
     var body: some View {
         ZStack {
-            background
+            // Background bleeds under the status bar; content respects
+            // the safe area so the TIME / DIST hero numbers don't sit
+            // under the Dynamic Island or the iOS clock.
+            background.ignoresSafeArea()
             content
         }
         .preferredColorScheme(.dark)
-        .ignoresSafeArea()
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             nowPlaying.start()
-            if micEqualizerEnabled {
-                Task { await micCapture.start() }
-            }
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             nowPlaying.stop()
-            micCapture.stop()
         }
         .alert("End this run?", isPresented: $showEndConfirm) {
             Button("End", role: .destructive) { endRun() }
@@ -67,15 +64,15 @@ struct ActiveRunView: View {
     // MARK: - Content
 
     private var content: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 10) {
             statusStrip
             cockpit
-            visualizer
+            liveChart
             mediaCommand
             endLink
         }
         .padding(.horizontal, 20)
-        .safeAreaPadding(.vertical)
+        .padding(.top, 4)  // breathing room under the iOS clock / Dynamic Island
     }
 
     /// Slim status indicator strip. No interactive controls here — they
@@ -194,29 +191,17 @@ struct ActiveRunView: View {
 
     // MARK: - B. Kinetic visualizer
 
-    private var visualizer: some View {
-        let metrics = consumer.latest
-        return KineticVisualizer(
-            heartRateBPM: metrics?.currentHeartRate,
-            cadenceStepsPerMinute: metrics?.cadenceStepsPerMinute,
-            distanceMeters: metrics?.distanceMeters ?? 0,
-            workoutState: workoutStateLike(metrics?.state),
-            micBins: micCapture.bins,
-            isMicCapturing: micCapture.isCapturing,
-            musicBPM: nowPlaying.tempoBPM,
-            isMusicPlaying: nowPlaying.track?.isPlaying == true
+    /// Live chart: HR + pace bars, one per 100m bucket, growing
+    /// left-to-right as the run extends. X-axis auto-scales from
+    /// 1 km up to 50 km. Y-axis is hidden — the legend chips at the
+    /// top of the chart spell out current HR and pace ranges.
+    private var liveChart: some View {
+        LiveRunChart(
+            samples: chartStore.samples,
+            liveDistanceMeters: consumer.latest?.distanceMeters ?? 0,
+            liveHeartRateBPM: consumer.latest?.currentHeartRate
         )
-        .frame(maxWidth: .infinity)
-        .frame(minHeight: 140, idealHeight: 200)
-        .padding(.vertical, 4)
-    }
-
-    private func workoutStateLike(_ state: WorkoutState?) -> KineticVisualizer.WorkoutStateLike {
-        switch state {
-        case .running: return .running
-        case .paused: return .paused
-        default: return .other
-        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: - C. Media command

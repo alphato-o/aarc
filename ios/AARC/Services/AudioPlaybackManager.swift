@@ -34,57 +34,12 @@ final class AudioPlaybackManager {
 
     /// One-time category configuration. Idempotent.
     private func configureCategory() {
-        applyCategory(allowRecord: false)
-    }
-
-    /// True when the session is configured for both playback and mic
-    /// recording — needed by MicAudioCapture to install an input tap.
-    /// Toggled by ActiveRunView around the mic equalizer's lifecycle.
-    private(set) var allowsRecording: Bool = false
-
-    /// Flip the session to .playAndRecord (so AVAudioEngine input
-    /// node can capture) while keeping ducking semantics so background
-    /// music still ducks and TTS still plays on top. Caller is
-    /// responsible for calling `stopRecordingMode()` when done.
-    func startRecordingMode() {
-        guard !allowsRecording else { return }
-        applyCategory(allowRecord: true)
-        allowsRecording = true
-    }
-
-    /// Revert to .playback. Safe to call repeatedly.
-    func stopRecordingMode() {
-        guard allowsRecording else { return }
-        applyCategory(allowRecord: false)
-        allowsRecording = false
-    }
-
-    private func applyCategory(allowRecord: Bool) {
         do {
-            if allowRecord {
-                // .playAndRecord lets AVAudioEngine.inputNode tap the
-                // mic. .defaultToSpeaker keeps output on the loud
-                // speaker by default; .allowBluetooth + A2DP route
-                // both directions over BT headsets so the runner can
-                // still hear TTS through their earbuds.
-                try session.setCategory(
-                    .playAndRecord,
-                    mode: .spokenAudio,
-                    options: [
-                        .mixWithOthers,
-                        .duckOthers,
-                        .defaultToSpeaker,
-                        .allowBluetooth,
-                        .allowBluetoothA2DP,
-                    ]
-                )
-            } else {
-                try session.setCategory(
-                    .playback,
-                    mode: .spokenAudio,
-                    options: [.mixWithOthers, .duckOthers]
-                )
-            }
+            try session.setCategory(
+                .playback,
+                mode: .spokenAudio,
+                options: [.mixWithOthers, .duckOthers]
+            )
         } catch {
             // Category set fails very rarely; log via os_log later if it
             // becomes an actual concern.
