@@ -149,6 +149,7 @@ final class LiveMetricsConsumer {
             )
         )
 
+        let savedRecord: RunRecord
         if let record = existing?.first {
             record.endedAt = workout.endDate
             record.cachedDistanceMeters = distance
@@ -157,6 +158,7 @@ final class LiveMetricsConsumer {
             record.cachedEnergyKcal = energy
             record.runTypeRaw = runType.rawValue
             record.isTestData = isTest
+            savedRecord = record
         } else {
             let record = RunRecord(
                 id: aarcId,
@@ -172,9 +174,16 @@ final class LiveMetricsConsumer {
                 cachedEnergyKcal: energy
             )
             context.insert(record)
+            savedRecord = record
         }
 
         try? context.save()
+
+        // Push the latest snapshot to the App Group so the home-screen
+        // widget can show this run. Splits derived from the in-run
+        // chart store BEFORE it resets for the next run.
+        let splits = LastRunSnapshotStore.paceSplitsFromLiveStore()
+        LastRunSnapshotStore.write(from: savedRecord, paceSplits: splits)
     }
 
     private func createStubRecord(workoutUUID: UUID) {
@@ -199,6 +208,11 @@ final class LiveMetricsConsumer {
         )
         context.insert(record)
         try? context.save()
+
+        // Push a best-effort snapshot off the stub so the home-screen
+        // widget shows something while HK syncs in the background.
+        let splits = LastRunSnapshotStore.paceSplitsFromLiveStore()
+        LastRunSnapshotStore.write(from: record, paceSplits: splits)
     }
 }
 

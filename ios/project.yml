@@ -20,7 +20,7 @@ settings:
     DEVELOPMENT_TEAM: GK7889VKDF
     ENABLE_HARDENED_RUNTIME: NO
     MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "49"
+    CURRENT_PROJECT_VERSION: "50"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 
@@ -77,10 +77,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: club.aarun.AARC.LiveActivity
         PRODUCT_NAME: AARCLiveActivity
         INFOPLIST_FILE: AARCLiveActivity/Info.plist
+        CODE_SIGN_ENTITLEMENTS: AARCLiveActivity/AARCLiveActivity.entitlements
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         SKIP_INSTALL: NO
-        # Live Activity widget; bundle is loaded by the host iOS app.
+        # Live Activity widget + LastRunWidget home-screen widget;
+        # bundle is loaded by the host iOS app.
         ENABLE_PREVIEWS: YES
     dependencies:
       - package: AARCKit
