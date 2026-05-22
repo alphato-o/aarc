@@ -52,26 +52,34 @@ struct RunHomeView: View {
 
     @ViewBuilder
     private func content(planStore: ScriptPreviewStore) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 14) {
+            // The plan section is the visual anchor of the screen —
+            // takes the upper half. Layout-priority pushes start buttons
+            // down so they sit in roughly the lower third.
             planSection(planStore: planStore)
+                .layoutPriority(2)
             trackingSourcePicker
-            Spacer(minLength: 0)
             startButtons
-            if let err = orchestrator.lastError {
-                errorBox(err)
-            } else if orchestrator.phase == .sentToWatch {
-                SentToWatchCard()
-            } else if trackingSource == .phone {
-                Text("Phone is the tracker. GPS, pace, and route via the iPhone — no watch needed.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-            }
+            statusFooter
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var statusFooter: some View {
+        if let err = orchestrator.lastError {
+            errorBox(err)
+        } else if orchestrator.phase == .sentToWatch {
+            SentToWatchCard()
+        } else if trackingSource == .phone {
+            Text("Phone is the tracker. GPS, pace, and route via the iPhone — no watch needed.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+        }
     }
 
     /// Fire-and-forget speculative generation so the script is ready
@@ -84,7 +92,8 @@ struct RunHomeView: View {
 
     @ViewBuilder
     private func planSection(planStore: ScriptPreviewStore) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 18) {
+            // Larger segmented control — taller cells, bigger label.
             Picker("Plan", selection: Binding(
                 get: { planStore.planKind },
                 set: { planStore.planKind = $0 }
@@ -94,41 +103,108 @@ struct RunHomeView: View {
                 Text("Open").tag(RunPlan.Kind.open)
             }
             .pickerStyle(.segmented)
+            .font(.title3.weight(.semibold))
+            .frame(minHeight: 50)
 
+            // Big value display — center stage. Plus/minus buttons on
+            // either side. Lets the runner pick distance or time at a
+            // glance from across the treadmill console.
             switch planStore.planKind {
             case .distance:
-                Stepper(value: Binding(get: { planStore.distanceKm }, set: { planStore.distanceKm = $0 }),
-                        in: 0.5...42, step: 0.5) {
-                    HStack {
-                        Image(systemName: "ruler")
-                        Text("Distance")
-                        Spacer()
-                        Text("\(formatKm(planStore.distanceKm)) km")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                bigValueStepper(
+                    icon: "ruler",
+                    value: formatKm(planStore.distanceKm),
+                    unit: "km",
+                    canDecrement: planStore.distanceKm > 0.5,
+                    canIncrement: planStore.distanceKm < 42,
+                    onDecrement: {
+                        planStore.distanceKm = max(0.5, planStore.distanceKm - 0.5)
+                    },
+                    onIncrement: {
+                        planStore.distanceKm = min(42, planStore.distanceKm + 0.5)
                     }
-                }
+                )
             case .time:
-                Stepper(value: Binding(get: { planStore.timeMinutes }, set: { planStore.timeMinutes = $0 }),
-                        in: 5...720, step: 5) {
-                    HStack {
-                        Image(systemName: "stopwatch")
-                        Text("Duration")
-                        Spacer()
-                        Text("\(Int(planStore.timeMinutes)) min")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                bigValueStepper(
+                    icon: "stopwatch",
+                    value: "\(Int(planStore.timeMinutes))",
+                    unit: "min",
+                    canDecrement: planStore.timeMinutes > 5,
+                    canIncrement: planStore.timeMinutes < 720,
+                    onDecrement: {
+                        planStore.timeMinutes = max(5, planStore.timeMinutes - 5)
+                    },
+                    onIncrement: {
+                        planStore.timeMinutes = min(720, planStore.timeMinutes + 5)
                     }
-                }
+                )
             case .open:
-                Label("No target — run until you stop", systemImage: "infinity")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
+                VStack(spacing: 8) {
+                    Image(systemName: "infinity")
+                        .font(.system(size: 56, weight: .light))
+                        .foregroundStyle(Theme.accent)
+                    Text("Run until you stop")
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+    }
+
+    /// Centered "[-]    big number unit    [+]" picker. Used for both
+    /// distance and time plans so the visual weight matches whichever
+    /// the runner is configuring.
+    @ViewBuilder
+    private func bigValueStepper(
+        icon: String,
+        value: String,
+        unit: String,
+        canDecrement: Bool,
+        canIncrement: Bool,
+        onDecrement: @escaping () -> Void,
+        onIncrement: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 12) {
+            stepperButton(systemImage: "minus", enabled: canDecrement, action: onDecrement)
+
+            VStack(spacing: 2) {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(value)
+                        .font(.system(size: 64, weight: .heavy, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .minimumScaleFactor(0.6)
+                        .lineLimit(1)
+                    Text(unit)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            stepperButton(systemImage: "plus", enabled: canIncrement, action: onIncrement)
+        }
+    }
+
+    private func stepperButton(systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(
+                    Circle().fill(enabled ? Theme.accent : Color.gray.opacity(0.3))
+                )
+        }
+        .disabled(!enabled)
+        .buttonStyle(.plain)
     }
 
     private var trackingSourcePicker: some View {
@@ -179,7 +255,7 @@ struct RunHomeView: View {
                     Task { await startTapped(.outdoor) }
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -190,16 +266,17 @@ struct RunHomeView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            VStack(spacing: 14) {
+            VStack(spacing: 10) {
                 Image(systemName: icon)
-                    .font(.system(size: 64, weight: .semibold))
+                    .font(.system(size: 44, weight: .semibold))
                 Text(label)
-                    .font(.system(.title2, design: .rounded, weight: .heavy))
+                    .font(.system(.title3, design: .rounded, weight: .heavy))
             }
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(background.gradient, in: RoundedRectangle(cornerRadius: 22))
-            .shadow(color: background.opacity(0.45), radius: 14, y: 4)
+            .frame(maxWidth: .infinity)
+            .frame(height: 132)
+            .background(background.gradient, in: RoundedRectangle(cornerRadius: 20))
+            .shadow(color: background.opacity(0.40), radius: 10, y: 3)
         }
         .buttonStyle(.plain)
     }
