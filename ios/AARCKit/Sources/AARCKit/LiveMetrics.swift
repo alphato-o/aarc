@@ -23,6 +23,10 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
     public let avgPaceSecPerKm: Double
     public let currentHeartRate: Double?
     public let energyKcal: Double
+    /// Steps per minute over a recent rolling window. nil if the
+    /// watch hasn't accumulated enough samples yet (≈ first 5-10s)
+    /// or the runner is on phone-only mode (no pedometer wire).
+    public let cadenceStepsPerMinute: Double?
     public let lastSplit: Split?
     public let state: WorkoutState
 
@@ -33,6 +37,7 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         avgPaceSecPerKm: Double,
         currentHeartRate: Double?,
         energyKcal: Double,
+        cadenceStepsPerMinute: Double? = nil,
         lastSplit: Split?,
         state: WorkoutState
     ) {
@@ -42,6 +47,7 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         self.avgPaceSecPerKm = avgPaceSecPerKm
         self.currentHeartRate = currentHeartRate
         self.energyKcal = energyKcal
+        self.cadenceStepsPerMinute = cadenceStepsPerMinute
         self.lastSplit = lastSplit
         self.state = state
     }
@@ -57,6 +63,7 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         avgPaceSecPerKm: 0,
         currentHeartRate: nil,
         energyKcal: 0,
+        cadenceStepsPerMinute: nil,
         lastSplit: nil,
         state: .running
     )

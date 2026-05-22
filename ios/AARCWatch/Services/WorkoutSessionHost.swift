@@ -74,6 +74,7 @@ final class WorkoutSessionHost: NSObject {
     private var lastPublishedSplitKm: Int = 0
 
     private var distanceWindow: [(Date, Double)] = []  // for current-pace derivation
+    private var stepWindow: [(Date, Double)] = []      // for cadence derivation
 
     private var healthStore: HKHealthStore { HealthKitClient.shared.store }
 
@@ -347,6 +348,7 @@ final class WorkoutSessionHost: NSObject {
         let distance = quantitySum(.distanceWalkingRunning, unit: .meter())
         let energy = quantitySum(.activeEnergyBurned, unit: .kilocalorie())
         let hr = quantityRecent(.heartRate, unit: HKUnit(from: "count/min"))
+        let steps = quantitySum(.stepCount, unit: .count())
 
         // Maintain a rolling 30s window of (timestamp, distance) for current pace.
         let now = Date()
@@ -354,6 +356,14 @@ final class WorkoutSessionHost: NSObject {
         let cutoff = now.addingTimeInterval(-30)
         distanceWindow.removeAll { $0.0 < cutoff }
         let currentPace = derivedPace(distanceWindow)
+
+        // Same window technique for cadence — steps per minute over the
+        // rolling 30s window so the number is stable but still reactive
+        // to changes (a tempo run shows higher cadence within ~30s of
+        // the runner picking up).
+        stepWindow.append((now, steps))
+        stepWindow.removeAll { $0.0 < cutoff }
+        let cadence = derivedCadence(stepWindow)
 
         let avgPace = distance > 0 ? (elapsed / (distance / 1000)) : 0
 
@@ -379,6 +389,7 @@ final class WorkoutSessionHost: NSObject {
             avgPaceSecPerKm: avgPace,
             currentHeartRate: hr,
             energyKcal: energy,
+            cadenceStepsPerMinute: cadence,
             lastSplit: split,
             state: state
         )
@@ -408,6 +419,17 @@ final class WorkoutSessionHost: NSObject {
         let kmPerSec = (dd / 1000) / dt
         guard kmPerSec > 0 else { return nil }
         return 1 / kmPerSec  // sec per km
+    }
+
+    private func derivedCadence(_ window: [(Date, Double)]) -> Double? {
+        guard let first = window.first, let last = window.last else { return nil }
+        let dt = last.0.timeIntervalSince(first.0)
+        let ds = last.1 - first.1
+        // Need a few seconds and at least a handful of steps to get a
+        // stable reading — otherwise the very first ticks would emit
+        // nonsense (3000 SPM, 0 SPM, etc.).
+        guard dt > 5, ds >= 4 else { return nil }
+        return ds / dt * 60
     }
 }
 

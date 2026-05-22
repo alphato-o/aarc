@@ -98,63 +98,118 @@ struct ActiveRunView: View {
     }
 
     // MARK: - A. Performance cockpit
+    //
+    // Top: TIME and DISTANCE side by side, both heavy mono digits with
+    // a soft pink+blue glow — the two numbers the runner glances at
+    // most often. Bottom: a single row of 4 minor tiles (PACE, HR,
+    // KCAL, CADENCE), smaller font, accent stroke per metric.
 
     private var cockpit: some View {
         let metrics = consumer.latest
-        return VStack(spacing: 16) {
-            Text(formatElapsed(metrics?.elapsed ?? 0))
-                .font(.system(size: 76, weight: .heavy, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(.white)
-                .shadow(color: Color(red: 1, green: 0.3, blue: 0.7).opacity(0.55), radius: 18)
-                .shadow(color: Color(red: 0.3, green: 0.6, blue: 1).opacity(0.35), radius: 30)
-                .minimumScaleFactor(0.7)
-                .lineLimit(1)
+        return VStack(spacing: 14) {
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                heroNumber(
+                    label: "TIME",
+                    value: formatElapsed(metrics?.elapsed ?? 0),
+                    glow: Color(red: 1, green: 0.3, blue: 0.7)
+                )
+                heroNumber(
+                    label: "DIST",
+                    value: formatDistanceHero(metrics?.distanceMeters),
+                    glow: Color(red: 0.3, green: 0.6, blue: 1)
+                )
+            }
 
-            HStack(spacing: 12) {
-                cockpitTile(label: "DIST", value: formatDistance(metrics?.distanceMeters), accent: .pink)
+            HStack(spacing: 10) {
                 cockpitTile(label: "PACE", value: formatPace(metrics?.currentPaceSecPerKm), accent: .cyan)
                 cockpitTile(label: "HR", value: formatHR(metrics?.currentHeartRate), accent: .red)
                 cockpitTile(label: "KCAL", value: formatKcal(metrics?.energyKcal), accent: .orange)
+                cockpitTile(label: "SPM", value: formatCadence(metrics?.cadenceStepsPerMinute), accent: .mint)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
+    }
+
+    private func heroNumber(label: String, value: String, glow: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.55))
+                .tracking(1.6)
+            Text(value)
+                .font(.system(size: 52, weight: .heavy, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .shadow(color: glow.opacity(0.55), radius: 14)
+                .minimumScaleFactor(0.55)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
     private func cockpitTile(label: String, value: String, accent: Color) -> some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 2) {
             Text(label)
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(accent.opacity(0.85))
                 .tracking(1.4)
             Text(value)
-                .font(.system(size: 22, weight: .semibold, design: .rounded))
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
                 .lineLimit(1)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.6)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+        .padding(.vertical, 8)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
         .overlay(
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 12)
                 .stroke(accent.opacity(0.25), lineWidth: 1)
         )
+    }
+
+    /// Distance text optimized for the hero slot — short ("3.42" or
+    /// "850m") so it doesn't get crushed against the time number.
+    private func formatDistanceHero(_ meters: Double?) -> String {
+        guard let m = meters else { return "—" }
+        if m >= 1000 {
+            return String(format: "%.2f", m / 1000)
+        }
+        return String(format: "%.0fm", m)
+    }
+
+    private func formatCadence(_ spm: Double?) -> String {
+        guard let s = spm, s.isFinite, s > 0 else { return "—" }
+        return "\(Int(s.rounded()))"
     }
 
     // MARK: - B. Kinetic visualizer
 
     private var visualizer: some View {
-        KineticVisualizer(
-            heartRateBPM: consumer.latest?.currentHeartRate,
-            musicBPM: nowPlaying.tempoBPM
+        let metrics = consumer.latest
+        return KineticVisualizer(
+            heartRateBPM: metrics?.currentHeartRate,
+            paceSecPerKm: metrics?.currentPaceSecPerKm,
+            distanceMeters: metrics?.distanceMeters ?? 0,
+            workoutState: workoutStateLike(metrics?.state),
+            musicBPM: nowPlaying.tempoBPM,
+            musicEnergy: nowPlaying.musicEnergy,
+            isMusicPlaying: nowPlaying.track?.isPlaying == true
         )
         .frame(maxWidth: .infinity)
         .frame(minHeight: 140, idealHeight: 200)
         .padding(.vertical, 4)
+    }
+
+    private func workoutStateLike(_ state: WorkoutState?) -> KineticVisualizer.WorkoutStateLike {
+        switch state {
+        case .running: return .running
+        case .paused: return .paused
+        default: return .other
+        }
     }
 
     // MARK: - C. Media command

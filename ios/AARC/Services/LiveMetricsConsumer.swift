@@ -205,6 +205,7 @@ private extension LiveMetrics {
             avgPaceSecPerKm: avgPaceSecPerKm,
             currentHeartRate: currentHeartRate,
             energyKcal: energyKcal,
+            cadenceStepsPerMinute: cadenceStepsPerMinute,
             lastSplit: lastSplit,
             state: newState
         )

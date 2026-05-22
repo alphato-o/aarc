@@ -20,6 +20,10 @@ final class NowPlayingStore {
     /// BPM for the current track, looked up via /audio-features. nil if
     /// not yet fetched or unavailable.
     private(set) var tempoBPM: Double?
+    /// Energy (0.0 – 1.0) for the current track. Used by the in-run
+    /// visualizer to scale music-bar amplitude — calm song = short,
+    /// loud song = tall.
+    private(set) var musicEnergy: Double?
     /// Locally-decoded cover art so the UI doesn't refetch on every redraw.
     private(set) var coverArt: UIImage?
     /// Set after the user taps a control + the request returned 4xx — UI
@@ -53,6 +57,7 @@ final class NowPlayingStore {
         pollTask = nil
         track = nil
         tempoBPM = nil
+        musicEnergy = nil
         coverArt = nil
         lastControlError = nil
     }
@@ -66,6 +71,7 @@ final class NowPlayingStore {
             track = t
             if trackChanged {
                 tempoBPM = nil
+                musicEnergy = nil
                 coverArt = nil
                 if let id = t.id {
                     await fetchFeaturesIfNeeded(trackId: id)
@@ -81,6 +87,7 @@ final class NowPlayingStore {
         case .nothingPlaying, .notConnected:
             track = nil
             tempoBPM = nil
+            musicEnergy = nil
             coverArt = nil
         }
     }
@@ -136,14 +143,17 @@ final class NowPlayingStore {
     private func fetchFeaturesIfNeeded(trackId: String) async {
         if let cached = featuresByTrackId[trackId] {
             tempoBPM = cached.tempo
+            musicEnergy = cached.energy
             return
         }
         guard let features = await SpotifyClient.shared.audioFeatures(trackId: trackId) else {
             tempoBPM = nil
+            musicEnergy = nil
             return
         }
         featuresByTrackId[trackId] = features
         tempoBPM = features.tempo
+        musicEnergy = features.energy
     }
 
     private func loadCover(url: URL) async {

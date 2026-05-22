@@ -52,14 +52,20 @@ struct RunHomeView: View {
 
     @ViewBuilder
     private func content(planStore: ScriptPreviewStore) -> some View {
+        // Plan section and start-buttons section share the bulk of the
+        // viewport. Both use layoutPriority(2) and grow proportionally;
+        // the buttons get a slightly higher growth weight via a larger
+        // intrinsic min height so they end up a touch taller than the
+        // plan section — matching the runner's mental priority (set
+        // distance once, hit Start often).
         VStack(spacing: 14) {
-            // The plan section is the visual anchor of the screen —
-            // takes the upper half. Layout-priority pushes start buttons
-            // down so they sit in roughly the lower third.
             planSection(planStore: planStore)
-                .layoutPriority(2)
+                .frame(maxHeight: .infinity)
+                .layoutPriority(1)
             trackingSourcePicker
             startButtons
+                .frame(maxHeight: .infinity)
+                .layoutPriority(1.05)
             statusFooter
         }
         .padding(.horizontal, 16)
@@ -255,7 +261,7 @@ struct RunHomeView: View {
                     Task { await startTapped(.outdoor) }
                 }
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -266,17 +272,16 @@ struct RunHomeView: View {
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 Image(systemName: icon)
-                    .font(.system(size: 44, weight: .semibold))
+                    .font(.system(size: 52, weight: .semibold))
                 Text(label)
-                    .font(.system(.title3, design: .rounded, weight: .heavy))
+                    .font(.system(.title2, design: .rounded, weight: .heavy))
             }
             .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .frame(height: 132)
-            .background(background.gradient, in: RoundedRectangle(cornerRadius: 20))
-            .shadow(color: background.opacity(0.40), radius: 10, y: 3)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(background.gradient, in: RoundedRectangle(cornerRadius: 22))
+            .shadow(color: background.opacity(0.42), radius: 12, y: 4)
         }
         .buttonStyle(.plain)
     }
