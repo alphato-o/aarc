@@ -62,33 +62,23 @@ struct ActiveRunView: View {
 
     private var content: some View {
         VStack(spacing: 0) {
-            topBar
+            statusStrip
             cockpit
             visualizer
             mediaCommand
+            endLink
         }
         .padding(.horizontal, 20)
         .safeAreaPadding(.vertical)
     }
 
-    // MARK: - Top bar (mute + end)
-
-    private var topBar: some View {
-        HStack {
-            Button {
-                AudioPlaybackManager.shared.isMuted.toggle()
-            } label: {
-                Image(systemName: AudioPlaybackManager.shared.isMuted
-                      ? "speaker.slash.fill"
-                      : "speaker.wave.2.fill")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .background(.white.opacity(0.08), in: Circle())
-            }
-
-            Spacer()
-
+    /// Slim status indicator strip. No interactive controls here — they
+    /// either lived in iOS chrome territory (clock / Dynamic Island) or
+    /// the user didn't need them in-run. Mute now lives in Settings;
+    /// End sits discreetly at the bottom of the screen.
+    @ViewBuilder
+    private var statusStrip: some View {
+        HStack(spacing: 8) {
             if let metrics = consumer.latest, metrics.state == .paused {
                 Text("PAUSED")
                     .font(.caption.bold())
@@ -101,21 +91,10 @@ struct ActiveRunView: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
-
-            Spacer()
-
-            Button {
-                showEndConfirm = true
-            } label: {
-                Image(systemName: "stop.fill")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-                    .foregroundStyle(.white)
-                    .background(Color.red.opacity(0.75), in: Circle())
-            }
+            Spacer(minLength: 0)
         }
-        .padding(.top, 6)
-        .padding(.bottom, 8)
+        .frame(minHeight: 8)
+        .padding(.bottom, 4)
     }
 
     // MARK: - A. Performance cockpit
@@ -304,6 +283,21 @@ struct ActiveRunView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Discreet end link
+
+    private var endLink: some View {
+        Button {
+            showEndConfirm = true
+        } label: {
+            Text("End run")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.45))
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
     }
 
     private var trackProgress: Double {

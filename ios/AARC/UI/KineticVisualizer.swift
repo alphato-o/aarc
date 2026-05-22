@@ -1,135 +1,235 @@
 import SwiftUI
 
 /// Center-screen kinetic visualizer for the in-run UI.
-/// Vertical neon bars centered around a pulsing heart icon, with bar
-/// heights driven by the runner's heart rate (primary signal) and
-/// modulated by the currently-playing track's BPM (secondary signal,
-/// when Spotify audio-features is available). Pink → cyan vertical
-/// gradient with a soft glow. Purpose: stop the runner from going
-/// mad staring at a treadmill console for an hour.
 ///
-/// Animation is driven by TimelineView (one frame per ~16ms) and a
-/// pure-function phase calculation that's cheap on the GPU. No timers,
-/// no @State spamming.
+/// Two stacked flowing wave forms, each tied to a *real* signal — never
+/// faked.
+///
+///   • **HR wave** (top half) — frequency tracks the runner's heart
+///     rate, amplitude scales with HR magnitude (60 bpm rest → small
+///     and cool, 180 bpm threshold → tall and hot), hue heat-maps
+///     cyan → pink → red. When HR is nil the wave collapses to a thin
+///     grey baseline + a quiet "Waiting for heart rate…" caption.
+///
+///   • **Music wave** (bottom half) — frequency tracks the currently-
+///     playing track's tempo (via Spotify /audio-features). Color is
+///     a cooler teal-purple. When tempo is nil but HR is available
+///     the wave falls back to HR/60 so something still moves with the
+///     runner; when both are nil the wave collapses to a flat line.
+///
+/// A slow time-derived phase noise stops the waves from looking
+/// perfectly periodic across a long run. Implemented with Canvas +
+/// TimelineView at 60fps for smoothness.
 struct KineticVisualizer: View {
-    /// Heart rate in BPM. nil → falls back to a 75 BPM idle rhythm so
-    /// the visualizer is never frozen (the user is still moving, the
-    /// watch just hasn't reported HR yet on this tick).
     let heartRateBPM: Double?
-    /// Optional music BPM. If present, mixed into the bar phase so the
-    /// animation breathes with the song. If nil, bars react to HR only.
     let musicBPM: Double?
 
-    /// Number of bars. Odd so a central bar lines up with the heart.
-    private let barCount: Int = 13
-    /// Bar width to spacing ratio.
-    private let barWidthFraction: CGFloat = 0.55
-    /// How much the heart icon scales between its rest and peak size.
-    private let heartScaleAmplitude: CGFloat = 0.18
-    /// Idle pulse when no HR is available.
-    private let idleHRBPM: Double = 75
+    /// Reasonable resting / max anchors so HR magnitude maps to a
+    /// visible 0…1 range without manual tuning. A trained runner's
+    /// LTHR is usually well under 180, so 60-180 covers the meat of
+    /// the distribution and clamps at the tails.
+    private let hrRestBPM: Double = 60
+    private let hrMaxBPM: Double = 180
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { timeline in
             let now = timeline.date.timeIntervalSinceReferenceDate
-            let hr = max(40, heartRateBPM ?? idleHRBPM)
-            // Phase in radians: HR/60 cycles per second.
-            let hrPhase = now * (hr / 60.0) * .pi * 2
-            // Music phase (if any), at half the HR phase's amplitude.
-            let musicPhase: Double? = musicBPM.map { bpm in
-                now * (bpm / 60.0) * .pi * 2
-            }
-
             GeometryReader { geo in
+                let h = geo.size.height
+                let halfH = h / 2 - 2
                 ZStack {
-                    bars(in: geo.size, hrPhase: hrPhase, musicPhase: musicPhase)
-                    heart(hrPhase: hrPhase)
+                    // HR wave occupies the top half.
+                    waveLayer(
+                        time: now,
+                        size: CGSize(width: geo.size.width, height: halfH),
+                        signal: hrSignal
+                    )
+                    .frame(width: geo.size.width, height: halfH)
+                    .position(x: geo.size.width / 2, y: halfH / 2)
+
+                    // Music wave occupies the bottom half.
+                    waveLayer(
+                        time: now,
+                        size: CGSize(width: geo.size.width, height: halfH),
+                        signal: musicSignal
+                    )
+                    .frame(width: geo.size.width, height: halfH)
+                    .position(x: geo.size.width / 2, y: halfH + 4 + halfH / 2)
+
+                    // "Waiting for HR" caption only when the runner has
+                    // no HR feed yet — keeps the visualizer honest about
+                    // what's real.
+                    if heartRateBPM == nil {
+                        Text("Waiting for heart rate…")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.35))
+                            .position(x: geo.size.width / 2, y: halfH / 2)
+                    }
                 }
             }
         }
     }
 
-    // MARK: - Bars
+    // MARK: - Signals
+    //
+    // A Signal bundles together "what frequency, what amplitude, what
+    // colors" so the wave drawer doesn't know or care which physical
+    // input it's portraying.
 
-    @ViewBuilder
-    private func bars(in size: CGSize, hrPhase: Double, musicPhase: Double?) -> some View {
-        let count = barCount
-        let totalSpacing: CGFloat = size.width
-        let slotWidth = totalSpacing / CGFloat(count)
-        let barW = slotWidth * barWidthFraction
-        let mid = (count - 1) / 2
-
-        Canvas { ctx, _ in
-            for i in 0..<count {
-                let distFromCenter = abs(i - mid)
-                // Higher bars near the middle (rough bell curve).
-                let envelope = 0.55 + 0.45 * cos(Double(distFromCenter) / Double(mid + 1) * .pi / 2)
-                // Each bar slightly out of phase so the wave appears to
-                // travel across the row.
-                let perBarPhaseShift = Double(i) * 0.32
-                let hrComponent = (sin(hrPhase + perBarPhaseShift) + 1) / 2  // 0..1
-                let musicComponent = musicPhase.map { (sin($0 + perBarPhaseShift * 0.7) + 1) / 2 } ?? hrComponent
-                // Weighted mix: HR is 60%, music 40% — but when music
-                // is absent we just use HR for both terms above.
-                let mix = 0.6 * hrComponent + 0.4 * musicComponent
-                let amplitude = CGFloat(mix * envelope)
-
-                let barHeight = max(barW * 1.2, size.height * (0.2 + 0.55 * amplitude))
-                let x = CGFloat(i) * slotWidth + (slotWidth - barW) / 2
-                let y = (size.height - barHeight) / 2
-                let rect = CGRect(x: x, y: y, width: barW, height: barHeight)
-                let path = Path(roundedRect: rect, cornerRadius: barW / 2)
-                let gradient = Gradient(stops: [
-                    .init(color: Color(red: 1.0, green: 0.35, blue: 0.72), location: 0),
-                    .init(color: Color(red: 0.45, green: 0.80, blue: 1.0), location: 0.55),
-                    .init(color: Color(red: 0.30, green: 1.0, blue: 0.85), location: 1),
-                ])
-                let shading = GraphicsContext.Shading.linearGradient(
-                    gradient,
-                    startPoint: CGPoint(x: x, y: y),
-                    endPoint: CGPoint(x: x, y: y + barHeight)
-                )
-                ctx.fill(path, with: shading)
-
-                // Soft glow on top of the fill — blur the path itself.
-                ctx.addFilter(.blur(radius: 4))
-                ctx.fill(path, with: .color(Color(red: 1.0, green: 0.45, blue: 0.85, opacity: 0.45)))
-            }
-        }
-        .frame(width: size.width, height: size.height)
+    private struct Signal {
+        let frequencyHz: Double      // 0 → flat line, no animation
+        let amplitudeUnit: Double    // 0..1, scales rendered amplitude
+        let colors: [Color]          // 2-3 stop gradient along the wave
+        let glowColor: Color
+        let lineWidth: CGFloat
     }
 
-    // MARK: - Heart
-
-    private func heart(hrPhase: Double) -> some View {
-        // Two-phase pulse per beat: a quick rise and longer relax,
-        // approximated by sin^4 so the peak is sharper than a plain sin.
-        let raw = sin(hrPhase) * 0.5 + 0.5
-        let sharped = pow(raw, 4)
-        let scale = 1.0 + heartScaleAmplitude * sharped
-
-        return Image(systemName: "heart.fill")
-            .resizable()
-            .scaledToFit()
-            .frame(width: 56, height: 56)
-            .foregroundStyle(
-                LinearGradient(
-                    colors: [
-                        Color(red: 1.0, green: 0.25, blue: 0.55),
-                        Color(red: 1.0, green: 0.50, blue: 0.30),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+    private var hrSignal: Signal {
+        guard let hr = heartRateBPM, hr > 0 else {
+            // No real HR yet — render a near-flat dim baseline.
+            return Signal(
+                frequencyHz: 0,
+                amplitudeUnit: 0.04,
+                colors: [Color.white.opacity(0.18), Color.white.opacity(0.10)],
+                glowColor: .clear,
+                lineWidth: 2
             )
-            .shadow(color: Color(red: 1, green: 0.3, blue: 0.5).opacity(0.7), radius: 14)
-            .scaleEffect(scale)
+        }
+        // Map HR magnitude to a 0..1 unit. Clamp + smooth.
+        let raw = (hr - hrRestBPM) / (hrMaxBPM - hrRestBPM)
+        let unit = max(0.10, min(1.0, raw))
+        // Color heat map: cool when low, hot when high.
+        let cool = Color(red: 0.30, green: 0.85, blue: 1.0)
+        let mid = Color(red: 1.0, green: 0.45, blue: 0.85)
+        let hot = Color(red: 1.0, green: 0.30, blue: 0.30)
+        let palette: [Color] = {
+            if unit < 0.45 { return [cool, mid] }
+            if unit < 0.75 { return [mid, hot] }
+            return [hot, Color(red: 1.0, green: 0.85, blue: 0.20)]
+        }()
+        return Signal(
+            frequencyHz: hr / 60,
+            amplitudeUnit: 0.18 + 0.78 * unit,
+            colors: palette,
+            glowColor: palette.last?.opacity(0.6) ?? .clear,
+            lineWidth: 3
+        )
+    }
+
+    private var musicSignal: Signal {
+        let teal = Color(red: 0.20, green: 0.85, blue: 0.80)
+        let purple = Color(red: 0.55, green: 0.40, blue: 0.95)
+        if let bpm = musicBPM, bpm > 0 {
+            // Map tempo 60-180 BPM to amplitude 0.35..0.85 so a slow
+            // song breathes, a fast song surges.
+            let unit = max(0.10, min(1.0, (bpm - 60) / 120))
+            return Signal(
+                frequencyHz: bpm / 60,
+                amplitudeUnit: 0.30 + 0.55 * unit,
+                colors: [teal, purple],
+                glowColor: purple.opacity(0.55),
+                lineWidth: 3
+            )
+        }
+        // Music BPM unknown. If we have HR, use that frequency so the
+        // wave still feels alive; otherwise flatline this layer.
+        if let hr = heartRateBPM, hr > 0 {
+            return Signal(
+                frequencyHz: hr / 60,
+                amplitudeUnit: 0.32,
+                colors: [teal.opacity(0.65), purple.opacity(0.65)],
+                glowColor: purple.opacity(0.30),
+                lineWidth: 2.5
+            )
+        }
+        return Signal(
+            frequencyHz: 0,
+            amplitudeUnit: 0.03,
+            colors: [Color.white.opacity(0.12), Color.white.opacity(0.06)],
+            glowColor: .clear,
+            lineWidth: 2
+        )
+    }
+
+    // MARK: - Wave layer
+
+    private func waveLayer(time: TimeInterval, size: CGSize, signal: Signal) -> some View {
+        Canvas { ctx, canvasSize in
+            let path = wavePath(time: time, size: canvasSize, signal: signal)
+            let gradient = Gradient(colors: signal.colors)
+            let shading = GraphicsContext.Shading.linearGradient(
+                gradient,
+                startPoint: .zero,
+                endPoint: CGPoint(x: canvasSize.width, y: 0)
+            )
+            ctx.stroke(
+                path,
+                with: shading,
+                style: StrokeStyle(lineWidth: signal.lineWidth, lineCap: .round, lineJoin: .round)
+            )
+            if signal.glowColor != .clear {
+                ctx.addFilter(.blur(radius: 6))
+                ctx.stroke(
+                    path,
+                    with: .color(signal.glowColor),
+                    style: StrokeStyle(lineWidth: signal.lineWidth + 4, lineCap: .round)
+                )
+            }
+        }
+    }
+
+    /// Composite wave: a primary sine at `signal.frequencyHz`, plus a
+    /// slower secondary sine to add organic distortion so the trace
+    /// never looks perfectly periodic across a long session.
+    private func wavePath(time: TimeInterval, size: CGSize, signal: Signal) -> Path {
+        let midY = size.height / 2
+        let amp = signal.amplitudeUnit * (midY - 4)
+        let steps = max(40, Int(size.width / 4))
+        let phaseAdvance = time * signal.frequencyHz * .pi * 2
+        // Slower drift component: 1/10th of the primary's frequency,
+        // so the wave's envelope subtly evolves over many beats.
+        let driftPhase = time * 0.18 * .pi * 2
+
+        var path = Path()
+        for i in 0...steps {
+            let x = CGFloat(i) / CGFloat(steps) * size.width
+            // Two cycles fit across the visible width at frequency=1Hz;
+            // higher-frequency signals produce more visible peaks.
+            let spatialPhase = Double(i) / Double(steps) * .pi * 2 * 2
+            let primary = sin(spatialPhase + phaseAdvance)
+            let drift = 0.20 * sin(spatialPhase * 0.5 + driftPhase)
+            let y = midY - CGFloat(primary + drift) * amp
+
+            if i == 0 {
+                path.move(to: CGPoint(x: x, y: y))
+            } else {
+                path.addLine(to: CGPoint(x: x, y: y))
+            }
+        }
+        return path
     }
 }
 
-#Preview {
+#Preview("Live: HR 145, music 128 BPM") {
     KineticVisualizer(heartRateBPM: 145, musicBPM: 128)
         .frame(height: 220)
+        .padding()
+        .background(Color.black)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Waiting for HR, music 90 BPM") {
+    KineticVisualizer(heartRateBPM: nil, musicBPM: 90)
+        .frame(height: 220)
+        .padding()
+        .background(Color.black)
+        .preferredColorScheme(.dark)
+}
+
+#Preview("HR 165, no music") {
+    KineticVisualizer(heartRateBPM: 165, musicBPM: nil)
+        .frame(height: 220)
+        .padding()
         .background(Color.black)
         .preferredColorScheme(.dark)
 }
