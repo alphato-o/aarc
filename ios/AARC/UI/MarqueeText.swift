@@ -1,95 +1,120 @@
 import SwiftUI
+import UIKit
 
-/// Single-line text that statically centers if it fits in the
+/// Single-line text that statically truncates if it fits in the
 /// container, or scrolls horizontally on a continuous loop if the
 /// content is wider. Used for in-run subtitles so long roasts can
-/// keep moving instead of truncating.
+/// keep moving instead of getting truncated.
 ///
-/// Implementation: measures content width once (per text) via a
-/// hidden Text background + GeometryReader. If content > container,
-/// renders two copies separated by a gap and offsets them with a
-/// TimelineView at ~35 pt/sec, wrapping cleanly each cycle.
+/// Measurement is done via `NSString.size(withAttributes:)` against
+/// a matching `UIFont` — no SwiftUI layout-pollution tricks. An
+/// earlier version used a hidden `Text` with `.fixedSize()` inside a
+/// `ZStack` to measure width; that hidden view kept claiming layout
+/// space at runtime even under `.clipped()`, which let long subtitles
+/// escape the subtitle bar. The NSString route bypasses SwiftUI's
+/// layout entirely so the marquee column can never grow past its
+/// allotted width.
 struct MarqueeText: View {
     let text: String
-    let font: Font
+    let fontSize: CGFloat
+    let fontWeight: Font.Weight
+    let fontDesign: Font.Design
     let textColor: Color
     /// Pixels per second the text crawls left while scrolling.
     let speed: CGFloat
-    /// Empty space between repetitions when scrolling.
+    /// Empty space between the end of one copy and the start of the next.
     let gap: CGFloat
-
-    @State private var contentWidth: CGFloat = 0
-    @State private var containerWidth: CGFloat = 0
 
     init(
         _ text: String,
-        font: Font = .body,
+        size: CGFloat = 15,
+        weight: Font.Weight = .semibold,
+        design: Font.Design = .rounded,
         color: Color = .white,
         speed: CGFloat = 35,
         gap: CGFloat = 60
     ) {
         self.text = text
-        self.font = font
+        self.fontSize = size
+        self.fontWeight = weight
+        self.fontDesign = design
         self.textColor = color
         self.speed = speed
         self.gap = gap
     }
 
-    private var shouldScroll: Bool {
-        contentWidth > containerWidth + 1
+    private var swiftUIFont: Font {
+        .system(size: fontSize, weight: fontWeight, design: fontDesign)
+    }
+
+    private var uiFont: UIFont {
+        let uiWeight: UIFont.Weight = {
+            switch fontWeight {
+            case .ultraLight: return .ultraLight
+            case .thin: return .thin
+            case .light: return .light
+            case .regular: return .regular
+            case .medium: return .medium
+            case .semibold: return .semibold
+            case .bold: return .bold
+            case .heavy: return .heavy
+            case .black: return .black
+            default: return .regular
+            }
+        }()
+        let base = UIFont.systemFont(ofSize: fontSize, weight: uiWeight)
+        if fontDesign == .rounded,
+           let desc = base.fontDescriptor.withDesign(.rounded) {
+            return UIFont(descriptor: desc, size: fontSize)
+        }
+        return base
+    }
+
+    private var contentWidth: CGFloat {
+        let attrs: [NSAttributedString.Key: Any] = [.font: uiFont]
+        return ceil((text as NSString).size(withAttributes: attrs).width)
     }
 
     var body: some View {
         GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                if shouldScroll {
+            // 4pt safety margin so borderline cases don't toggle
+            // between static and scrolling on a single-pixel rounding.
+            let scrolls = contentWidth > geo.size.width + 4
+            Group {
+                if scrolls {
                     scrolling
                 } else {
                     Text(text)
-                        .font(font)
+                        .font(swiftUIFont)
                         .foregroundStyle(textColor)
                         .lineLimit(1)
-                        .frame(width: geo.size.width, alignment: .center)
+                        .truncationMode(.tail)
+                        .frame(width: geo.size.width, height: geo.size.height, alignment: .center)
                 }
-
-                // Hidden measurer — one Text fixed-sized so we can read
-                // its intrinsic width. Updates on text changes.
-                Text(text)
-                    .font(font)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .lineLimit(1)
-                    .hidden()
-                    .background(
-                        GeometryReader { gp in
-                            Color.clear
-                                .onAppear { update(contentW: gp.size.width, containerW: geo.size.width) }
-                                .onChange(of: text) { _, _ in update(contentW: gp.size.width, containerW: geo.size.width) }
-                                .onChange(of: gp.size.width) { _, w in update(contentW: w, containerW: geo.size.width) }
-                                .onChange(of: geo.size.width) { _, w in update(contentW: gp.size.width, containerW: w) }
-                        }
-                    )
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .leading)
             .clipped()
         }
-    }
-
-    private func update(contentW: CGFloat, containerW: CGFloat) {
-        if contentW > 0 { contentWidth = contentW }
-        if containerW > 0 { containerWidth = containerW }
     }
 
     @ViewBuilder
     private var scrolling: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: false)) { timeline in
-            let cycle = contentWidth + gap
+            let cycle = max(1, contentWidth + gap)
             let elapsed = timeline.date.timeIntervalSinceReferenceDate
             let raw = CGFloat(elapsed) * speed
-            // Mod by the cycle length so the offset wraps cleanly.
-            let mod = raw.truncatingRemainder(dividingBy: max(cycle, 1))
-            let offset = -mod
+            let offset = -raw.truncatingRemainder(dividingBy: cycle)
             HStack(spacing: gap) {
-                Text(text).font(font).foregroundStyle(textColor).lineLimit(1).fixedSize()
-                Text(text).font(font).foregroundStyle(textColor).lineLimit(1).fixedSize()
+                Text(text)
+                    .font(swiftUIFont)
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .fixedSize()
+                Text(text)
+                    .font(swiftUIFont)
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .offset(x: offset)
         }
@@ -97,18 +122,17 @@ struct MarqueeText: View {
 }
 
 #Preview("Short — static") {
-    MarqueeText("Short line, fits easily.", font: .title3)
-        .frame(width: 320, height: 36)
+    MarqueeText("Short line, fits easily.")
+        .frame(width: 320, height: 24)
         .background(Color.black)
         .preferredColorScheme(.dark)
 }
 
 #Preview("Long — scrolls") {
     MarqueeText(
-        "Three fucking kilometres and you're still going, you marvellous wretched bastard — keep going.",
-        font: .title3
+        "Three fucking kilometres and you're still going, you marvellous wretched bastard — keep going."
     )
-    .frame(width: 320, height: 36)
+    .frame(width: 320, height: 24)
     .background(Color.black)
     .preferredColorScheme(.dark)
 }

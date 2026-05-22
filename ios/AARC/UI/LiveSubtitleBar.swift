@@ -24,10 +24,12 @@ struct LiveSubtitleBar: View {
                 statusDot
                 MarqueeText(
                     line.text,
-                    font: .system(.callout, design: .rounded, weight: .semibold),
+                    size: 15,
+                    weight: .semibold,
+                    design: .rounded,
                     color: .white
                 )
-                .frame(maxWidth: .infinity, maxHeight: 24)
+                .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
 
                 heartButton
             }
@@ -41,6 +43,7 @@ struct LiveSubtitleBar: View {
             RoundedRectangle(cornerRadius: 18)
                 .stroke(barAccent.opacity(0.45), lineWidth: 1)
         )
+        .clipShape(RoundedRectangle(cornerRadius: 18))
         .shadow(color: barAccent.opacity(0.30), radius: 16, y: 4)
     }
 
