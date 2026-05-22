@@ -209,9 +209,6 @@ final class VoiceFeedbackQueue {
         currentlyPlaying = item
         lastDispatchedAt = .now
         deactivateTask?.cancel()
-        // Notify the subtitle store so the in-run cockpit can show
-        // what the coach is currently saying, plus the heart button.
-        LiveSubtitleStore.shared.startedPlaying(item)
         // NOTE: do NOT activate the audio session here. Activation ducks
         // music immediately, and `playSync` will spend the next 100ms-2s
         // fetching+decoding the ElevenLabs audio — that gap was the source
@@ -220,11 +217,20 @@ final class VoiceFeedbackQueue {
         // before the actual playback call so duck-in and audio-out are
         // back-to-back. The queue still owns deactivation when the queue
         // empties (so back-to-back items don't bounce the session).
+        //
+        // The subtitle store is notified *via the onAudioStart callback*
+        // below — NOT here — so the in-run subtitle bar appears at the
+        // moment the runner hears the first syllable rather than at the
+        // moment of enqueue (which would spoil the roast during the
+        // fetch window).
 
         playbackTask = Task { @MainActor [weak self] in
             await Speaker.shared.playSync(
                 text: item.text,
-                preferRemoteOverride: item.preferRemoteVoiceOverride
+                preferRemoteOverride: item.preferRemoteVoiceOverride,
+                onAudioStart: {
+                    LiveSubtitleStore.shared.startedPlaying(item)
+                }
             )
             // Preemption path cancels this task before resuming the
             // underlying TTS continuation. A cancelled task must not touch

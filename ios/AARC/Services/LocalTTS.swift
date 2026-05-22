@@ -16,6 +16,10 @@ final class LocalTTS: NSObject {
     /// `stopAll`). The queue's serial playback loop awaits this so the
     /// next item only starts once the current one is fully spoken.
     private var playbackContinuation: CheckedContinuation<Void, Never>?
+    /// Fired once when the synthesizer actually starts pronouncing the
+    /// current utterance (via the AVSpeechSynthesizer didStart
+    /// delegate). Cleared after firing so it can't double-fire.
+    private var pendingOnAudioStart: (@MainActor @Sendable () -> Void)?
 
     /// Read-only summary of the chosen voice for diagnostic UI.
     var voiceDescription: String {
@@ -39,7 +43,12 @@ final class LocalTTS: NSObject {
     /// Speak a single line and return once the utterance is fully spoken
     /// (or cancelled). Mute is handled upstream by VoiceFeedbackQueue —
     /// muted lines never reach here.
-    func play(text: String) async {
+    ///
+    /// `onAudioStart` (optional) fires once when the synthesizer
+    /// actually begins pronouncing the line — i.e. after the 200ms
+    /// preUtteranceDelay and any iOS scheduling latency. Used by the
+    /// queue to time the subtitle bar's appearance with the audio.
+    func play(text: String, onAudioStart: (@MainActor @Sendable () -> Void)? = nil) async {
         guard !text.isEmpty else { return }
 
         // Activate the audio session BEFORE constructing the utterance,
@@ -55,6 +64,7 @@ final class LocalTTS: NSObject {
         utterance.preUtteranceDelay = 0.2
         utterance.postUtteranceDelay = 0.2
 
+        self.pendingOnAudioStart = onAudioStart
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             self.playbackContinuation = cont
             synthesizer.speak(utterance)
@@ -65,6 +75,7 @@ final class LocalTTS: NSObject {
     /// continuation so the queue's playback loop unblocks.
     func stopAll() {
         synthesizer.stopSpeaking(at: .immediate)
+        pendingOnAudioStart = nil
         if let cont = playbackContinuation {
             playbackContinuation = nil
             cont.resume()
@@ -84,6 +95,18 @@ final class LocalTTS: NSObject {
 }
 
 extension LocalTTS: @preconcurrency AVSpeechSynthesizerDelegate {
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
+                                       didStart utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            // Real "audio is now audible" hook — fires after the 200ms
+            // preUtteranceDelay and any iOS scheduling latency. Used by
+            // the queue to surface the subtitle at the right moment.
+            let cb = self.pendingOnAudioStart
+            self.pendingOnAudioStart = nil
+            cb?()
+        }
+    }
+
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
                                        didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in

@@ -61,15 +61,24 @@ final class Speaker {
     /// item's audio. Returns when the audio is fully done playing (or
     /// has fallen back to LocalTTS, which also awaits). Not part of the
     /// public Speaker API; callers should always go through `speak(_:)`.
-    func playSync(text: String, preferRemoteOverride: Bool? = nil) async {
+    ///
+    /// `onAudioStart` fires exactly once at the moment audio becomes
+    /// audible — used by the queue to surface the in-run subtitle bar
+    /// in sync with the first syllable rather than at the start of the
+    /// fetch.
+    func playSync(
+        text: String,
+        preferRemoteOverride: Bool? = nil,
+        onAudioStart: (@MainActor @Sendable () -> Void)? = nil
+    ) async {
         // Defensive early-out: the queue cancels playbackTask on
         // stopAll, and we don't want to start a backend mid-cancel.
         if Task.isCancelled { return }
         let useRemote = preferRemoteOverride ?? preferRemoteVoice
         if useRemote {
-            await RemoteTTS.shared.play(text: text)
+            await RemoteTTS.shared.play(text: text, onAudioStart: onAudioStart)
         } else {
-            await LocalTTS.shared.play(text: text)
+            await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
         }
     }
 

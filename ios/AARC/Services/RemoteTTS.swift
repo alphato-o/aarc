@@ -79,7 +79,14 @@ final class RemoteTTS: NSObject {
     /// Speak a single line and return only once the audio is fully done
     /// playing (or has fallen through every fallback). Called by the
     /// queue's serial playback loop.
-    func play(text: String) async {
+    ///
+    /// `onAudioStart` (optional) fires once when audio actually starts
+    /// playing — engine `play()` returns, AVAudioPlayer `play()` returns,
+    /// or LocalTTS's didStart delegate fires. Failed paths don't fire
+    /// it. Used by the queue to surface the subtitle at the moment
+    /// the runner hears the first syllable, not at the start of the
+    /// fetch.
+    func play(text: String, onAudioStart: (@MainActor @Sendable () -> Void)? = nil) async {
         guard !text.isEmpty else { return }
 
         let key = AudioCache.key(voiceId: Self.voiceId, text: text)
@@ -103,7 +110,7 @@ final class RemoteTTS: NSObject {
                 // is exactly the bug we saw on the treadmill End tap.
                 if Task.isCancelled { return }
                 lastError = error.localizedDescription
-                await LocalTTS.shared.play(text: text)
+                await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
                 return
             }
         }
@@ -112,7 +119,7 @@ final class RemoteTTS: NSObject {
 
         // Primary path: AVAudioEngine with amplified mixer.
         do {
-            try await playViaEngine(url: url)
+            try await playViaEngine(url: url, onStart: onAudioStart)
             return
         } catch {
             if Task.isCancelled { return }
@@ -122,18 +129,18 @@ final class RemoteTTS: NSObject {
         // Fallback path: AVAudioPlayer at unity gain. Slightly quieter
         // but more compatible across odd audio routes.
         do {
-            try await playViaAVAudioPlayer(url: url)
+            try await playViaAVAudioPlayer(url: url, onStart: onAudioStart)
             return
         } catch {
             if Task.isCancelled { return }
             lastError = "AVAudioPlayer: \(error.localizedDescription)"
-            await LocalTTS.shared.play(text: text)
+            await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
         }
     }
 
     // MARK: - Engine path
 
-    private func playViaEngine(url: URL) async throws {
+    private func playViaEngine(url: URL, onStart: (@MainActor @Sendable () -> Void)?) async throws {
         let file = try AVAudioFile(forReading: url)
         try ensureEngineStarted()
         if playerNode.isPlaying { playerNode.stop() }
@@ -154,6 +161,9 @@ final class RemoteTTS: NSObject {
                 }
             }
             playerNode.play()
+            // Audio is producing samples within ~10ms of .play() — for
+            // user perception this is the "start of speaking" moment.
+            onStart?()
         }
     }
 
@@ -179,7 +189,7 @@ final class RemoteTTS: NSObject {
 
     // MARK: - AVAudioPlayer fallback path
 
-    private func playViaAVAudioPlayer(url: URL) async throws {
+    private func playViaAVAudioPlayer(url: URL, onStart: (@MainActor @Sendable () -> Void)?) async throws {
         let p = try AVAudioPlayer(contentsOf: url)
         p.delegate = self
         p.volume = 1.0
@@ -188,6 +198,9 @@ final class RemoteTTS: NSObject {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             self.playbackContinuation = cont
             p.play()
+            // Same reasoning as the engine path — audio starts within
+            // a frame or two of .play().
+            onStart?()
         }
     }
 

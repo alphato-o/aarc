@@ -19,28 +19,22 @@ struct LiveSubtitleBar: View {
     let onToggleHeart: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 8) {
-                    statusDot
-                    Spacer(minLength: 0)
-                }
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 Text(line.text)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .font(.system(size: 19, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                     .multilineTextAlignment(.leading)
-                    .lineLimit(4)
-                    .truncationMode(.tail)
-                    .minimumScaleFactor(0.65)
+                    .minimumScaleFactor(0.55)
+                    .lineSpacing(2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                heartButton
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                reactionWindowBar
             }
-            Spacer(minLength: 0)
-            reactionWindowBar
+            heartButton
         }
         .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
         .overlay(
             RoundedRectangle(cornerRadius: 18)
@@ -50,19 +44,10 @@ struct LiveSubtitleBar: View {
         .shadow(color: barAccent.opacity(0.30), radius: 16, y: 4)
     }
 
-    private var statusDot: some View {
-        Circle()
-            .fill(line.isPlaying ? barAccent : barAccent.opacity(0.45))
-            .frame(width: 8, height: 8)
-            .shadow(color: barAccent.opacity(0.7), radius: 4)
-            .scaleEffect(line.isPlaying ? 1.0 : 0.85)
-            .animation(.easeOut(duration: 0.4), value: line.isPlaying)
-    }
-
     private var heartButton: some View {
         Button(action: onToggleHeart) {
             Image(systemName: line.liked ? "heart.fill" : "heart")
-                .font(.system(size: 22, weight: .semibold))
+                .font(.system(size: 38, weight: .bold))
                 .foregroundStyle(
                     line.liked
                     ? LinearGradient(
@@ -70,11 +55,17 @@ struct LiveSubtitleBar: View {
                                  Color(red: 1, green: 0.55, blue: 0.30)],
                         startPoint: .top, endPoint: .bottom
                       )
-                    : LinearGradient(colors: [.white.opacity(0.7)], startPoint: .top, endPoint: .bottom)
+                    : LinearGradient(colors: [.white.opacity(0.65)], startPoint: .top, endPoint: .bottom)
                 )
-                .frame(width: 44, height: 44)
+                .frame(maxHeight: .infinity)
+                .frame(width: 64)
                 .background(
-                    Circle().fill(line.liked ? Color.pink.opacity(0.15) : Color.white.opacity(0.08))
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(line.liked ? Color.pink.opacity(0.18) : Color.white.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(line.liked ? Color.pink.opacity(0.4) : Color.white.opacity(0.14), lineWidth: 1)
                 )
                 .symbolEffect(.bounce, value: line.liked)
                 .accessibilityLabel(line.liked ? "Unlike line" : "Like line")
