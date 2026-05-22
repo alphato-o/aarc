@@ -45,4 +45,19 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         self.lastSplit = lastSplit
         self.state = state
     }
+
+    /// Zero-state snapshot. Used as a stand-in when a consumer needs a
+    /// LiveMetrics value before the watch has produced its first tick
+    /// — e.g., the moment ScriptEngine.replaceScript runs if the full
+    /// script returns before any metric has been observed.
+    public static let zero = LiveMetrics(
+        elapsed: 0,
+        distanceMeters: 0,
+        currentPaceSecPerKm: nil,
+        avgPaceSecPerKm: 0,
+        currentHeartRate: nil,
+        energyKcal: 0,
+        lastSplit: nil,
+        state: .running
+    )
 }

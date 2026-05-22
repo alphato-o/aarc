@@ -86,6 +86,74 @@ final class ScriptEngine {
         VoiceFeedbackQueue.shared.stopAll()
     }
 
+    /// Swap the active script mid-run. Used by the fast-start flow:
+    /// the engine first runs against a stub script containing only the
+    /// opener (generated quickly via /dynamic-line), then this is
+    /// called once the full Sonnet-generated script arrives in the
+    /// background so the per-km loop, halfway, finish, and surprise
+    /// roasts all wire up.
+    ///
+    /// State is reset, but anything whose moment has already passed is
+    /// pre-marked as fired so it doesn't replay. Looping triggers
+    /// (everyMeters / everySeconds) are seeded to the current epoch so
+    /// the next fire is at the next boundary, not back-fired for every
+    /// missed km.
+    func replaceScript(_ newScript: GeneratedScript, currentMetrics: LiveMetrics) {
+        // Preserve a memory of "we already played the opener" by reusing
+        // the recentDispatchedLines ring — the model uses it to avoid
+        // repeating.
+        self.script = newScript
+        self.activeScriptId = newScript.scriptId
+        self.firedMessageIds.removeAll()
+        self.epochByMessageId.removeAll()
+        self.variantCursorByMessageId.removeAll()
+
+        let elapsed = currentMetrics.elapsed
+        let distance = currentMetrics.distanceMeters
+
+        for message in newScript.messages {
+            let trigger = message.triggerSpec
+            switch trigger.type {
+            case .time:
+                if let at = trigger.atSeconds, TimeInterval(at) <= elapsed {
+                    firedMessageIds.insert(message.id)
+                }
+                if let every = trigger.everySeconds, every > 0 {
+                    epochByMessageId[message.id] = Int(elapsed / TimeInterval(every))
+                }
+            case .distance:
+                if let at = trigger.atMeters, at <= distance {
+                    firedMessageIds.insert(message.id)
+                }
+                if let every = trigger.everyMeters, every > 0 {
+                    epochByMessageId[message.id] = Int(distance / every)
+                }
+            case .halfway:
+                if let total = plan.totalMeters, distance >= total / 2 {
+                    firedMessageIds.insert(message.id)
+                } else if let total = plan.totalSeconds, elapsed >= total / 2 {
+                    firedMessageIds.insert(message.id)
+                }
+            case .nearFinish:
+                if let total = plan.totalMeters,
+                   let remaining = trigger.remainingMeters,
+                   distance >= total - remaining {
+                    firedMessageIds.insert(message.id)
+                } else if let total = plan.totalSeconds,
+                          let remainingSec = trigger.remainingSeconds,
+                          elapsed >= total - TimeInterval(remainingSec) {
+                    firedMessageIds.insert(message.id)
+                }
+            case .finish:
+                if let total = plan.totalMeters, distance >= total {
+                    firedMessageIds.insert(message.id)
+                } else if let total = plan.totalSeconds, elapsed >= total {
+                    firedMessageIds.insert(message.id)
+                }
+            }
+        }
+    }
+
     /// Inject a dynamically-generated line into the run. Called by the
     /// ContextualCoach when a reactive trigger (HR spike, pace drop,
     /// quiet stretch, lyric riff …) fires. Goes into the same queue as

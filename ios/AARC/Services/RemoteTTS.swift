@@ -63,19 +63,22 @@ final class RemoteTTS: NSObject {
             }
         }
 
+        // Activate the audio session BEFORE constructing the player.
+        // This is the original (pre-queue) ordering — `prepareToPlay`
+        // and the player's internal gain calibration both pick up the
+        // active session state. Activating *after* prepareToPlay (as I
+        // had it briefly) yielded perceptibly quieter playback because
+        // the player warmed up against an inactive session.
+        // Activation is synchronous + ~ms; ducking starts essentially
+        // simultaneously with player init+play, so the user perceives
+        // duck-in and the first syllable as one event.
+        AudioPlaybackManager.shared.activate()
         do {
             let p = try AVAudioPlayer(contentsOf: url)
             p.delegate = self
             p.volume = 1.0
             self.player = p
             p.prepareToPlay()
-            // Activate the audio session here, NOT at queue enqueue time.
-            // Activation immediately ducks Spotify/Music etc. If the
-            // session is activated before the fetch+decode finishes,
-            // the user hears music duck → long silence → voice. Doing
-            // it here means duck-in and the player's first sample land
-            // within milliseconds of each other.
-            AudioPlaybackManager.shared.activate()
             await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
                 self.playbackContinuation = cont
                 p.play()

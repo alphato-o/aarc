@@ -16,6 +16,11 @@ export const GenerateScriptRequestSchema = z
         runType: z.enum(["outdoor", "treadmill"]).default("outdoor"),
         recentRunSummary: z.string().max(500).optional(),
         userMemory: z.array(z.string().max(200)).max(20).optional(),
+        /// When true, the model is told NOT to include a t=0 START
+        /// ROAST line — the iOS client has already generated and
+        /// played one via /dynamic-line so the runner can start moving
+        /// while the full script generates in the background.
+        skipOpener: z.boolean().default(false),
     })
     .superRefine((data, ctx) => {
         if (data.planKind === "distance" && data.distanceKm === undefined) {
@@ -130,6 +135,10 @@ export const DynamicLineRequestSchema = z.object({
         "pace_surge",
         "quiet_stretch",
         "stationary",
+        /// First line of the run — fast single-line generation so the
+        /// runner can start moving while the full script is still
+        /// generating in the background.
+        "opener",
         "custom",
     ]),
     runContext: z.object({

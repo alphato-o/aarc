@@ -126,6 +126,11 @@ function buildUserPrompt(
 
     lines.push(`Run type: ${req.runType}`);
     lines.push(`Goal: ${req.goal}`);
+    if (req.skipOpener) {
+        lines.push(
+            "SKIP THE OPENER: do NOT include a time.atSeconds=0 START ROAST in the script. The opener has already been generated separately and played to the runner. Start the script with the per-km loop, surprise roasts, halfway, etc.",
+        );
+    }
     if (req.recentRunSummary) {
         lines.push(`Recent: ${req.recentRunSummary}`);
     }

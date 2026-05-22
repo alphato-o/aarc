@@ -40,9 +40,24 @@ final class RunOrchestrator {
     /// to this to show a faint "Coach pre-loading…" hint.
     private(set) var isPreGenerating: Bool = false
 
-    /// Last-completed pre-generation result. Cleared when consumed by a
-    /// Start tap, or when the plan/personality changes.
-    private var preGenTask: Task<GeneratedScript, Error>?
+    /// Speculative opener generation (fast, single Haiku call ~2-5s).
+    /// Lets the user start running before the full Sonnet script is
+    /// ready. The actual `start*` methods await this if it's still
+    /// running, or use the result instantly if it's complete.
+    private var preGenOpenerTask: Task<String, Error>?
+
+    /// Speculative full-script generation (Sonnet, ~30-50s). Kicks off
+    /// alongside the opener so by the time the runner is a minute in,
+    /// the full script can be swapped into ScriptEngine with the per-km
+    /// loop + halfway + finish + surprise roasts.
+    private var preGenFullScriptTask: Task<GeneratedScript, Error>?
+
+    /// Active full-script-swap task — pulls the full script (either
+    /// from the in-flight pre-gen or a fresh /generate-script call) and
+    /// hands it to ScriptEngine.replaceScript when ready. Cancelled at
+    /// stop / restart so a stale swap can't trample a fresh run.
+    private var fullScriptSwapTask: Task<Void, Never>?
+
     private var preGenKey: String?
 
     /// Phone tapped Start in PHONE-ONLY mode. Phone tracks the run via
@@ -55,19 +70,19 @@ final class RunOrchestrator {
         lastError = nil
 
         let plan = ScriptPreviewStore.shared.currentPlan
-        let key = makeKey(plan: plan, personalityId: personalityId)
         let runId = UUID()
 
         do {
-            let script = try await resolveScript(plan: plan, runType: runType, personalityId: personalityId, key: key)
-            ScriptPreviewStore.shared.latest = script
-            prefetchEarlyLines(script: script)
+            let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
+            ScriptPreviewStore.shared.latest = stub
+            prefetchEarlyLines(script: stub)
 
             try await PhoneWorkoutSession.shared.start(
                 runType: runType,
                 runId: runId,
                 personalityId: personalityId
             )
+            scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
             // No watch involvement — no startWorkout WC message, no
             // wrist-cue notification. The phone is tracking, done.
             phase = .idle
@@ -77,8 +92,9 @@ final class RunOrchestrator {
         }
     }
 
-    /// Phone tapped Start. Use the pre-gen result if it's for the
-    /// current plan/personality, else generate fresh.
+    /// Phone tapped Start. Use the pre-gen opener if ready, else generate.
+    /// Full script is kicked off in the background and swapped into
+    /// ScriptEngine when ready.
     func startFromPhone(runType: RunType, personalityId: String = "roast_coach") async {
         guard phase != .generating else { return }
         phase = .generating
@@ -90,17 +106,17 @@ final class RunOrchestrator {
         LiveMetricsConsumer.shared.pendingPersonalityId = personalityId
 
         let plan = ScriptPreviewStore.shared.currentPlan
-        let key = makeKey(plan: plan, personalityId: personalityId)
         let runId = UUID()
 
         do {
-            let script = try await resolveScript(plan: plan, runType: runType, personalityId: personalityId, key: key)
-            ScriptPreviewStore.shared.latest = script
-            prefetchEarlyLines(script: script)
+            let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
+            ScriptPreviewStore.shared.latest = stub
+            prefetchEarlyLines(script: stub)
 
             PhoneSession.shared.sendStateEvent(
                 .startWorkout(runId: runId, runType: runType, personalityId: personalityId)
             )
+            scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
             // Buzz the wrist + leave a tappable card on the watch (via
             // iOS->Apple Watch notification mirroring) so the user
             // doesn't have to manually launch the watch app. Tapping
@@ -116,8 +132,8 @@ final class RunOrchestrator {
         }
     }
 
-    /// Watch sent prepareWorkout. Same resolve-from-cache-or-generate
-    /// path, then reply over WC.
+    /// Watch sent prepareWorkout. Same opener-first flow, then reply
+    /// over WC so the watch transitions to its countdown screen.
     func handlePrepareFromWatch(
         runId: UUID,
         runType: RunType,
@@ -127,13 +143,13 @@ final class RunOrchestrator {
         lastError = nil
 
         let plan = ScriptPreviewStore.shared.currentPlan
-        let key = makeKey(plan: plan, personalityId: personalityId)
 
         do {
-            let script = try await resolveScript(plan: plan, runType: runType, personalityId: personalityId, key: key)
-            ScriptPreviewStore.shared.latest = script
-            prefetchEarlyLines(script: script)
-            PhoneSession.shared.sendStateEvent(.scriptReady(scriptId: script.scriptId))
+            let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
+            ScriptPreviewStore.shared.latest = stub
+            prefetchEarlyLines(script: stub)
+            PhoneSession.shared.sendStateEvent(.scriptReady(scriptId: stub.scriptId))
+            scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
             phase = .idle
         } catch {
             phase = .error
@@ -144,31 +160,45 @@ final class RunOrchestrator {
         }
     }
 
-    /// Kick off a speculative generation in the background. Idempotent
-    /// for the same plan/personality — won't re-fire if a task already
-    /// matches. Cancels and replaces if the key changes.
+    /// Kick off speculative generation in the background: the fast
+    /// opener (so Start is near-instant) and the full Sonnet script
+    /// (so it's ready to swap in shortly after the run begins).
+    /// Idempotent for the same plan/personality — re-runs cancel and
+    /// replace the in-flight tasks if the key changes.
     /// Called by RunHomeView on appear and on plan/personality change.
     func schedulePreGenerate(personalityId: String = "roast_coach") {
         let plan = ScriptPreviewStore.shared.currentPlan
         let key = makeKey(plan: plan, personalityId: personalityId)
 
-        if preGenKey == key, preGenTask != nil { return }
-        preGenTask?.cancel()
+        if preGenKey == key, preGenOpenerTask != nil { return }
+        preGenOpenerTask?.cancel()
+        preGenFullScriptTask?.cancel()
         preGenKey = key
         isPreGenerating = true
 
-        // Pre-gen uses .treadmill as the runType — the actual line
-        // content is essentially runtype-agnostic, so we cache once
-        // and reuse for either Start button on RunHomeView.
-        preGenTask = Task { @MainActor [weak self] in
-            defer { self?.isPreGenerating = false }
-            guard let self else {
-                throw CancellationError()
-            }
-            return try await self.generate(
+        // Both tasks use .outdoor as a stable runType — the actual
+        // line content is essentially runtype-agnostic for the cache,
+        // and the runType the user actually picks is re-sent when the
+        // real start fires (we don't reuse the pre-gen output if the
+        // chosen runType ends up differing in a way that matters; the
+        // prompt sees the truthful runType at start-time).
+        preGenOpenerTask = Task { @MainActor [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.generateOpener(
                 plan: plan,
-                runType: .treadmill,
+                runType: .outdoor,
                 personalityId: personalityId
+            )
+        }
+
+        preGenFullScriptTask = Task { @MainActor [weak self] in
+            defer { self?.isPreGenerating = false }
+            guard let self else { throw CancellationError() }
+            return try await self.generateFull(
+                plan: plan,
+                runType: .outdoor,
+                personalityId: personalityId,
+                skipOpener: true
             )
         }
     }
@@ -183,37 +213,156 @@ final class RunOrchestrator {
 
     // MARK: - Private
 
-    /// Either await an in-flight matching pre-gen Task, or kick a fresh
-    /// generation. Caller is already in `.generating` phase.
-    private func resolveScript(
-        plan: RunPlan,
-        runType: RunType,
-        personalityId: String,
-        key: String
-    ) async throws -> GeneratedScript {
-        if preGenKey == key, let task = preGenTask {
-            // Await whatever the background already started — could be
-            // already-complete (instant) or still running.
-            do {
-                let script = try await task.value
-                preGenTask = nil
-                preGenKey = nil
-                return script
-            } catch {
-                // Pre-gen failed; fall through to fresh attempt.
-                preGenTask = nil
-                preGenKey = nil
-            }
-        }
-        return try await generate(plan: plan, runType: runType, personalityId: personalityId)
-    }
-
-    private func generate(
+    /// Build a stub script containing only the opener line, ready to
+    /// hand to ScriptPreviewStore so ScriptEngine.start fires it as the
+    /// t=0 trigger of the run. Awaits the pre-gen opener task if one
+    /// is in flight, otherwise generates a fresh one. Resulting text is
+    /// also prefetched to AudioCache so playback at t=0 is instant.
+    private func prepareOpenerStub(
         plan: RunPlan,
         runType: RunType,
         personalityId: String
     ) async throws -> GeneratedScript {
+        let openerText = try await resolveOpener(
+            plan: plan,
+            runType: runType,
+            personalityId: personalityId
+        )
+        // Best-effort warm of the audio cache so the opener plays
+        // instantly when the workout starts.
+        Task { await RemoteTTS.shared.prefetch(openerText) }
+        return makeStubScript(openerText: openerText)
+    }
+
+    private func resolveOpener(
+        plan: RunPlan,
+        runType: RunType,
+        personalityId: String
+    ) async throws -> String {
+        let key = makeKey(plan: plan, personalityId: personalityId)
+        if preGenKey == key, let task = preGenOpenerTask {
+            do {
+                let text = try await task.value
+                preGenOpenerTask = nil
+                return text
+            } catch {
+                preGenOpenerTask = nil
+            }
+        }
+        return try await generateOpener(
+            plan: plan,
+            runType: runType,
+            personalityId: personalityId
+        )
+    }
+
+    private func generateOpener(
+        plan: RunPlan,
+        runType: RunType,
+        personalityId: String
+    ) async throws -> String {
+        let bullets = PersonalContextStore.shared.bullets
+        let result = try await AIClient.shared.generateOpener(
+            plan: plan,
+            runType: runType,
+            personalityId: personalityId,
+            personalNotes: bullets.isEmpty ? nil : bullets
+        )
+        return result.text
+    }
+
+    private func makeStubScript(openerText: String) -> GeneratedScript {
+        let openerMessage = ScriptMessage(
+            id: "fast_start_opener",
+            triggerSpec: TriggerSpec(type: .time, atSeconds: 0),
+            text: openerText,
+            textVariants: nil,
+            priority: 100,
+            playOnce: true
+        )
+        return GeneratedScript(
+            scriptId: "fast-start-\(UUID().uuidString)",
+            model: "opener-stub",
+            messages: [openerMessage]
+        )
+    }
+
+    /// Kick off the full /generate-script Sonnet call in the
+    /// background, then hand the result to ScriptEngine.replaceScript.
+    /// Uses the pre-gen full task if it's in flight; otherwise spawns
+    /// a fresh request.
+    private func scheduleFullScriptSwap(
+        plan: RunPlan,
+        runType: RunType,
+        personalityId: String
+    ) {
+        fullScriptSwapTask?.cancel()
+        let preGenTask = preGenFullScriptTask
+        let preGenMatches = preGenKey == makeKey(plan: plan, personalityId: personalityId)
+        preGenFullScriptTask = nil
+
+        fullScriptSwapTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let full: GeneratedScript
+                if preGenMatches, let task = preGenTask {
+                    full = try await task.value
+                } else {
+                    preGenTask?.cancel()
+                    full = try await self.generateFull(
+                        plan: plan,
+                        runType: runType,
+                        personalityId: personalityId,
+                        skipOpener: true
+                    )
+                }
+                guard !Task.isCancelled else { return }
+                // The full script was generated with skipOpener=true so
+                // it doesn't include a t=0 line. Re-introduce the
+                // opener that's already in the current stub so the
+                // merged script can stand alone — important if the
+                // swap happens BEFORE ScriptEngine.start runs (e.g.,
+                // the watch is slow to send workoutStarted): when
+                // ScriptEngine.start eventually reads the script from
+                // ScriptPreviewStore, the opener still needs to be in
+                // there to fire as the t=0 trigger.
+                let opener = ScriptPreviewStore.shared.latest?.messages.first {
+                    $0.id == "fast_start_opener"
+                }
+                let merged: GeneratedScript
+                if let opener {
+                    merged = GeneratedScript(
+                        scriptId: full.scriptId,
+                        model: full.model,
+                        messages: [opener] + full.messages
+                    )
+                } else {
+                    merged = full
+                }
+                // Swap into the engine using whatever metrics are
+                // current. Anything already-passed gets pre-marked so
+                // we don't replay every km the runner already crossed
+                // (the fast_start_opener will be pre-marked too if its
+                // t=0 trigger already fired).
+                let metrics = LiveMetricsConsumer.shared.latest ?? .zero
+                ScriptEngine.shared.replaceScript(merged, currentMetrics: metrics)
+                ScriptPreviewStore.shared.latest = merged
+                self.prefetchEarlyLines(script: merged)
+            } catch {
+                if Task.isCancelled { return }
+                self.lastError = "full-script gen failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func generateFull(
+        plan: RunPlan,
+        runType: RunType,
+        personalityId: String,
+        skipOpener: Bool
+    ) async throws -> GeneratedScript {
         var payload = AIClient.ScriptPlan.from(plan, runType: runType, personalityId: personalityId)
+        payload.skipOpener = skipOpener
         // Pipe the founder's personal-context bullets through as
         // userMemory — the coach uses them as trolling hooks (FydeOS
         // 10 users, Phi Browser dying, will-never-be-Sam-Altman, etc.).

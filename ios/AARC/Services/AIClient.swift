@@ -34,6 +34,10 @@ actor AIClient {
         var runType: String = "outdoor"  // "outdoor" | "treadmill"
         var recentRunSummary: String?
         var userMemory: [String]?
+        /// Tell the model to skip the t=0 START ROAST — we've already
+        /// generated and played one via /dynamic-line as a fast-start
+        /// opener so the runner could begin moving.
+        var skipOpener: Bool = false
 
         /// Convenience — derive a ScriptPlan from a RunPlan + run type.
         static func from(_ plan: RunPlan, runType: RunType, personalityId: String) -> ScriptPlan {
@@ -104,6 +108,10 @@ actor AIClient {
         /// Pace effectively zero — distance hasn't budged in a while.
         /// Don't auto-pause; just mock them for stopping.
         case stationary
+        /// First line of the run. Generated separately from the main
+        /// script so the runner can start moving in ~2-5s instead of
+        /// waiting 30-50s for the full Sonnet generation.
+        case opener
         case custom
     }
 
@@ -140,6 +148,40 @@ actor AIClient {
     struct DynamicLineResult: Sendable {
         let text: String
         let model: String
+    }
+
+    /// Generate the fast-start opener line so the runner can start
+    /// moving immediately. Uses /dynamic-line with the `opener` trigger
+    /// — same proxy path as ContextualCoach, but framed for "first line
+    /// of the run". Typically returns in ~2-5s via Haiku.
+    func generateOpener(
+        plan: RunPlan,
+        runType: RunType,
+        personalityId: String = "roast_coach",
+        personalNotes: [String]? = nil
+    ) async throws -> DynamicLineResult {
+        let context = DynamicLineContext(
+            elapsedSeconds: 0,
+            distanceMeters: 0,
+            currentHR: nil,
+            avgHR: nil,
+            currentPaceSecPerKm: nil,
+            avgPaceSecPerKm: nil,
+            planKind: plan.kind.rawValue,
+            planDistanceKm: plan.distanceKm,
+            planTimeMinutes: plan.timeMinutes,
+            runType: runType.rawValue,
+            stationarySeconds: nil
+        )
+        let request = DynamicLineRequest(
+            personalityId: personalityId,
+            trigger: .opener,
+            runContext: context,
+            recentDispatched: nil,
+            customNote: nil,
+            personalNotes: personalNotes
+        )
+        return try await generateDynamicLine(request)
     }
 
     func generateDynamicLine(_ request: DynamicLineRequest) async throws -> DynamicLineResult {

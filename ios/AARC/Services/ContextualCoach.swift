@@ -59,8 +59,9 @@ final class ContextualCoach {
 
     /// Stationary detection: distance hasn't increased in this many
     /// seconds, OR current pace is reported but is implausibly slow
-    /// (>= 15 min/km, i.e. ~4 km/h walking pace at best).
-    private let stationaryQuietSeconds: TimeInterval = 25
+    /// (>= 15 min/km, i.e. ~4 km/h walking pace at best). 15s lands
+    /// before the runner thinks "shouldn't AARC have said something?".
+    private let stationaryQuietSeconds: TimeInterval = 15
     private let stationaryPaceThresholdSecPerKm: Double = 15 * 60
 
     /// The run type set when start(runType:) was called. Defaults to
@@ -171,8 +172,19 @@ final class ContextualCoach {
             trimSamples(&paceSamples, before: now.addingTimeInterval(-rollingWindow))
         }
 
-        guard metrics.elapsed >= warmupSeconds else { return }
         guard !inFlight else { return }
+
+        // Stationary is checked before the warmup gate — it doesn't
+        // depend on rolling averages, and a runner who hits Start and
+        // then takes a phone call for 20 seconds deserves a roast.
+        if let trigger = checkStationary(now: now, metrics: metrics) {
+            fire(trigger: trigger, metrics: metrics)
+            return
+        }
+
+        // The HR / pace / quiet-stretch triggers all need a stable
+        // baseline. Hold them back until the rolling averages settle.
+        guard metrics.elapsed >= warmupSeconds else { return }
 
         if let trigger = evaluateTriggers(now: now, metrics: metrics) {
             fire(trigger: trigger, metrics: metrics)
@@ -191,11 +203,9 @@ final class ContextualCoach {
     // MARK: - Trigger evaluation
 
     private func evaluateTriggers(now: Date, metrics: LiveMetrics) -> AIClient.DynamicLineTrigger? {
-        // Priority order — most "interesting" first. Stationary jumps
-        // ahead of pace drop because if they've stopped, "you slowed
-        // down" is the wrong roast — "you stopped, you absolute
-        // wanker" is the right one.
-        if let trigger = checkStationary(now: now, metrics: metrics) { return trigger }
+        // Stationary is evaluated separately *before* the warmup gate
+        // up in processTick — by the time we're here it's already been
+        // considered. These triggers all want a stable baseline.
         if let trigger = checkHRSpike(now: now, metrics: metrics) { return trigger }
         if let trigger = checkPaceDrop(now: now, metrics: metrics) { return trigger }
         if let trigger = checkPaceSurge(now: now, metrics: metrics) { return trigger }

@@ -41,6 +41,11 @@ final class LocalTTS: NSObject {
     /// muted lines never reach here.
     func play(text: String) async {
         guard !text.isEmpty else { return }
+
+        // Activate the audio session BEFORE constructing the utterance,
+        // matching the pre-queue order — see RemoteTTS.play for why.
+        AudioPlaybackManager.shared.activate()
+
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = preferredVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
@@ -50,9 +55,6 @@ final class LocalTTS: NSObject {
         utterance.preUtteranceDelay = 0.2
         utterance.postUtteranceDelay = 0.2
 
-        // Activate the audio session here, not at queue enqueue time —
-        // see comment in RemoteTTS.play for why.
-        AudioPlaybackManager.shared.activate()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             self.playbackContinuation = cont
             synthesizer.speak(utterance)
