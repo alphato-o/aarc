@@ -297,7 +297,13 @@ struct RunDetailView: View {
 
             self.hrSeries = hrPoints
             self.paceSeries = pacePoints
-            self.routeCoords = locations.map(\.coordinate)
+            // HealthKit returns WGS-84; Apple Maps tiles inside mainland
+            // China are GCJ-02. Transform before plotting so the route
+            // sits on top of the actual streets (matching what Apple
+            // Fitness shows). Outside China this is a no-op.
+            self.routeCoords = ChinaCoordinateTransform.displayCoordinates(
+                locations.map(\.coordinate)
+            )
             self.isLoading = false
         } catch {
             self.loadError = error.localizedDescription

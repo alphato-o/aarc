@@ -101,6 +101,9 @@ actor AIClient {
         case paceDrop = "pace_drop"
         case paceSurge = "pace_surge"
         case quietStretch = "quiet_stretch"
+        /// Pace effectively zero — distance hasn't budged in a while.
+        /// Don't auto-pause; just mock them for stopping.
+        case stationary
         case custom
     }
 
@@ -115,6 +118,10 @@ actor AIClient {
         var planDistanceKm: Double?
         var planTimeMinutes: Double?
         var runType: String           // "outdoor" | "treadmill"
+        /// Seconds since distance last changed. Populated when the
+        /// coach fires the .stationary trigger — gives the model the
+        /// "you've been still for X seconds" hook.
+        var stationarySeconds: Double?
     }
 
     struct DynamicLineRequest: Codable, Sendable {
@@ -123,6 +130,11 @@ actor AIClient {
         var runContext: DynamicLineContext
         var recentDispatched: [String]?
         var customNote: String?
+        /// Optional personal-context bullets the model can weave into
+        /// roasts. Things like "FydeOS has 10 active users", "his
+        /// browser side project has zero traction", "he is not going
+        /// to be Sam Altman". Free-form short bullets.
+        var personalNotes: [String]?
     }
 
     struct DynamicLineResult: Sendable {
@@ -197,6 +209,8 @@ actor AIClient {
         var lyricLanguage: String?
         var runContext: MusicCommentContext
         var recentDispatched: [String]?
+        /// Same personal-context bullets we send to /dynamic-line.
+        var personalNotes: [String]?
     }
 
     struct MusicCommentResult: Sendable {

@@ -147,6 +147,14 @@ function buildUserPrompt(req: MusicCommentRequest): string {
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
 
+    if (req.personalNotes && req.personalNotes.length > 0) {
+        lines.push("");
+        lines.push("PERSONAL TROLL FUEL (occasionally fuse one of these with the lyric riff — specifics, not vague):");
+        for (const p of req.personalNotes) {
+            lines.push(`- ${p}`);
+        }
+    }
+
     if (req.recentDispatched && req.recentDispatched.length > 0) {
         lines.push("");
         lines.push("RECENTLY SPOKEN LINES (do NOT repeat ideas or phrasing):");

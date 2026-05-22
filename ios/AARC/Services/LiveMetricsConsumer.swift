@@ -79,7 +79,7 @@ final class LiveMetricsConsumer {
                 plan: ScriptPreviewStore.shared.currentPlan
             )
         }
-        ContextualCoach.shared.start()
+        ContextualCoach.shared.start(runType: pendingRunType)
         LiveActivityController.shared.start(
             runId: runId,
             personalityId: pendingPersonalityId,

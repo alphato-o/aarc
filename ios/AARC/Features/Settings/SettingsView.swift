@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var spotifyAuth = SpotifyAuth.shared
     @State private var spotifyBusy = false
     @State private var musixmatchKey: String = UserDefaults.standard.string(forKey: "musixmatch.apiKey") ?? ""
+    @State private var personalContext: PersonalContextStore = PersonalContextStore.shared
 
     var body: some View {
         NavigationStack {
@@ -174,6 +175,20 @@ struct SettingsView: View {
                     Text("DJ commentary needs lyrics. AARC tries LRCLib first (free, synced when available), NetEase if the track has Han characters (free, best Mandopop coverage), then Musixmatch if a key is set (free tier: 2000/day at developer.musixmatch.com — much broader catalog), then lyrics.ovh (free, English-leaning). Cache only stores hits — misses always retry.")
                 }
 
+                Section {
+                    TextEditor(text: personalContextBinding)
+                        .font(.callout)
+                        .frame(minHeight: 160)
+                        .autocorrectionDisabled()
+                    Text("\(personalContext.bullets.count) bullet\(personalContext.bullets.count == 1 ? "" : "s") sent with every script + reactive line")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Personal trolls")
+                } footer: {
+                    Text("One bullet per line. The coach weaves these into roasts during the run — short, specific, blunt. Think \"FydeOS has 10 users\", \"Will never be Sam Altman\", \"Phi Browser is going nowhere\". Edit freely; clearing the field restores the built-in defaults on next launch.")
+                }
+
                 Section("About") {
                     LabeledContent("Version", value: AppVersion.versionString)
                     LabeledContent("API", value: Config.apiBaseURL.absoluteString)
@@ -189,6 +204,13 @@ struct SettingsView: View {
         Binding(
             get: { AudioPlaybackManager.shared.isMuted },
             set: { AudioPlaybackManager.shared.isMuted = $0 }
+        )
+    }
+
+    private var personalContextBinding: Binding<String> {
+        Binding(
+            get: { personalContext.rawText },
+            set: { personalContext.rawText = $0 }
         )
     }
 

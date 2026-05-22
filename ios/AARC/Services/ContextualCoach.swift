@@ -50,11 +50,28 @@ final class ContextualCoach {
         .paceDrop: 300,
         .paceSurge: 300,
         .quietStretch: 240,
+        .stationary: 90,  // short — if they're still standing still, troll again
     ]
 
     /// Don't even start firing reactive lines until the runner has been
     /// going long enough for averages to settle.
     private let warmupSeconds: TimeInterval = 120
+
+    /// Stationary detection: distance hasn't increased in this many
+    /// seconds, OR current pace is reported but is implausibly slow
+    /// (>= 15 min/km, i.e. ~4 km/h walking pace at best).
+    private let stationaryQuietSeconds: TimeInterval = 25
+    private let stationaryPaceThresholdSecPerKm: Double = 15 * 60
+
+    /// The run type set when start(runType:) was called. Defaults to
+    /// outdoor for older call sites that haven't been updated.
+    private var runType: RunType = .outdoor
+
+    /// Distance at the last point where distance changed, plus when.
+    /// Used to detect stationary stretches without dragging in another
+    /// timer or relying solely on the (sometimes-absent) pace reading.
+    private var lastDistanceMeters: Double = 0
+    private var lastDistanceChangeAt: Date?
 
     // MARK: - Internal state
 
@@ -94,8 +111,9 @@ final class ContextualCoach {
 
     // MARK: - Lifecycle
 
-    func start() {
+    func start(runType: RunType = .outdoor) {
         guard !isRunning else { return }
+        self.runType = runType
         hrSamples.removeAll()
         paceSamples.removeAll()
         hrSpikeStartedAt = nil
@@ -105,12 +123,14 @@ final class ContextualCoach {
         lastMusicRiffAt = nil
         lastMusicTrackKey = nil
         lastMusicLyric = nil
+        lastDistanceMeters = 0
+        lastDistanceChangeAt = nil
         inFlight = false
         lastFiredTrigger = nil
         lastFiredAt = nil
         lastError = nil
         isRunning = true
-        log.info("ContextualCoach started")
+        log.info("ContextualCoach started runType=\(runType.rawValue, privacy: .public)")
     }
 
     func stop() {
@@ -128,6 +148,19 @@ final class ContextualCoach {
         guard isRunning else { return }
         latestMetrics = metrics
         let now = Date()
+
+        // Track distance progress for stationary detection. We don't
+        // want to flag tiny GPS jitter as "moving", so require >5m
+        // change before resetting the timer.
+        if abs(metrics.distanceMeters - lastDistanceMeters) > 5 {
+            lastDistanceMeters = metrics.distanceMeters
+            lastDistanceChangeAt = now
+        } else if lastDistanceChangeAt == nil {
+            // Initialise the first time we see a tick — without this,
+            // .stationary would fire from t=0 because "no previous
+            // change" is technically infinitely long.
+            lastDistanceChangeAt = now
+        }
 
         if let hr = metrics.currentHeartRate, hr > 0 {
             hrSamples.append(Sample(t: now, value: hr))
@@ -158,12 +191,37 @@ final class ContextualCoach {
     // MARK: - Trigger evaluation
 
     private func evaluateTriggers(now: Date, metrics: LiveMetrics) -> AIClient.DynamicLineTrigger? {
-        // Priority order — most "interesting" first.
+        // Priority order — most "interesting" first. Stationary jumps
+        // ahead of pace drop because if they've stopped, "you slowed
+        // down" is the wrong roast — "you stopped, you absolute
+        // wanker" is the right one.
+        if let trigger = checkStationary(now: now, metrics: metrics) { return trigger }
         if let trigger = checkHRSpike(now: now, metrics: metrics) { return trigger }
         if let trigger = checkPaceDrop(now: now, metrics: metrics) { return trigger }
         if let trigger = checkPaceSurge(now: now, metrics: metrics) { return trigger }
         if let trigger = checkQuietStretch(now: now) { return trigger }
         return nil
+    }
+
+    private func checkStationary(now: Date, metrics: LiveMetrics) -> AIClient.DynamicLineTrigger? {
+        // Need to be past warmup and have seen at least one distance
+        // sample to be a useful trigger.
+        guard let lastMoved = lastDistanceChangeAt else { return nil }
+        let stillSeconds = now.timeIntervalSince(lastMoved)
+
+        // Two ways to qualify as stationary: (a) distance hasn't moved
+        // for stationaryQuietSeconds; (b) pace reading is implausibly
+        // slow (>=15 min/km) sustained. Either is enough; both means
+        // the runner has definitely stopped.
+        let distanceFlatlined = stillSeconds >= stationaryQuietSeconds
+        let paceImplausible: Bool = {
+            guard let pace = metrics.currentPaceSecPerKm else { return false }
+            return pace >= stationaryPaceThresholdSecPerKm
+        }()
+
+        guard distanceFlatlined || paceImplausible else { return nil }
+        guard cooldownOk(.stationary, now: now) else { return nil }
+        return .stationary
     }
 
     private func checkHRSpike(now: Date, metrics: LiveMetrics) -> AIClient.DynamicLineTrigger? {
@@ -273,14 +331,12 @@ final class ContextualCoach {
         inFlight = true
         lastFireByTrigger[trigger] = .now
         let plan = ScriptPreviewStore.shared.currentPlan
-        let runType: String = {
-            // We don't have RunType here; ScriptPreviewStore doesn't
-            // track it. Default to "outdoor" — it's only used for
-            // prompt color, not behavior.
-            return "outdoor"
-        }()
         let avgHR = rollingAverage(hrSamples)
         let avgPace = rollingAverage(paceSamples)
+        let stationarySeconds: Double? = {
+            guard trigger == .stationary, let last = lastDistanceChangeAt else { return nil }
+            return Date().timeIntervalSince(last)
+        }()
         let context = AIClient.DynamicLineContext(
             elapsedSeconds: metrics.elapsed,
             distanceMeters: metrics.distanceMeters,
@@ -291,15 +347,18 @@ final class ContextualCoach {
             planKind: plan.kind.rawValue,
             planDistanceKm: plan.distanceKm,
             planTimeMinutes: plan.timeMinutes,
-            runType: runType
+            runType: runType.rawValue,
+            stationarySeconds: stationarySeconds
         )
         let recent = ScriptEngine.shared.recentDispatchedLines
+        let personalNotes = PersonalContextStore.shared.bullets
         let request = AIClient.DynamicLineRequest(
             personalityId: "roast_coach",
             trigger: trigger,
             runContext: context,
             recentDispatched: recent.isEmpty ? nil : recent,
-            customNote: nil
+            customNote: nil,
+            personalNotes: personalNotes.isEmpty ? nil : personalNotes
         )
 
         log.info("ContextualCoach firing trigger=\(trigger.rawValue, privacy: .public)")
@@ -388,9 +447,10 @@ final class ContextualCoach {
             currentHR: metrics.currentHeartRate,
             currentPaceSecPerKm: metrics.currentPaceSecPerKm,
             planKind: plan.kind.rawValue,
-            runType: "outdoor"
+            runType: runType.rawValue
         )
         let recent = ScriptEngine.shared.recentDispatchedLines
+        let personalNotes = PersonalContextStore.shared.bullets
         let request = AIClient.MusicCommentRequest(
             personalityId: "roast_coach",
             track: AIClient.MusicTrack(
@@ -404,7 +464,8 @@ final class ContextualCoach {
             lyricContext: selection.context.isEmpty ? nil : selection.context,
             lyricLanguage: selection.language,
             runContext: context,
-            recentDispatched: recent.isEmpty ? nil : recent
+            recentDispatched: recent.isEmpty ? nil : recent,
+            personalNotes: personalNotes.isEmpty ? nil : personalNotes
         )
         do {
             let result = try await AIClient.shared.generateMusicComment(request)

@@ -130,9 +130,11 @@ function buildUserPrompt(
         lines.push(`Recent: ${req.recentRunSummary}`);
     }
     if (req.userMemory && req.userMemory.length > 0) {
-        lines.push(
-            `Things known about this runner:\n- ${req.userMemory.join("\n- ")}`,
-        );
+        lines.push("");
+        lines.push("PERSONAL TROLL FUEL (specifics the runner asked you to roast them about — weave into per-km loop variants, halfway, and at least one surprise roast; use the names + numbers verbatim where possible):");
+        for (const m of req.userMemory) {
+            lines.push(`- ${m}`);
+        }
     }
     lines.push("", "Generate the script now. JSON only.");
     return lines.join("\n");

@@ -139,10 +139,21 @@ function buildUserPrompt(req: DynamicLineRequest): string {
             break;
     }
     lines.push(`- run type: ${c.runType}`);
+    if (c.stationarySeconds !== undefined && c.stationarySeconds > 0) {
+        lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (distance has not moved)`);
+    }
 
     if (req.customNote && req.customNote.trim().length > 0) {
         lines.push("");
         lines.push(`CONTEXT: ${req.customNote.trim()}`);
+    }
+
+    if (req.personalNotes && req.personalNotes.length > 0) {
+        lines.push("");
+        lines.push("PERSONAL TROLL FUEL (specific things the runner asked you to use against them — be blunt, use the SPECIFICS, names + numbers + projects verbatim where possible):");
+        for (const p of req.personalNotes) {
+            lines.push(`- ${p}`);
+        }
     }
 
     if (req.recentDispatched && req.recentDispatched.length > 0) {

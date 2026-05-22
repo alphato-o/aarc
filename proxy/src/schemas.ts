@@ -129,6 +129,7 @@ export const DynamicLineRequestSchema = z.object({
         "pace_drop",
         "pace_surge",
         "quiet_stretch",
+        "stationary",
         "custom",
     ]),
     runContext: z.object({
@@ -142,9 +143,19 @@ export const DynamicLineRequestSchema = z.object({
         planDistanceKm: z.number().positive().optional(),
         planTimeMinutes: z.number().positive().optional(),
         runType: z.enum(["outdoor", "treadmill"]),
+        /// Set by ContextualCoach when firing the `stationary` trigger —
+        /// how long the runner has been still. Lets the prompt anchor on
+        /// "you've been stood there for 40 seconds".
+        stationarySeconds: z.number().nonnegative().optional(),
     }),
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
     customNote: z.string().max(300).optional(),
+    /// Short, blunt bullets about the runner the coach can weave into
+    /// roasts. Hand-edited in the iOS Settings → Personal Trolls panel.
+    /// Specifically NOT training-history user_memory — that's a
+    /// different field (Phase 2). These are persona-fuel: "FydeOS has
+    /// 10 users", "Won't be Sam Altman", etc.
+    personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
 });
 
 export type DynamicLineRequest = z.infer<typeof DynamicLineRequestSchema>;
@@ -195,6 +206,7 @@ export const MusicCommentRequestSchema = z.object({
         runType: z.enum(["outdoor", "treadmill"]),
     }),
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
+    personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
 });
 
 export type MusicCommentRequest = z.infer<typeof MusicCommentRequestSchema>;

@@ -205,8 +205,15 @@ final class VoiceFeedbackQueue {
     private func startPlaying(_ item: VoiceItem) {
         currentlyPlaying = item
         lastDispatchedAt = .now
-        AudioPlaybackManager.shared.activate()
         deactivateTask?.cancel()
+        // NOTE: do NOT activate the audio session here. Activation ducks
+        // music immediately, and `playSync` will spend the next 100ms-2s
+        // fetching+decoding the ElevenLabs audio — that gap was the source
+        // of "music ducks, then long silence, then voice" after the queue
+        // landed. RemoteTTS / LocalTTS now activate the session right
+        // before the actual playback call so duck-in and audio-out are
+        // back-to-back. The queue still owns deactivation when the queue
+        // empties (so back-to-back items don't bounce the session).
 
         playbackTask = Task { @MainActor [weak self] in
             await Speaker.shared.playSync(

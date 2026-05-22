@@ -213,7 +213,14 @@ final class RunOrchestrator {
         runType: RunType,
         personalityId: String
     ) async throws -> GeneratedScript {
-        let payload = AIClient.ScriptPlan.from(plan, runType: runType, personalityId: personalityId)
+        var payload = AIClient.ScriptPlan.from(plan, runType: runType, personalityId: personalityId)
+        // Pipe the founder's personal-context bullets through as
+        // userMemory — the coach uses them as trolling hooks (FydeOS
+        // 10 users, Phi Browser dying, will-never-be-Sam-Altman, etc.).
+        let bullets = PersonalContextStore.shared.bullets
+        if !bullets.isEmpty {
+            payload.userMemory = bullets
+        }
         return try await AIClient.shared.generateScript(plan: payload)
     }
 

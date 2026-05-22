@@ -44,11 +44,15 @@ final class LocalTTS: NSObject {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = preferredVoice
         utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        utterance.volume = 1.0
         // 200ms grace before/after so the duck-in / duck-out doesn't
         // clip the first or last syllable.
         utterance.preUtteranceDelay = 0.2
         utterance.postUtteranceDelay = 0.2
 
+        // Activate the audio session here, not at queue enqueue time —
+        // see comment in RemoteTTS.play for why.
+        AudioPlaybackManager.shared.activate()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             self.playbackContinuation = cont
             synthesizer.speak(utterance)
