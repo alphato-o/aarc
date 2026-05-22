@@ -262,11 +262,13 @@ final class RunOrchestrator {
         personalityId: String
     ) async throws -> String {
         let bullets = PersonalContextStore.shared.bullets
+        let liked = LikedLinesStore.shared.vibeExemplars(personalityId: personalityId)
         let result = try await AIClient.shared.generateOpener(
             plan: plan,
             runType: runType,
             personalityId: personalityId,
-            personalNotes: bullets.isEmpty ? nil : bullets
+            personalNotes: bullets.isEmpty ? nil : bullets,
+            likedLineExamples: liked.isEmpty ? nil : liked
         )
         return result.text
     }
@@ -369,6 +371,11 @@ final class RunOrchestrator {
         let bullets = PersonalContextStore.shared.bullets
         if !bullets.isEmpty {
             payload.userMemory = bullets
+        }
+        // Liked lines from past runs as vibe-only calibration.
+        let liked = LikedLinesStore.shared.vibeExemplars(personalityId: personalityId)
+        if !liked.isEmpty {
+            payload.likedLineExamples = liked
         }
         return try await AIClient.shared.generateScript(plan: payload)
     }

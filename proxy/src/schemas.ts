@@ -21,6 +21,10 @@ export const GenerateScriptRequestSchema = z
         /// played one via /dynamic-line so the runner can start moving
         /// while the full script generates in the background.
         skipOpener: z.boolean().default(false),
+        /// Heart-liked lines from past runs. Sent as VIBE-ONLY
+        /// calibration; the prompt is strict about never copying any
+        /// of them verbatim. Capped to ~12 most-recent on the client.
+        likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
     })
     .superRefine((data, ctx) => {
         if (data.planKind === "distance" && data.distanceKm === undefined) {
@@ -165,6 +169,10 @@ export const DynamicLineRequestSchema = z.object({
     /// different field (Phase 2). These are persona-fuel: "FydeOS has
     /// 10 users", "Won't be Sam Altman", etc.
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
+    /// Heart-liked lines from past runs — vibe-only calibration. The
+    /// prompt forbids verbatim copy of any of these; they're texture
+    /// references, not material.
+    likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
 });
 
 export type DynamicLineRequest = z.infer<typeof DynamicLineRequestSchema>;
@@ -216,6 +224,7 @@ export const MusicCommentRequestSchema = z.object({
     }),
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
+    likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
 });
 
 export type MusicCommentRequest = z.infer<typeof MusicCommentRequestSchema>;

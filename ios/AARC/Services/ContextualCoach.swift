@@ -370,13 +370,15 @@ final class ContextualCoach {
         )
         let recent = ScriptEngine.shared.recentDispatchedLines
         let personalNotes = PersonalContextStore.shared.bullets
+        let liked = LikedLinesStore.shared.vibeExemplars(personalityId: "roast_coach")
         let request = AIClient.DynamicLineRequest(
             personalityId: "roast_coach",
             trigger: trigger,
             runContext: context,
             recentDispatched: recent.isEmpty ? nil : recent,
             customNote: nil,
-            personalNotes: personalNotes.isEmpty ? nil : personalNotes
+            personalNotes: personalNotes.isEmpty ? nil : personalNotes,
+            likedLineExamples: liked.isEmpty ? nil : liked
         )
 
         log.info("ContextualCoach firing trigger=\(trigger.rawValue, privacy: .public)")
@@ -480,6 +482,7 @@ final class ContextualCoach {
         )
         let recent = ScriptEngine.shared.recentDispatchedLines
         let personalNotes = PersonalContextStore.shared.bullets
+        let liked = LikedLinesStore.shared.vibeExemplars(personalityId: "roast_coach")
         let request = AIClient.MusicCommentRequest(
             personalityId: "roast_coach",
             track: AIClient.MusicTrack(
@@ -494,7 +497,8 @@ final class ContextualCoach {
             lyricLanguage: selection.language,
             runContext: context,
             recentDispatched: recent.isEmpty ? nil : recent,
-            personalNotes: personalNotes.isEmpty ? nil : personalNotes
+            personalNotes: personalNotes.isEmpty ? nil : personalNotes,
+            likedLineExamples: liked.isEmpty ? nil : liked
         )
         do {
             let result = try await AIClient.shared.generateMusicComment(request)

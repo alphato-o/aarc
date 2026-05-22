@@ -149,9 +149,17 @@ function buildUserPrompt(req: MusicCommentRequest): string {
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");
-        lines.push("PERSONAL TROLL FUEL (occasionally fuse one of these with the lyric riff — specifics, not vague):");
+        lines.push("PERSONAL TROLL FUEL — FACTS, NOT PHRASES. Occasionally fuse one of these with the lyric riff, but ALWAYS re-phrase. Never quote a bullet verbatim:");
         for (const p of req.personalNotes) {
             lines.push(`- ${p}`);
+        }
+    }
+
+    if (req.likedLineExamples && req.likedLineExamples.length > 0) {
+        lines.push("");
+        lines.push("LIKED LINES (CALIBRATION ONLY — DO NOT COPY). Heart-tagged from past runs. Texture references only — never re-use a phrase or punchline from this list:");
+        for (const ex of req.likedLineExamples) {
+            lines.push(`- "${ex}"`);
         }
     }
 

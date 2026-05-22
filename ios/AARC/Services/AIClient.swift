@@ -38,6 +38,10 @@ actor AIClient {
         /// generated and played one via /dynamic-line as a fast-start
         /// opener so the runner could begin moving.
         var skipOpener: Bool = false
+        /// Lines the runner has explicitly heart-liked from past runs.
+        /// Sent as VIBE-ONLY calibration; the prompt is strict about
+        /// never copying them verbatim. Capped at ~12 most-recent.
+        var likedLineExamples: [String]?
 
         /// Convenience — derive a ScriptPlan from a RunPlan + run type.
         static func from(_ plan: RunPlan, runType: RunType, personalityId: String) -> ScriptPlan {
@@ -143,6 +147,9 @@ actor AIClient {
         /// browser side project has zero traction", "he is not going
         /// to be Sam Altman". Free-form short bullets.
         var personalNotes: [String]?
+        /// Heart-liked lines from past runs — sent as vibe-only
+        /// calibration. Prompt is strict about never copying verbatim.
+        var likedLineExamples: [String]?
     }
 
     struct DynamicLineResult: Sendable {
@@ -158,7 +165,8 @@ actor AIClient {
         plan: RunPlan,
         runType: RunType,
         personalityId: String = "roast_coach",
-        personalNotes: [String]? = nil
+        personalNotes: [String]? = nil,
+        likedLineExamples: [String]? = nil
     ) async throws -> DynamicLineResult {
         let context = DynamicLineContext(
             elapsedSeconds: 0,
@@ -179,7 +187,8 @@ actor AIClient {
             runContext: context,
             recentDispatched: nil,
             customNote: nil,
-            personalNotes: personalNotes
+            personalNotes: personalNotes,
+            likedLineExamples: likedLineExamples
         )
         return try await generateDynamicLine(request)
     }
@@ -253,6 +262,8 @@ actor AIClient {
         var recentDispatched: [String]?
         /// Same personal-context bullets we send to /dynamic-line.
         var personalNotes: [String]?
+        /// Same liked-line vibe references we send to /dynamic-line.
+        var likedLineExamples: [String]?
     }
 
     struct MusicCommentResult: Sendable {

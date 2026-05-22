@@ -136,9 +136,16 @@ function buildUserPrompt(
     }
     if (req.userMemory && req.userMemory.length > 0) {
         lines.push("");
-        lines.push("PERSONAL TROLL FUEL (specifics the runner asked you to roast them about — weave into per-km loop variants, halfway, and at least one surprise roast; use the names + numbers verbatim where possible):");
+        lines.push("PERSONAL TROLL FUEL — FACTS, NOT PHRASES. These are things the runner has told us about themselves. Use the FACTS as material; INVENT a new joke every line. NEVER quote a bullet verbatim — re-phrase, find a fresh angle, change the image. If the bullet says 'X has 10 users', a good line might be 'X's user base would fit in a London cab' or 'X — popular as tonsillitis' — different metaphor, different vocabulary, every time:");
         for (const m of req.userMemory) {
             lines.push(`- ${m}`);
+        }
+    }
+    if (req.likedLineExamples && req.likedLineExamples.length > 0) {
+        lines.push("");
+        lines.push("LIKED LINES (CALIBRATION ONLY — DO NOT COPY ANY OF THESE). These are lines the runner heart-tagged from past runs. Use them as TEXTURE references — they tell you what length, rhythm, swagger, and specificity hits for THIS runner. You are FORBIDDEN from reusing any phrase, image, name, or punchline from this list. If you find yourself reaching for one, rewrite from scratch:");
+        for (const ex of req.likedLineExamples) {
+            lines.push(`- "${ex}"`);
         }
     }
     lines.push("", "Generate the script now. JSON only.");

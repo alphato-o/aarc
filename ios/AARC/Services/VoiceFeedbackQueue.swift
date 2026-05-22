@@ -159,6 +159,9 @@ final class VoiceFeedbackQueue {
         pending.removeAll()
         Speaker.shared.stopActiveBackend()
         AudioPlaybackManager.shared.deactivate()
+        // Wipe the subtitle so nothing lingers after an explicit
+        // stop (end-run, mute, audio session interruption).
+        LiveSubtitleStore.shared.clear()
     }
 
     /// Reset diagnostic counters at the start of a run.
@@ -206,6 +209,9 @@ final class VoiceFeedbackQueue {
         currentlyPlaying = item
         lastDispatchedAt = .now
         deactivateTask?.cancel()
+        // Notify the subtitle store so the in-run cockpit can show
+        // what the coach is currently saying, plus the heart button.
+        LiveSubtitleStore.shared.startedPlaying(item)
         // NOTE: do NOT activate the audio session here. Activation ducks
         // music immediately, and `playSync` will spend the next 100ms-2s
         // fetching+decoding the ElevenLabs audio — that gap was the source
@@ -225,6 +231,9 @@ final class VoiceFeedbackQueue {
             // `currentlyPlaying` — the cancel path has already replaced it.
             if Task.isCancelled { return }
             guard let self else { return }
+            // Subtitle now enters dwell window (still on screen, audio
+            // done) so the user can hit heart.
+            LiveSubtitleStore.shared.finishedPlaying(item)
             self.dispatched += 1
             self.currentlyPlaying = nil
             self.kickNext()

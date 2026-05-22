@@ -18,6 +18,7 @@ struct ActiveRunView: View {
     @Environment(LiveMetricsConsumer.self) private var consumer
     @State private var nowPlaying = NowPlayingStore.shared
     @State private var chartStore = LiveRunChartStore.shared
+    @State private var subtitleStore = LiveSubtitleStore.shared
     @State private var showEndConfirm = false
 
     var onDismiss: () -> Void = {}
@@ -45,6 +46,7 @@ struct ActiveRunView: View {
         } message: {
             Text("Ends tracking on the phone or sends End to the watch.")
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: subtitleStore.currentLine?.id)
     }
 
     // MARK: - Background
@@ -68,11 +70,32 @@ struct ActiveRunView: View {
             statusStrip
             cockpit
             liveChart
-            mediaCommand
+            bottomWidget
             endLink
         }
         .padding(.horizontal, 20)
         .padding(.top, 4)  // breathing room under the iOS clock / Dynamic Island
+    }
+
+    /// Bottom slot — normally the music command (album art + track +
+    /// transport). While the coach is speaking (and for the few-second
+    /// dwell window after), the slot transforms into the subtitle bar
+    /// so the runner can see the line and react with the heart button.
+    @ViewBuilder
+    private var bottomWidget: some View {
+        if let line = subtitleStore.currentLine {
+            LiveSubtitleBar(line: line) {
+                subtitleStore.toggleLike()
+            }
+            .transition(.asymmetric(
+                insertion: .opacity.combined(with: .move(edge: .bottom)),
+                removal: .opacity
+            ))
+            .id(line.id)
+        } else {
+            mediaCommand
+                .transition(.opacity)
+        }
     }
 
     /// Slim status indicator strip. No interactive controls here — they

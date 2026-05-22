@@ -150,9 +150,17 @@ function buildUserPrompt(req: DynamicLineRequest): string {
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");
-        lines.push("PERSONAL TROLL FUEL (specific things the runner asked you to use against them — be blunt, use the SPECIFICS, names + numbers + projects verbatim where possible):");
+        lines.push("PERSONAL TROLL FUEL — FACTS, NOT PHRASES. Things the runner has told us about themselves. Use the FACTS as material; invent a NEW angle each line. NEVER copy a bullet verbatim — change the image, the metaphor, the vocabulary. The bullet 'X has 10 users' should become a fresh joke ('X — fewer fans than a Croatian bocce league') not a regurgitation:");
         for (const p of req.personalNotes) {
             lines.push(`- ${p}`);
+        }
+    }
+
+    if (req.likedLineExamples && req.likedLineExamples.length > 0) {
+        lines.push("");
+        lines.push("LIKED LINES (CALIBRATION ONLY — DO NOT COPY). Heart-tagged by the runner in past runs. Use them as TEXTURE only: length, rhythm, swagger, specificity. You are FORBIDDEN from reusing any phrase, image, or punchline from this list. If a draft echoes one, rewrite from scratch:");
+        for (const ex of req.likedLineExamples) {
+            lines.push(`- "${ex}"`);
         }
     }
 
