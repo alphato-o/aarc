@@ -1,4 +1,6 @@
 import Foundation
+import SwiftData
+import OSLog
 import WidgetKit
 import AARCKit
 
@@ -14,6 +16,8 @@ import AARCKit
 /// run.
 @MainActor
 enum LastRunSnapshotStore {
+    private static let log = Logger(subsystem: "club.aarun.AARC", category: "WidgetSnapshot")
+
     static func write(from record: RunRecord, paceSplits: [Double]?) {
         let snapshot = LastRunSnapshot(
             runId: record.id,
@@ -28,18 +32,57 @@ enum LastRunSnapshotStore {
         )
 
         guard let url = LastRunSnapshot.sharedFileURL() else {
-            // App Group entitlement not provisioned yet — skip silently
-            // rather than crash on the first run after install.
+            // App Group entitlement not provisioned yet — happens when
+            // the App Group hasn't been registered in the Apple Developer
+            // Portal under Identifiers → App Groups, OR when the dev
+            // profile hasn't been refreshed since the entitlement was
+            // added. The widget will keep showing the empty state until
+            // this is fixed. See the commit message that introduced the
+            // widget for the manual steps.
+            log.error("App Group container URL is nil — entitlement not provisioned for \(LastRunSnapshot.appGroupId, privacy: .public)")
             return
         }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        guard let data = try? encoder.encode(snapshot) else { return }
+        guard let data = try? encoder.encode(snapshot) else {
+            log.error("Failed to encode LastRunSnapshot")
+            return
+        }
         do {
             try data.write(to: url, options: .atomic)
             WidgetCenter.shared.reloadAllTimelines()
+            log.info("Wrote LastRunSnapshot: distance=\(snapshot.distanceMeters, privacy: .public)m, splits=\(snapshot.paceSplits?.count ?? 0, privacy: .public)")
         } catch {
-            // Non-fatal — the next save attempt will write again.
+            log.error("Failed to write LastRunSnapshot: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Backfill the widget snapshot from existing SwiftData history.
+    /// Called on app launch so runs that pre-date the widget (or that
+    /// landed while the App Group entitlement wasn't yet provisioned)
+    /// surface in the widget without requiring a fresh run.
+    ///
+    /// Historical runs don't have access to the in-memory
+    /// LiveRunChartStore samples anymore, so paceSplits is nil — the
+    /// widget renders without the sparkline. We could re-derive splits
+    /// from HealthKit here, but that's heavy on launch and not
+    /// worth blocking the UI for. A later run will fill in splits.
+    static func backfillFromHistory() {
+        let context = PersistenceStore.shared.container.mainContext
+        var descriptor = FetchDescriptor<RunRecord>(
+            sortBy: [SortDescriptor(\.startedAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = 1
+        do {
+            let runs = try context.fetch(descriptor)
+            guard let latest = runs.first else {
+                log.info("backfill: no runs in history, nothing to write")
+                return
+            }
+            log.info("backfill: writing snapshot for run \(latest.id, privacy: .public)")
+            write(from: latest, paceSplits: nil)
+        } catch {
+            log.error("backfill: fetch failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

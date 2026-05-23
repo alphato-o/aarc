@@ -28,6 +28,13 @@ struct AARCApp: App {
                     // user has already responded, this is a no-op; if they
                     // denied, we silently fall back to stub records.
                     await PermissionsManager.shared.requestHealthKit()
+                    // Push the most recent existing run to the home-screen
+                    // widget. Runs that landed before the widget shipped
+                    // (or while the App Group entitlement wasn't yet
+                    // provisioned) only get into the widget container via
+                    // this backfill — otherwise the widget shows "No runs
+                    // yet" forever.
+                    LastRunSnapshotStore.backfillFromHistory()
                 }
         }
         .modelContainer(PersistenceStore.shared.container)
