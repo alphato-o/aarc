@@ -190,7 +190,7 @@ struct LastRunWidgetView: View {
         Canvas { ctx, size in
             let width = size.width
             let height = size.height
-            // Pace line — amber/orange (accent).
+            // Pace line — sage green (brand accent).
             drawSeries(
                 ctx: &ctx,
                 size: CGSize(width: width, height: height),
@@ -287,9 +287,10 @@ struct LastRunWidgetView: View {
     }
 
     private var accent: Color {
-        // Vivid amber-orange that pops on the all-black canvas — close
-        // to NRC's signature volt-orange without being a copy.
-        Color(red: 1.0, green: 0.55, blue: 0.20)
+        // Bright sage green — readable on the all-black widget canvas
+        // while staying in the same family as the in-app brand colour
+        // (#38503a, which is too dark to read on black on its own).
+        Color(red: 0.482, green: 0.682, blue: 0.498)
     }
 
     // MARK: - Formatting
