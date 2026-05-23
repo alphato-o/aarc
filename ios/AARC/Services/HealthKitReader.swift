@@ -207,6 +207,116 @@ actor HealthKitReader {
         return (pace, hr)
     }
 
+    /// Fine-grained pace + HR splits, one entry per `bucketMeters` of
+    /// distance (default 100 m). Spans the FULL run distance —
+    /// including the partial last bucket — so the widget chart can
+    /// extend all the way to the right edge instead of stopping at
+    /// the last completed km.
+    ///
+    /// Algorithm is the same shape as fetchPerKmSplits but with finer
+    /// distance bins and a denser 5-second time bucket on the
+    /// underlying HK statistics query for accurate interpolation.
+    /// Returns empty arrays for runs shorter than one bucket.
+    func fetchFineSplits(
+        workout: HKWorkout,
+        bucketMeters: Double = 100
+    ) async throws -> (pace: [Double], hr: [Double]) {
+        let totalDistance = distanceMeters(workout)
+        guard totalDistance >= bucketMeters else { return ([], []) }
+
+        // 1. Cumulative distance over time at 5-second resolution.
+        let pred = HKQuery.predicateForSamples(
+            withStart: workout.startDate,
+            end: workout.endDate,
+            options: .strictStartDate
+        )
+        let interval = DateComponents(second: 5)
+        let buckets: [(Date, Double)] = try await withCheckedThrowingContinuation { continuation in
+            let q = HKStatisticsCollectionQuery(
+                quantityType: HKQuantityType(.distanceWalkingRunning),
+                quantitySamplePredicate: pred,
+                options: .cumulativeSum,
+                anchorDate: workout.startDate,
+                intervalComponents: interval
+            )
+            q.initialResultsHandler = { _, results, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                var out: [(Date, Double)] = []
+                results?.enumerateStatistics(from: workout.startDate, to: workout.endDate) { stats, _ in
+                    let meters = stats.sumQuantity()?.doubleValue(for: .meter()) ?? 0
+                    out.append((stats.startDate, meters))
+                }
+                continuation.resume(returning: out)
+            }
+            store.execute(q)
+        }
+        var cumulative: [(Date, Double)] = []
+        var sum: Double = 0
+        for (date, m) in buckets {
+            sum += m
+            cumulative.append((date, sum))
+        }
+        guard cumulative.count >= 2 else { return ([], []) }
+
+        // 2. Interpolate the time of crossing each 100m boundary, AND
+        //    the workout end as the trailing partial boundary. This
+        //    way the last sub-km segment shows up in the chart.
+        let bucketCount = Int(ceil(totalDistance / bucketMeters))
+        var crossings: [Date] = []  // crossings[i] = end of bucket i (1-indexed boundary)
+        for idx in 1...bucketCount {
+            let target = min(Double(idx) * bucketMeters, totalDistance)
+            var found: Date?
+            for i in 0..<(cumulative.count - 1) {
+                let a = cumulative[i]
+                let b = cumulative[i + 1]
+                if a.1 < target && target <= b.1 {
+                    let spanMeters = max(1, b.1 - a.1)
+                    let frac = (target - a.1) / spanMeters
+                    let dt = b.0.timeIntervalSince(a.0)
+                    found = a.0.addingTimeInterval(frac * dt)
+                    break
+                }
+            }
+            crossings.append(found ?? workout.endDate)
+        }
+        guard !crossings.isEmpty else { return ([], []) }
+
+        // 3. Pace per bucket — time taken to cover that bucket's
+        //    distance. For the last (possibly partial) bucket the
+        //    distance < bucketMeters; we normalise it to sec/km the
+        //    same way so the Y axis stays apples-to-apples.
+        var pace: [Double] = []
+        var prev = workout.startDate
+        for (i, crossing) in crossings.enumerated() {
+            let bucketStart = Double(i) * bucketMeters
+            let bucketEnd = min(Double(i + 1) * bucketMeters, totalDistance)
+            let bucketDistance = max(1, bucketEnd - bucketStart)
+            let dt = crossing.timeIntervalSince(prev)
+            // sec/km = dt / (bucketDistance / 1000) = dt * 1000 / bucketDistance
+            pace.append(dt * 1000 / bucketDistance)
+            prev = crossing
+        }
+
+        // 4. HR per bucket — mean of HR samples whose timestamp falls
+        //    in the bucket's time window.
+        let hrSamples = try await fetchHeartRateSeries(during: workout)
+        var hr: [Double] = []
+        var lastBoundary = workout.startDate
+        for crossing in crossings {
+            let inWindow = hrSamples.filter { $0.timestamp >= lastBoundary && $0.timestamp < crossing }
+            let avg: Double = inWindow.isEmpty
+                ? 0
+                : inWindow.map(\.value).reduce(0, +) / Double(inWindow.count)
+            hr.append(avg)
+            lastBoundary = crossing
+        }
+
+        return (pace, hr)
+    }
+
     /// All locations on the workout's route, ordered by time.
     func fetchRoute(for workout: HKWorkout) async throws -> [CLLocation] {
         // 1. Find the route series associated with this workout.

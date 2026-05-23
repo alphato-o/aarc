@@ -27,6 +27,16 @@ public struct LastRunSnapshot: Codable, Sendable, Hashable {
     /// individual entries may be 0 when no HR samples were recorded in
     /// that km (HR strap dropout, indoor with no watch HR, etc.).
     public let hrSplits: [Double]?
+    /// Pace per 100m, one entry per bucket, spanning the FULL run
+    /// distance (including the partial last km). One order of
+    /// magnitude denser than paceSplits — drives the smooth chart
+    /// line on the widget. Each entry is sec/km for that 100m bucket.
+    /// 0 entries indicate missing data (stationary, sensor dropout).
+    public let paceFine: [Double]?
+    /// Heart rate per 100m bucket, ALIGNED with paceFine. Mean HR
+    /// samples that landed within that bucket's time window. 0 when
+    /// no samples were recorded.
+    public let hrFine: [Double]?
 
     public init(
         runId: UUID,
@@ -38,7 +48,9 @@ public struct LastRunSnapshot: Codable, Sendable, Hashable {
         energyKcal: Double,
         runTypeRaw: String,
         paceSplits: [Double]?,
-        hrSplits: [Double]? = nil
+        hrSplits: [Double]? = nil,
+        paceFine: [Double]? = nil,
+        hrFine: [Double]? = nil
     ) {
         self.runId = runId
         self.startedAt = startedAt
@@ -50,6 +62,8 @@ public struct LastRunSnapshot: Codable, Sendable, Hashable {
         self.runTypeRaw = runTypeRaw
         self.paceSplits = paceSplits
         self.hrSplits = hrSplits
+        self.paceFine = paceFine
+        self.hrFine = hrFine
     }
 
     /// App Group identifier used by both the AARC iOS target and the

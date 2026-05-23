@@ -18,7 +18,13 @@ import AARCKit
 enum LastRunSnapshotStore {
     private static let log = Logger(subsystem: "club.aarun.AARC", category: "WidgetSnapshot")
 
-    static func write(from record: RunRecord, paceSplits: [Double]?, hrSplits: [Double]? = nil) {
+    static func write(
+        from record: RunRecord,
+        paceSplits: [Double]?,
+        hrSplits: [Double]? = nil,
+        paceFine: [Double]? = nil,
+        hrFine: [Double]? = nil
+    ) {
         let snapshot = LastRunSnapshot(
             runId: record.id,
             startedAt: record.startedAt,
@@ -29,7 +35,9 @@ enum LastRunSnapshotStore {
             energyKcal: record.cachedEnergyKcal,
             runTypeRaw: record.runTypeRaw,
             paceSplits: paceSplits,
-            hrSplits: hrSplits
+            hrSplits: hrSplits,
+            paceFine: paceFine,
+            hrFine: hrFine
         )
 
         guard let url = LastRunSnapshot.sharedFileURL() else {
@@ -52,7 +60,7 @@ enum LastRunSnapshotStore {
         do {
             try data.write(to: url, options: .atomic)
             WidgetCenter.shared.reloadAllTimelines()
-            log.info("Wrote LastRunSnapshot: distance=\(snapshot.distanceMeters, privacy: .public)m, paceSplits=\(snapshot.paceSplits?.count ?? 0, privacy: .public), hrSplits=\(snapshot.hrSplits?.count ?? 0, privacy: .public)")
+            log.info("Wrote LastRunSnapshot: distance=\(snapshot.distanceMeters, privacy: .public)m, paceSplits=\(snapshot.paceSplits?.count ?? 0, privacy: .public), hrSplits=\(snapshot.hrSplits?.count ?? 0, privacy: .public), paceFine=\(snapshot.paceFine?.count ?? 0, privacy: .public), hrFine=\(snapshot.hrFine?.count ?? 0, privacy: .public)")
         } catch {
             log.error("Failed to write LastRunSnapshot: \(error.localizedDescription, privacy: .public)")
         }
@@ -111,15 +119,45 @@ enum LastRunSnapshotStore {
                 return
             }
             let hrHasAny = splits.hr.contains { $0 > 0 }
-            log.info("backfill: HK splits ready — pace=\(splits.pace.count, privacy: .public), hr=\(hrHasAny ? splits.hr.count : 0, privacy: .public)")
+
+            // Also pull the fine (per-100m) arrays for the smooth chart.
+            // The partial last km is included via this call so the
+            // chart extends to the right edge instead of stopping at
+            // the last completed km.
+            let fine = try await HealthKitReader.shared.fetchFineSplits(workout: workout)
+            let fineHrHasAny = fine.hr.contains { $0 > 0 }
+
+            log.info("backfill: HK splits ready — pace=\(splits.pace.count, privacy: .public), hr=\(hrHasAny ? splits.hr.count : 0, privacy: .public), paceFine=\(fine.pace.count, privacy: .public), hrFine=\(fineHrHasAny ? fine.hr.count : 0, privacy: .public)")
             write(
                 from: record,
                 paceSplits: splits.pace,
-                hrSplits: hrHasAny ? splits.hr : nil
+                hrSplits: hrHasAny ? splits.hr : nil,
+                paceFine: fine.pace.isEmpty ? nil : fine.pace,
+                hrFine: fineHrHasAny ? fine.hr : nil
             )
         } catch {
             log.error("backfill splits async: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Per-100m pace + HR series straight from the in-run sample
+    /// buffer. LiveRunChartStore is already binned per-100m, so each
+    /// sample maps 1:1 to a paceFine / hrFine entry. Zero entries
+    /// indicate gaps (sample missing pace or HR — stationary, sensor
+    /// dropout, etc.). Returns (nil, nil) when nothing is available.
+    static func fineSeriesFromLiveStore() -> (pace: [Double]?, hr: [Double]?) {
+        let samples = LiveRunChartStore.shared.samples
+        guard !samples.isEmpty else { return (nil, nil) }
+        // Samples should already be in bucketIndex order; sort defensively.
+        let sorted = samples.sorted { $0.bucketIndex < $1.bucketIndex }
+        var pace: [Double] = []
+        var hr: [Double] = []
+        for sample in sorted {
+            pace.append(sample.paceSecPerKm ?? 0)
+            hr.append(sample.heartRate ?? 0)
+        }
+        let hrHasAny = hr.contains { $0 > 0 }
+        return (pace, hrHasAny ? hr : nil)
     }
 
     /// Compute aligned per-km pace + HR splits from the in-run sample

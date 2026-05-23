@@ -182,11 +182,16 @@ final class LiveMetricsConsumer {
         // Push the latest snapshot to the App Group so the home-screen
         // widget can show this run. Splits (pace + HR) derived from
         // the in-run chart store BEFORE it resets for the next run.
+        // We send BOTH per-km (for legacy widget code paths) AND the
+        // fine per-100m series (for the smooth chart line).
         let splits = LastRunSnapshotStore.splitsFromLiveStore()
+        let fine = LastRunSnapshotStore.fineSeriesFromLiveStore()
         LastRunSnapshotStore.write(
             from: savedRecord,
             paceSplits: splits.pace,
-            hrSplits: splits.hr
+            hrSplits: splits.hr,
+            paceFine: fine.pace,
+            hrFine: fine.hr
         )
     }
 
@@ -216,10 +221,13 @@ final class LiveMetricsConsumer {
         // Push a best-effort snapshot off the stub so the home-screen
         // widget shows something while HK syncs in the background.
         let splits = LastRunSnapshotStore.splitsFromLiveStore()
+        let fine = LastRunSnapshotStore.fineSeriesFromLiveStore()
         LastRunSnapshotStore.write(
             from: record,
             paceSplits: splits.pace,
-            hrSplits: splits.hr
+            hrSplits: splits.hr,
+            paceFine: fine.pace,
+            hrFine: fine.hr
         )
     }
 }

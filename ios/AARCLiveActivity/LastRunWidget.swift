@@ -110,13 +110,13 @@ struct LastRunWidgetView: View {
 
     // MARK: - Medium
 
-    /// NRC-inspired layout: compact header at top, an inline stats
-    /// row (date / distance / avg pace), then a tall chart with
-    /// labeled X+Y axes and per-km vertical gridlines owning the
-    /// bottom ~65% of the widget.
+    /// NRC-inspired layout: stats row at the top (date + distance +
+    /// avg pace), then a tall chart with labeled X+Y axes and per-km
+    /// vertical gridlines owning the bottom ~70% of the widget. The
+    /// header row ("LAST RUN" + duplicate date) is gone — its slot is
+    /// reclaimed by the chart.
     private func medium(_ snap: LastRunSnapshot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            header(snap, compact: false)
             statsRow(snap)
             chartArea(snap)
         }
@@ -182,10 +182,29 @@ struct LastRunWidgetView: View {
 
     @ViewBuilder
     private func chartArea(_ snap: LastRunSnapshot) -> some View {
-        if let pace = snap.paceSplits, pace.count >= 2 {
-            splitsChart(pace: pace, hr: snap.hrSplits)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 4)
+        // Prefer fine (per-100m) arrays when available — they give
+        // ~10× the resolution of the per-km splits and the chart line
+        // reads smooth instead of polygonal. Fall back to per-km
+        // splits if a snapshot was written before the fine arrays
+        // existed.
+        if let pace = snap.paceFine, pace.count >= 2 {
+            splitsChart(
+                pace: pace,
+                hr: snap.hrFine,
+                bucketMeters: 100,
+                totalDistanceMeters: snap.distanceMeters
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, 4)
+        } else if let pace = snap.paceSplits, pace.count >= 2 {
+            splitsChart(
+                pace: pace,
+                hr: snap.hrSplits,
+                bucketMeters: 1000,
+                totalDistanceMeters: snap.distanceMeters
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, 4)
         } else {
             VStack {
                 Spacer()
@@ -230,17 +249,27 @@ struct LastRunWidgetView: View {
         }
     }
 
-    /// Dual-line per-km chart with labeled X+Y axes and vertical
-    /// gridlines at each km — NRC-style. Pace (sage green) is the
-    /// primary series and its bounds appear on the Y axis. HR
-    /// (pink-red) rides along normalised to its own range — its
-    /// scale isn't surfaced on the axis to avoid noise, but the
-    /// shape of the line still tells the story.
+    /// Dual-line chart with labeled X+Y axes and vertical gridlines
+    /// at each km — NRC-style. Pace (sage green) is the primary
+    /// series and its bounds appear on the Y axis. HR (pink-red)
+    /// rides along normalised to its own range.
     ///
-    /// Pace is INVERTED (fastest km = highest point) so the line
+    /// Pace is INVERTED (fastest plots at the top) so the line
     /// visually agrees with intuition: "going faster = going up."
-    private func splitsChart(pace: [Double], hr: [Double]?) -> some View {
-        // Layout margins reserved for axis labels.
+    ///
+    /// `bucketMeters` is the distance each entry in `pace`/`hr`
+    /// represents — 100 for the fine series, 1000 for the legacy
+    /// per-km splits. `totalDistanceMeters` is the run's real total
+    /// distance; the X axis spans 0 → totalDistanceMeters so partial
+    /// final buckets are still drawn against the right edge of the
+    /// plot, and km gridlines land at their accurate positions
+    /// regardless of bucket count.
+    private func splitsChart(
+        pace: [Double],
+        hr: [Double]?,
+        bucketMeters: Double,
+        totalDistanceMeters: Double
+    ) -> some View {
         let yLabelWidth: CGFloat = 32
         let xLabelHeight: CGFloat = 14
 
@@ -265,25 +294,28 @@ struct LastRunWidgetView: View {
             .frame(width: yLabelWidth - 4, alignment: .trailing)
             .padding(.bottom, xLabelHeight)
 
-            // Chart plot area + gridlines + line series.
             Canvas { ctx, size in
                 let plotW = size.width - yLabelWidth
                 let plotH = size.height - xLabelHeight
-                guard plotW > 0, plotH > 0 else { return }
+                guard plotW > 0, plotH > 0, totalDistanceMeters > 0 else { return }
                 let xOrigin = yLabelWidth
-                let kmCount = pace.count
+                let totalKm = Int(floor(totalDistanceMeters / 1000))
 
-                // Vertical gridlines at each km boundary.
+                // Vertical gridlines at every COMPLETED km boundary
+                // (1km, 2km, …). The partial tail past the last km
+                // boundary plots without a gridline behind it.
                 let lineColor = Color.white.opacity(0.12)
-                for k in 1...kmCount {
-                    let x = xOrigin + CGFloat(k) * plotW / CGFloat(kmCount)
-                    var path = Path()
-                    path.move(to: CGPoint(x: x, y: 0))
-                    path.addLine(to: CGPoint(x: x, y: plotH))
-                    ctx.stroke(path, with: .color(lineColor), lineWidth: 0.5)
+                if totalKm >= 1 {
+                    for k in 1...totalKm {
+                        let xRatio = CGFloat(k) * 1000.0 / CGFloat(totalDistanceMeters)
+                        let x = xOrigin + xRatio * plotW
+                        var path = Path()
+                        path.move(to: CGPoint(x: x, y: 0))
+                        path.addLine(to: CGPoint(x: x, y: plotH))
+                        ctx.stroke(path, with: .color(lineColor), lineWidth: 0.5)
+                    }
                 }
-                // Baseline at the bottom of the plot area, a touch
-                // brighter so the chart sits cleanly on a horizon.
+                // Horizon line.
                 var base = Path()
                 base.move(to: CGPoint(x: xOrigin, y: plotH))
                 base.addLine(to: CGPoint(x: xOrigin + plotW, y: plotH))
@@ -295,13 +327,15 @@ struct LastRunWidgetView: View {
                     origin: CGPoint(x: xOrigin, y: 0),
                     plotSize: CGSize(width: plotW, height: plotH),
                     values: pace,
+                    bucketMeters: bucketMeters,
+                    totalDistanceMeters: totalDistanceMeters,
                     normalize: { vs, v in
                         let valid = vs.filter { $0 > 0 }
                         guard let lo = valid.min(), let hi = valid.max(), hi > lo else { return 0.5 }
                         return 1.0 - (v - lo) / (hi - lo)
                     },
                     color: accent,
-                    lineWidth: 2.0
+                    lineWidth: bucketMeters <= 200 ? 1.6 : 2.0
                 )
                 // HR line — pink/red. Only renders when present.
                 if let hr, hr.contains(where: { $0 > 0 }) {
@@ -310,39 +344,47 @@ struct LastRunWidgetView: View {
                         origin: CGPoint(x: xOrigin, y: 0),
                         plotSize: CGSize(width: plotW, height: plotH),
                         values: hr,
+                        bucketMeters: bucketMeters,
+                        totalDistanceMeters: totalDistanceMeters,
                         normalize: { vs, v in
                             let valid = vs.filter { $0 > 0 }
                             guard let lo = valid.min(), let hi = valid.max(), hi > lo else { return 0.5 }
                             return (v - lo) / (hi - lo)
                         },
                         color: hrColor,
-                        lineWidth: 1.6
+                        lineWidth: bucketMeters <= 200 ? 1.3 : 1.6
                     )
                 }
             }
 
-            // X axis labels — "1km" at each gridline. For long runs we
-            // thin them out so they don't overlap.
-            xAxisLabels(kmCount: pace.count, yLabelWidth: yLabelWidth, xLabelHeight: xLabelHeight)
+            xAxisLabels(
+                totalDistanceMeters: totalDistanceMeters,
+                yLabelWidth: yLabelWidth,
+                xLabelHeight: xLabelHeight
+            )
         }
     }
 
-    /// Bottom-anchored row of "1km, 2km, …" labels aligned with each
-    /// km gridline. For long runs we skip every other label so
-    /// neighbours don't collide visually.
-    private func xAxisLabels(kmCount: Int, yLabelWidth: CGFloat, xLabelHeight: CGFloat) -> some View {
-        // Pick a step: show every km up to 7, every 2 km up to 14,
-        // every 5 km beyond that. Keeps labels from overlapping.
+    /// Bottom-anchored row of "1km, 2km, …" labels, positioned at the
+    /// exact x coordinate where each km boundary lives within the
+    /// run's TOTAL distance (not within the bucket array). For runs
+    /// longer than 7 km we skip every other label up to 14 km, then
+    /// every 5 km, so neighbours don't collide.
+    private func xAxisLabels(
+        totalDistanceMeters: Double,
+        yLabelWidth: CGFloat,
+        xLabelHeight: CGFloat
+    ) -> some View {
+        let totalKm = Int(floor(totalDistanceMeters / 1000))
         let step: Int = {
-            if kmCount <= 7 { return 1 }
-            if kmCount <= 14 { return 2 }
+            if totalKm <= 7 { return 1 }
+            if totalKm <= 14 { return 2 }
             return 5
         }()
         return GeometryReader { geo in
             let plotW = geo.size.width - yLabelWidth
-            let unit = plotW / CGFloat(kmCount)
-            ForEach(1...kmCount, id: \.self) { k in
-                if k % step == 0 {
+            ForEach(1...max(1, totalKm), id: \.self) { k in
+                if k <= totalKm, k % step == 0 {
                     Text("\(k)km")
                         .font(.system(size: 9, weight: .semibold, design: .rounded))
                         .monospacedDigit()
@@ -350,7 +392,7 @@ struct LastRunWidgetView: View {
                         .fixedSize()
                         .frame(width: 32, alignment: .center)
                         .position(
-                            x: yLabelWidth + CGFloat(k) * unit,
+                            x: yLabelWidth + CGFloat(k) * 1000.0 / CGFloat(totalDistanceMeters) * plotW,
                             y: geo.size.height - xLabelHeight / 2
                         )
                 }
@@ -358,28 +400,37 @@ struct LastRunWidgetView: View {
         }
     }
 
-    /// Plot one series as a polyline. Skips entries with value 0 (no
-    /// data — e.g., a km where HR strap dropped out) so the line
-    /// doesn't dive to the floor on those gaps; instead it renders
-    /// separate segments. Each km gets one sample point; x is the
-    /// CENTRE of that km's column (between two gridlines).
+    /// Plot one series as a polyline. Each entry maps to the CENTRE
+    /// of its bucket (bucketStart + bucketMeters/2). X is computed
+    /// against the run's TOTAL distance so a partial last bucket
+    /// still anchors correctly within the plot, and the line extends
+    /// to the right edge when the run ended mid-km.
+    ///
+    /// Skips entries with value 0 — gaps render as separate segments
+    /// rather than the line diving to the floor.
     private func drawSeries(
         ctx: inout GraphicsContext,
         origin: CGPoint,
         plotSize: CGSize,
         values: [Double],
+        bucketMeters: Double,
+        totalDistanceMeters: Double,
         normalize: ([Double], Double) -> Double,
         color: Color,
         lineWidth: CGFloat
     ) {
-        guard values.count >= 2 else { return }
-        let kmWidth = plotSize.width / CGFloat(values.count)
+        guard values.count >= 2, totalDistanceMeters > 0 else { return }
         var path = Path()
         var penDown = false
         for (i, v) in values.enumerated() {
             guard v > 0 else { penDown = false; continue }
-            // Centre of the i-th km column.
-            let x = origin.x + (CGFloat(i) + 0.5) * kmWidth
+            let bucketStart = Double(i) * bucketMeters
+            // For the final partial bucket, the centre is half the
+            // remaining distance rather than half of bucketMeters.
+            let bucketEnd = min(Double(i + 1) * bucketMeters, totalDistanceMeters)
+            let centre = (bucketStart + bucketEnd) / 2
+            let xRatio = centre / totalDistanceMeters
+            let x = origin.x + CGFloat(xRatio) * plotSize.width
             let yUnit = normalize(values, v)
             let y = origin.y + plotSize.height * (1 - CGFloat(yUnit))
             if penDown {
@@ -479,17 +530,30 @@ struct LastRunWidgetView: View {
 
 extension LastRunSnapshot {
     static var preview: LastRunSnapshot {
-        LastRunSnapshot(
+        let totalMeters: Double = 5240
+        // Build a smooth synthetic paceFine + hrFine for previews.
+        let bucketCount = Int((totalMeters / 100).rounded(.up))   // 53 buckets
+        let paceFine: [Double] = (0..<bucketCount).map { i in
+            let t = Double(i) / Double(max(1, bucketCount - 1))
+            return 300 + sin(t * .pi * 3) * 18 + t * 12
+        }
+        let hrFine: [Double] = (0..<bucketCount).map { i in
+            let t = Double(i) / Double(max(1, bucketCount - 1))
+            return 140 + sin(t * .pi * 2.2) * 14 + t * 22
+        }
+        return LastRunSnapshot(
             runId: UUID(),
             startedAt: Date().addingTimeInterval(-3600),
             endedAt: Date().addingTimeInterval(-1800),
-            distanceMeters: 5240,
+            distanceMeters: totalMeters,
             durationSeconds: 1623,
             avgPaceSecPerKm: 309,
             energyKcal: 312,
             runTypeRaw: "outdoor",
             paceSplits: [298, 305, 312, 308, 314, 320],
-            hrSplits: [142, 154, 158, 161, 163, 168]
+            hrSplits: [142, 154, 158, 161, 163, 168],
+            paceFine: paceFine,
+            hrFine: hrFine
         )
     }
 }
