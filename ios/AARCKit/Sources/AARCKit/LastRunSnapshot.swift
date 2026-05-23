@@ -19,9 +19,14 @@ public struct LastRunSnapshot: Codable, Sendable, Hashable {
     /// "outdoor" or "treadmill".
     public let runTypeRaw: String
     /// Pace in sec/km, one entry per full km the runner completed.
-    /// Drives the per-km sparkline on the medium widget. Optional —
+    /// Drives the per-km pace line on the medium widget. Optional —
     /// older snapshots may not have it; the widget renders fine without.
     public let paceSplits: [Double]?
+    /// Average heart rate, one entry per full km, ALIGNED with paceSplits.
+    /// Drives the per-km HR line on the medium widget. Optional — and
+    /// individual entries may be 0 when no HR samples were recorded in
+    /// that km (HR strap dropout, indoor with no watch HR, etc.).
+    public let hrSplits: [Double]?
 
     public init(
         runId: UUID,
@@ -32,7 +37,8 @@ public struct LastRunSnapshot: Codable, Sendable, Hashable {
         avgPaceSecPerKm: Double,
         energyKcal: Double,
         runTypeRaw: String,
-        paceSplits: [Double]?
+        paceSplits: [Double]?,
+        hrSplits: [Double]? = nil
     ) {
         self.runId = runId
         self.startedAt = startedAt
@@ -43,6 +49,7 @@ public struct LastRunSnapshot: Codable, Sendable, Hashable {
         self.energyKcal = energyKcal
         self.runTypeRaw = runTypeRaw
         self.paceSplits = paceSplits
+        self.hrSplits = hrSplits
     }
 
     /// App Group identifier used by both the AARC iOS target and the

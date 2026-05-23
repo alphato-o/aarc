@@ -102,6 +102,111 @@ actor HealthKitReader {
         }
     }
 
+    /// Per-km pace + HR splits, derived from HealthKit. Returns two
+    /// arrays of equal length — one entry per *completed* kilometre.
+    ///
+    /// Algorithm:
+    /// 1. Bucket the workout's distance-walking-running samples every
+    ///    15 seconds (cumulative-sum statistics query) and accumulate
+    ///    into a (time, cumulativeDistance) trace.
+    /// 2. For each km boundary (1 km, 2 km, …, floor(totalDistance/1000) km)
+    ///    linearly interpolate to find the time the runner crossed it.
+    /// 3. paceSplits[i] = seconds between the (i-1)th and ith crossing
+    ///    (or the workout start for i=0). That's literal sec/km.
+    /// 4. hrSplits[i] = mean HR of all HR samples whose timestamp falls
+    ///    inside that km's time window. 0 when no HR samples landed
+    ///    (HR strap dropout, indoor watch off-wrist, etc.).
+    ///
+    /// Returns empty arrays for runs shorter than 1 km — there's no
+    /// completed km to summarise.
+    func fetchPerKmSplits(workout: HKWorkout) async throws -> (pace: [Double], hr: [Double]) {
+        let totalDistance = distanceMeters(workout)
+        guard totalDistance >= 1000 else { return ([], []) }
+
+        // 1. Cumulative distance over time, finely bucketed for
+        //    interpolation accuracy.
+        let pred = HKQuery.predicateForSamples(
+            withStart: workout.startDate,
+            end: workout.endDate,
+            options: .strictStartDate
+        )
+        let interval = DateComponents(second: 15)
+        let buckets: [(Date, Double)] = try await withCheckedThrowingContinuation { continuation in
+            let q = HKStatisticsCollectionQuery(
+                quantityType: HKQuantityType(.distanceWalkingRunning),
+                quantitySamplePredicate: pred,
+                options: .cumulativeSum,
+                anchorDate: workout.startDate,
+                intervalComponents: interval
+            )
+            q.initialResultsHandler = { _, results, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                var out: [(Date, Double)] = []
+                results?.enumerateStatistics(from: workout.startDate, to: workout.endDate) { stats, _ in
+                    let meters = stats.sumQuantity()?.doubleValue(for: .meter()) ?? 0
+                    out.append((stats.startDate, meters))
+                }
+                continuation.resume(returning: out)
+            }
+            store.execute(q)
+        }
+
+        // Compute cumulative.
+        var cumulative: [(Date, Double)] = []
+        var sum: Double = 0
+        for (date, m) in buckets {
+            sum += m
+            cumulative.append((date, sum))
+        }
+        guard cumulative.count >= 2 else { return ([], []) }
+
+        // 2. Interpolate time-of-crossing for each completed km.
+        let totalKm = Int(totalDistance / 1000)
+        guard totalKm >= 1 else { return ([], []) }
+        var kmCrossings: [Date] = []
+        for kmIdx in 1...totalKm {
+            let target = Double(kmIdx) * 1000
+            for i in 0..<(cumulative.count - 1) {
+                let a = cumulative[i]
+                let b = cumulative[i + 1]
+                if a.1 < target && target <= b.1 {
+                    let spanMeters = max(1, b.1 - a.1)
+                    let frac = (target - a.1) / spanMeters
+                    let dt = b.0.timeIntervalSince(a.0)
+                    kmCrossings.append(a.0.addingTimeInterval(frac * dt))
+                    break
+                }
+            }
+        }
+        guard !kmCrossings.isEmpty else { return ([], []) }
+
+        // 3. Pace per km = time between crossings.
+        var pace: [Double] = []
+        var prev = workout.startDate
+        for crossing in kmCrossings {
+            pace.append(crossing.timeIntervalSince(prev))
+            prev = crossing
+        }
+
+        // 4. HR per km = mean HR samples within each km's time window.
+        let hrSamples = try await fetchHeartRateSeries(during: workout)
+        var hr: [Double] = []
+        var lastBoundary = workout.startDate
+        for crossing in kmCrossings {
+            let inWindow = hrSamples.filter { $0.timestamp >= lastBoundary && $0.timestamp < crossing }
+            let avg: Double = inWindow.isEmpty
+                ? 0
+                : inWindow.map(\.value).reduce(0, +) / Double(inWindow.count)
+            hr.append(avg)
+            lastBoundary = crossing
+        }
+
+        return (pace, hr)
+    }
+
     /// All locations on the workout's route, ordered by time.
     func fetchRoute(for workout: HKWorkout) async throws -> [CLLocation] {
         // 1. Find the route series associated with this workout.

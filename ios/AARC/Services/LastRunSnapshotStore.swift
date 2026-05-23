@@ -18,7 +18,7 @@ import AARCKit
 enum LastRunSnapshotStore {
     private static let log = Logger(subsystem: "club.aarun.AARC", category: "WidgetSnapshot")
 
-    static func write(from record: RunRecord, paceSplits: [Double]?) {
+    static func write(from record: RunRecord, paceSplits: [Double]?, hrSplits: [Double]? = nil) {
         let snapshot = LastRunSnapshot(
             runId: record.id,
             startedAt: record.startedAt,
@@ -28,7 +28,8 @@ enum LastRunSnapshotStore {
             avgPaceSecPerKm: record.cachedAvgPaceSecPerKm,
             energyKcal: record.cachedEnergyKcal,
             runTypeRaw: record.runTypeRaw,
-            paceSplits: paceSplits
+            paceSplits: paceSplits,
+            hrSplits: hrSplits
         )
 
         guard let url = LastRunSnapshot.sharedFileURL() else {
@@ -51,7 +52,7 @@ enum LastRunSnapshotStore {
         do {
             try data.write(to: url, options: .atomic)
             WidgetCenter.shared.reloadAllTimelines()
-            log.info("Wrote LastRunSnapshot: distance=\(snapshot.distanceMeters, privacy: .public)m, splits=\(snapshot.paceSplits?.count ?? 0, privacy: .public)")
+            log.info("Wrote LastRunSnapshot: distance=\(snapshot.distanceMeters, privacy: .public)m, paceSplits=\(snapshot.paceSplits?.count ?? 0, privacy: .public), hrSplits=\(snapshot.hrSplits?.count ?? 0, privacy: .public)")
         } catch {
             log.error("Failed to write LastRunSnapshot: \(error.localizedDescription, privacy: .public)")
         }
@@ -62,11 +63,17 @@ enum LastRunSnapshotStore {
     /// landed while the App Group entitlement wasn't yet provisioned)
     /// surface in the widget without requiring a fresh run.
     ///
-    /// Historical runs don't have access to the in-memory
-    /// LiveRunChartStore samples anymore, so paceSplits is nil — the
-    /// widget renders without the sparkline. We could re-derive splits
-    /// from HealthKit here, but that's heavy on launch and not
-    /// worth blocking the UI for. A later run will fill in splits.
+    /// Two-phase:
+    /// 1. Write the snapshot immediately with stats only (no splits).
+    ///    The widget renders the dual-line chart hidden but distance/
+    ///    time/pace/kcal show right away.
+    /// 2. Asynchronously query HealthKit for the workout's per-km
+    ///    pace + HR splits, then rewrite the snapshot WITH splits.
+    ///    The widget gets a second reload and the chart appears.
+    ///
+    /// Splitting into two phases keeps the launch path fast (no
+    /// HK round-trip blocks initial render) but the chart still
+    /// catches up within a few seconds.
     static func backfillFromHistory() {
         let context = PersistenceStore.shared.container.mainContext
         var descriptor = FetchDescriptor<RunRecord>(
@@ -79,40 +86,85 @@ enum LastRunSnapshotStore {
                 log.info("backfill: no runs in history, nothing to write")
                 return
             }
-            log.info("backfill: writing snapshot for run \(latest.id, privacy: .public)")
-            write(from: latest, paceSplits: nil)
+            log.info("backfill: writing stats-only snapshot for run \(latest.id, privacy: .public)")
+            write(from: latest, paceSplits: nil, hrSplits: nil)
+
+            // Phase 2: fill in splits from HK if available.
+            guard let hkUUID = latest.healthKitWorkoutUUID else { return }
+            Task { @MainActor in
+                await backfillSplitsAsync(record: latest, hkUUID: hkUUID)
+            }
         } catch {
             log.error("backfill: fetch failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    /// Compute per-km pace splits from the in-run sample buffer.
-    /// Each finished km gets one entry (sec/km). Returns nil when the
-    /// store doesn't have enough samples for at least one full km.
-    static func paceSplitsFromLiveStore() -> [Double]? {
+    private static func backfillSplitsAsync(record: RunRecord, hkUUID: UUID) async {
+        do {
+            guard let workout = try await HealthKitReader.shared.fetchWorkout(uuid: hkUUID) else {
+                log.info("backfill: HK workout not yet available for \(hkUUID, privacy: .public)")
+                return
+            }
+            let splits = try await HealthKitReader.shared.fetchPerKmSplits(workout: workout)
+            guard !splits.pace.isEmpty else {
+                log.info("backfill: HK returned empty splits — run < 1 km")
+                return
+            }
+            let hrHasAny = splits.hr.contains { $0 > 0 }
+            log.info("backfill: HK splits ready — pace=\(splits.pace.count, privacy: .public), hr=\(hrHasAny ? splits.hr.count : 0, privacy: .public)")
+            write(
+                from: record,
+                paceSplits: splits.pace,
+                hrSplits: hrHasAny ? splits.hr : nil
+            )
+        } catch {
+            log.error("backfill splits async: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Compute aligned per-km pace + HR splits from the in-run sample
+    /// buffer. Each finished km gets one entry. Returns nil arrays
+    /// when the store doesn't have enough samples for at least one
+    /// full km, OR when no samples carried HR data (HR strap dropout).
+    static func splitsFromLiveStore() -> (pace: [Double]?, hr: [Double]?) {
         let samples = LiveRunChartStore.shared.samples
-        guard !samples.isEmpty else { return nil }
-        // Bucket the 100m samples into km buckets. Within each km
-        // bucket we average the per-100m pace readings, ignoring any
-        // that didn't have a valid pace (early-run, stationary, etc.).
-        var bucketSum: [Int: (sum: Double, count: Int)] = [:]
+        guard !samples.isEmpty else { return (nil, nil) }
+        // Bucket the 100m samples into km buckets and average within.
+        var paceBucket: [Int: (sum: Double, count: Int)] = [:]
+        var hrBucket: [Int: (sum: Double, count: Int)] = [:]
         for sample in samples {
-            guard let pace = sample.paceSecPerKm, pace > 0 else { continue }
             let kmIndex = sample.bucketIndex / 10  // 10 × 100m per km
-            var existing = bucketSum[kmIndex] ?? (0, 0)
-            existing.sum += pace
-            existing.count += 1
-            bucketSum[kmIndex] = existing
+            if let pace = sample.paceSecPerKm, pace > 0 {
+                var existing = paceBucket[kmIndex] ?? (0, 0)
+                existing.sum += pace
+                existing.count += 1
+                paceBucket[kmIndex] = existing
+            }
+            if let hr = sample.heartRate, hr > 0 {
+                var existing = hrBucket[kmIndex] ?? (0, 0)
+                existing.sum += hr
+                existing.count += 1
+                hrBucket[kmIndex] = existing
+            }
         }
-        guard !bucketSum.isEmpty else { return nil }
-        // Only emit splits for kms with enough samples (≥6 of the 10
-        // possible per-100m buckets) so we don't show garbage for the
-        // last partial km.
-        let sorted = bucketSum.sorted { $0.key < $1.key }
-        var splits: [Double] = []
-        for (_, agg) in sorted where agg.count >= 6 {
-            splits.append(agg.sum / Double(agg.count))
+        // Only emit splits for kms with ≥6 of 10 possible per-100m
+        // buckets, so we don't surface garbage for a partial last km.
+        let completedKmIndices = paceBucket
+            .filter { $0.value.count >= 6 }
+            .keys
+            .sorted()
+        guard !completedKmIndices.isEmpty else { return (nil, nil) }
+        let pace = completedKmIndices.map { idx -> Double in
+            let agg = paceBucket[idx]!
+            return agg.sum / Double(agg.count)
         }
-        return splits.isEmpty ? nil : splits
+        // HR is aligned with pace — same km indices. Missing km = 0
+        // (widget chart skips zeros).
+        let hr = completedKmIndices.map { idx -> Double in
+            guard let agg = hrBucket[idx], agg.count > 0 else { return 0 }
+            return agg.sum / Double(agg.count)
+        }
+        let hrHasAny = hr.contains { $0 > 0 }
+        return (pace, hrHasAny ? hr : nil)
     }
 }

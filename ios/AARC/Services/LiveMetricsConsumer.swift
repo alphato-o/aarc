@@ -180,10 +180,14 @@ final class LiveMetricsConsumer {
         try? context.save()
 
         // Push the latest snapshot to the App Group so the home-screen
-        // widget can show this run. Splits derived from the in-run
-        // chart store BEFORE it resets for the next run.
-        let splits = LastRunSnapshotStore.paceSplitsFromLiveStore()
-        LastRunSnapshotStore.write(from: savedRecord, paceSplits: splits)
+        // widget can show this run. Splits (pace + HR) derived from
+        // the in-run chart store BEFORE it resets for the next run.
+        let splits = LastRunSnapshotStore.splitsFromLiveStore()
+        LastRunSnapshotStore.write(
+            from: savedRecord,
+            paceSplits: splits.pace,
+            hrSplits: splits.hr
+        )
     }
 
     private func createStubRecord(workoutUUID: UUID) {
@@ -211,8 +215,12 @@ final class LiveMetricsConsumer {
 
         // Push a best-effort snapshot off the stub so the home-screen
         // widget shows something while HK syncs in the background.
-        let splits = LastRunSnapshotStore.paceSplitsFromLiveStore()
-        LastRunSnapshotStore.write(from: record, paceSplits: splits)
+        let splits = LastRunSnapshotStore.splitsFromLiveStore()
+        LastRunSnapshotStore.write(
+            from: record,
+            paceSplits: splits.pace,
+            hrSplits: splits.hr
+        )
     }
 }
 

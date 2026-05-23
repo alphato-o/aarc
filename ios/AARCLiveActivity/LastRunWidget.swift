@@ -127,9 +127,9 @@ struct LastRunWidgetView: View {
                     .padding(.bottom, 10)
             }
 
-            if let splits = snap.paceSplits, splits.count >= 2 {
-                paceSparkline(splits: splits)
-                    .frame(height: 20)
+            if let pace = snap.paceSplits, pace.count >= 2 {
+                splitsChart(pace: pace, hr: snap.hrSplits)
+                    .frame(height: 32)
                     .padding(.top, 2)
             } else {
                 Spacer(minLength: 0)
@@ -176,31 +176,95 @@ struct LastRunWidgetView: View {
         }
     }
 
-    /// Slim per-km bar sparkline — each bar's height tracks how that
-    /// kilometre's pace compares to the slowest km of the run (fastest
-    /// km = tallest bar). Reads as "kept it together or fell off near
-    /// the end?" without needing axis labels.
-    private func paceSparkline(splits: [Double]) -> some View {
-        let valid = splits.filter { $0 > 0 }
-        let maxPace = valid.max() ?? 1
-        let minPace = valid.min() ?? 0
-        let span = max(1, maxPace - minPace)
-        return HStack(alignment: .bottom, spacing: 2) {
-            ForEach(Array(splits.enumerated()), id: \.offset) { _, pace in
-                Capsule()
-                    .fill(
-                        LinearGradient(
-                            colors: [accent, accent.opacity(0.45)],
-                            startPoint: .top, endPoint: .bottom
-                        )
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .scaleEffect(
-                        y: CGFloat(1 - ((pace - minPace) / span)) * 0.7 + 0.3,
-                        anchor: .bottom
-                    )
+    /// Dual-line per-km chart: pace + heart rate plotted against
+    /// distance. Both series normalised independently to their own
+    /// min/max so they share the same vertical space — the lines
+    /// describe relative shape (was km 4 your slowest? did HR peak
+    /// at km 3?) rather than absolute units. NRC-style: no axis
+    /// labels, no gridlines, just two colored lines + small terminal
+    /// dots.
+    ///
+    /// Pace is INVERTED (fastest km = highest point) so the line
+    /// visually agrees with intuition: "going faster = going up."
+    private func splitsChart(pace: [Double], hr: [Double]?) -> some View {
+        Canvas { ctx, size in
+            let width = size.width
+            let height = size.height
+            // Pace line — amber/orange (accent).
+            drawSeries(
+                ctx: &ctx,
+                size: CGSize(width: width, height: height),
+                values: pace,
+                normalize: { vs, v in
+                    // Higher pace value = slower. Invert so the
+                    // fastest km plots at the TOP of the chart.
+                    let valid = vs.filter { $0 > 0 }
+                    guard let lo = valid.min(), let hi = valid.max(), hi > lo else { return 0.5 }
+                    return 1.0 - (v - lo) / (hi - lo)
+                },
+                color: accent,
+                lineWidth: 2.0
+            )
+            // HR line — pink/red. Only renders when present.
+            if let hr, hr.contains(where: { $0 > 0 }) {
+                drawSeries(
+                    ctx: &ctx,
+                    size: CGSize(width: width, height: height),
+                    values: hr,
+                    normalize: { vs, v in
+                        let valid = vs.filter { $0 > 0 }
+                        guard let lo = valid.min(), let hi = valid.max(), hi > lo else { return 0.5 }
+                        // Higher HR plots at the top.
+                        return (v - lo) / (hi - lo)
+                    },
+                    color: hrColor,
+                    lineWidth: 1.6
+                )
             }
         }
+    }
+
+    /// Plot one series as a polyline + small dots. Skips entries with
+    /// value 0 (no data — e.g., a km where HR strap dropped out) so
+    /// the line doesn't dive to the floor on those gaps; instead it
+    /// renders separate segments.
+    private func drawSeries(
+        ctx: inout GraphicsContext,
+        size: CGSize,
+        values: [Double],
+        normalize: ([Double], Double) -> Double,
+        color: Color,
+        lineWidth: CGFloat
+    ) {
+        guard values.count >= 2 else { return }
+        let stride = values.count > 1 ? size.width / CGFloat(values.count - 1) : size.width
+        // Build a path piece-wise, breaking at gaps.
+        var path = Path()
+        var penDown = false
+        for (i, v) in values.enumerated() {
+            guard v > 0 else { penDown = false; continue }
+            let x = CGFloat(i) * stride
+            let yUnit = normalize(values, v)
+            let y = size.height * (1 - CGFloat(yUnit))
+            if penDown {
+                path.addLine(to: CGPoint(x: x, y: y))
+            } else {
+                path.move(to: CGPoint(x: x, y: y))
+                penDown = true
+            }
+        }
+        ctx.stroke(
+            path,
+            with: .color(color),
+            style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
+        )
+        // Soft glow underneath.
+        ctx.addFilter(.blur(radius: 2.5))
+        ctx.stroke(path, with: .color(color.opacity(0.45)), style: StrokeStyle(lineWidth: lineWidth + 1.5, lineCap: .round))
+    }
+
+    private var hrColor: Color {
+        Color(red: 1.0, green: 0.35, blue: 0.50)
     }
 
     private var empty: some View {
@@ -273,7 +337,8 @@ extension LastRunSnapshot {
             avgPaceSecPerKm: 309,
             energyKcal: 312,
             runTypeRaw: "outdoor",
-            paceSplits: [298, 305, 312, 308, 314, 320]
+            paceSplits: [298, 305, 312, 308, 314, 320],
+            hrSplits: [142, 154, 158, 161, 163, 168]
         )
     }
 }
