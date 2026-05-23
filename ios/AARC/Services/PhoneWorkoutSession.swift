@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import CoreMotion
 import HealthKit
 import Observation
 import OSLog
@@ -16,11 +17,14 @@ import AARCKit
 /// the same `LiveMetrics` shape via `LiveMetricsConsumer.ingest`. No
 /// changes needed in those layers.
 ///
-/// MVP scope (phase 1):
-///   - outdoor only (GPS distance / pace from CLLocationManager)
-///   - no heart rate (phone has no HR sensor; HK live HR from a wrist-
+/// MVP scope:
+///   - outdoor: GPS distance / pace from CLLocationManager
+///   - treadmill: step-derived distance / pace / cadence from
+///     CMPedometer (estimated stride length × steps). Less accurate
+///     than a Stryd pod but unblocks the "stranded at the gym with
+///     no working watch" scenario.
+///   - no heart rate (phone has no HR sensor; live HR from a wrist-
 ///     worn watch can be wired in later)
-///   - treadmill (CMPedometer-based) is a follow-up commit
 @Observable
 @MainActor
 final class PhoneWorkoutSession: NSObject {
@@ -39,9 +43,14 @@ final class PhoneWorkoutSession: NSObject {
     private var workoutBuilder: HKWorkoutBuilder?
     private var routeBuilder: HKWorkoutRouteBuilder?
     private var locationManager: CLLocationManager?
+    private var pedometer: CMPedometer?
 
     /// Accumulated distance in meters.
     private var distanceMeters: Double = 0
+    /// Latest cadence from the pedometer in steps-per-minute. nil when
+    /// outdoor (we don't run the pedometer there) or when CMPedometer
+    /// hasn't produced a cadence reading yet.
+    private var currentCadenceSPM: Double?
     /// Last accepted location (used to compute the next delta).
     private var lastLocation: CLLocation?
     /// Sliding window of recent (timestamp, distance-meters) pairs for
@@ -69,9 +78,15 @@ final class PhoneWorkoutSession: NSObject {
         guard HKHealthStore.isHealthDataAvailable() else {
             throw PhoneWorkoutError.healthKitUnavailable
         }
-        let auth = CLLocationManager().authorizationStatus
-        guard auth == .authorizedWhenInUse || auth == .authorizedAlways else {
-            throw PhoneWorkoutError.locationNotAuthorized
+        // Treadmill / indoor doesn't need GPS — only pedometer. We
+        // still want location auth for outdoor; for treadmill we skip
+        // the check entirely so a runner who never granted location
+        // can still hit the gym.
+        if runType == .outdoor {
+            let auth = CLLocationManager().authorizationStatus
+            guard auth == .authorizedWhenInUse || auth == .authorizedAlways else {
+                throw PhoneWorkoutError.locationNotAuthorized
+            }
         }
 
         let config = HKWorkoutConfiguration()
@@ -95,11 +110,19 @@ final class PhoneWorkoutSession: NSObject {
         self.lastLocation = nil
         self.paceWindow.removeAll()
         self.pendingRouteLocations.removeAll()
+        self.currentCadenceSPM = nil
         self.startedAt = now
         self.currentRunId = runId
         self.lastError = nil
 
-        startLocationUpdates(indoor: runType == .treadmill)
+        // Treadmill: pedometer drives distance. Outdoor: GPS drives
+        // distance + route. We don't run both simultaneously — they'd
+        // double-count steps and burn battery for no gain.
+        if runType == .treadmill {
+            startPedometerUpdates(from: now)
+        } else {
+            startLocationUpdates(indoor: false)
+        }
         startPublishTimer()
 
         self.isActive = true
@@ -118,12 +141,20 @@ final class PhoneWorkoutSession: NSObject {
         publishTimer?.invalidate()
         publishTimer = nil
         locationManager?.stopUpdatingLocation()
+        pedometer?.stopUpdates()
         LiveMetricsConsumer.shared.ingestPaused()
     }
 
     func resume() {
         guard isActive else { return }
-        locationManager?.startUpdatingLocation()
+        // Resume only whichever source was actually in use. Starting
+        // the wrong one would either burn GPS for nothing on a
+        // treadmill OR double-count steps on an outdoor run.
+        if pedometer != nil, let startedAt {
+            startPedometerUpdates(from: startedAt)
+        } else {
+            locationManager?.startUpdatingLocation()
+        }
         startPublishTimer()
         LiveMetricsConsumer.shared.ingestResumed()
     }
@@ -141,6 +172,8 @@ final class PhoneWorkoutSession: NSObject {
         locationManager?.stopUpdatingLocation()
         locationManager?.delegate = nil
         locationManager = nil
+        pedometer?.stopUpdates()
+        pedometer = nil
 
         // Drain any buffered route locations before HK seals the route.
         let route = pendingRouteLocations
@@ -201,6 +234,44 @@ final class PhoneWorkoutSession: NSObject {
         return workoutUUID
     }
 
+    // MARK: - Pedometer (treadmill)
+
+    private func startPedometerUpdates(from start: Date) {
+        guard CMPedometer.isStepCountingAvailable() else {
+            lastError = "Step counting not available on this device."
+            log.error("CMPedometer step counting unavailable")
+            return
+        }
+        let p = CMPedometer()
+        p.startUpdates(from: start) { [weak self] data, error in
+            if let error {
+                Task { @MainActor [weak self] in
+                    self?.lastError = "Pedometer: \(error.localizedDescription)"
+                }
+                return
+            }
+            guard let data else { return }
+            // CMPedometer.distance is an estimate (steps × stride
+            // length). On a treadmill it's the only signal we've got
+            // without external hardware. Cadence is reported in
+            // steps/sec — convert to SPM.
+            let cumulativeMeters = data.distance?.doubleValue ?? 0
+            let spm: Double? = data.currentCadence.map { $0.doubleValue * 60 }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.distanceMeters = cumulativeMeters
+                self.currentCadenceSPM = spm
+                // Push into the pace window so currentPaceSecPerKm()
+                // derives an instantaneous pace the same way the GPS
+                // path does.
+                self.paceWindow.append((t: .now, d: cumulativeMeters))
+                let cutoff = Date().addingTimeInterval(-self.paceWindowSeconds)
+                self.paceWindow.removeAll { $0.t < cutoff }
+            }
+        }
+        self.pedometer = p
+    }
+
     // MARK: - Location
 
     private func startLocationUpdates(indoor: Bool) {
@@ -236,6 +307,7 @@ final class PhoneWorkoutSession: NSObject {
             avgPaceSecPerKm: avgPace,
             currentHeartRate: nil,
             energyKcal: 0,
+            cadenceStepsPerMinute: currentCadenceSPM,
             lastSplit: nil,
             state: .running
         )

@@ -21,6 +21,7 @@ struct RunHomeView: View {
     @State private var orchestrator = RunOrchestrator.shared
     @State private var planStore = ScriptPreviewStore.shared
     @State private var liveConsumer = LiveMetricsConsumer.shared
+    @State private var phoneSession = PhoneSession.shared
     @AppStorage("aarc.trackingSource") private var trackingSourceRaw: String = TrackingSource.watch.rawValue
 
     private var trackingSource: TrackingSource {
@@ -63,6 +64,7 @@ struct RunHomeView: View {
                 .frame(maxHeight: .infinity)
                 .layoutPriority(1)
             trackingSourcePicker
+            watchUnreachableBanner
             startButtons
                 .frame(maxHeight: .infinity)
                 .layoutPriority(1.05)
@@ -222,6 +224,46 @@ struct RunHomeView: View {
         .pickerStyle(.segmented)
     }
 
+    /// Yellow warning card shown when the tracking source is set to
+    /// Watch but the watch app isn't actually reachable. Tappable —
+    /// one tap flips the source to Phone only so the runner doesn't
+    /// have to fish through Settings while waiting on a treadmill.
+    @ViewBuilder
+    private var watchUnreachableBanner: some View {
+        if trackingSource == .watch, !phoneSession.isReachable {
+            Button {
+                trackingSourceRaw = TrackingSource.phone.rawValue
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "applewatch.slash")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.yellow)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Watch app not reachable")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.yellow)
+                        Text(phoneSession.isPaired
+                             ? "Open AARC on your watch — or tap to switch to Phone only."
+                             : "No paired watch detected. Tap to switch to Phone only.")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.yellow.opacity(0.35), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
     // MARK: - Start buttons (oversized — they own the bottom half)
 
     @ViewBuilder
@@ -250,8 +292,6 @@ struct RunHomeView: View {
                 ) {
                     Task { await startTapped(.treadmill) }
                 }
-                .disabled(trackingSource == .phone)
-                .opacity(trackingSource == .phone ? 0.4 : 1)
 
                 bigStartButton(
                     label: "Outdoor",

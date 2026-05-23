@@ -164,6 +164,13 @@ Operational notes:
 
 ---
 
+## Field troubleshooting
+
+When the runner reports something broken on a real run (gym, treadmill, outdoor), check [`docs/troubleshooting.md`](docs/troubleshooting.md) first. Known traps documented there:
+
+- Dev-built watch app can't be reinstalled from iPhone if it gets uninstalled — TestFlight is the long-term fix.
+- Phone-only mode supports both treadmill and outdoor; the home screen surfaces a banner + one-tap fallback when the watch isn't reachable.
+
 ## When in doubt
 
 Ask the founder. Don't guess on product direction; don't invent abstractions to "future-proof". Ship the smallest thing that satisfies the current phase's Definition of Done, then move on.
