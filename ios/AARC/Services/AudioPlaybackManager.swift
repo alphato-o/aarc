@@ -32,6 +32,14 @@ final class AudioPlaybackManager {
         registerInterruptionObserver()
     }
 
+    /// True when the runner has explicitly asked us to keep the
+    /// session active across TTS gaps (phone-only treadmill run,
+    /// where we have no other UIBackgroundMode keeping the app
+    /// alive — the .audio mode applies only as long as the session
+    /// stays active). When this is set, deactivate() becomes a no-op
+    /// until clearSustained() is called.
+    private(set) var sustainedActive: Bool = false
+
     /// One-time category configuration. Idempotent.
     ///
     /// Note: `mode: .default` is deliberate — NOT `.spokenAudio`. The
@@ -44,16 +52,53 @@ final class AudioPlaybackManager {
     /// rendered — which is what we want when we're competing with
     /// ducked-but-still-present background music + ambient noise.
     private func configureCategory() {
+        applyCategory(duck: true)
+    }
+
+    private func applyCategory(duck: Bool) {
         do {
-            try session.setCategory(
-                .playback,
-                mode: .default,
-                options: [.mixWithOthers, .duckOthers]
-            )
+            var opts: AVAudioSession.CategoryOptions = [.mixWithOthers]
+            if duck { opts.insert(.duckOthers) }
+            try session.setCategory(.playback, mode: .default, options: opts)
         } catch {
             // Category set fails very rarely; log via os_log later if it
             // becomes an actual concern.
         }
+    }
+
+    /// Start sustained mode — used by phone-only treadmill runs to
+    /// keep the AVAudioSession active across TTS gaps. While the
+    /// session is active, the .audio UIBackgroundMode grants the app
+    /// background grace, which keeps the pedometer's update callback
+    /// firing even if the runner briefly backgrounds the app.
+    ///
+    /// We DROP .duckOthers while sustaining so background music isn't
+    /// permanently turned down between coach lines. When a TTS line
+    /// fires, the queue still has us flip momentarily to the ducking
+    /// category via `beginTransientDuck()` and back via
+    /// `endTransientDuck()`.
+    func beginSustained() {
+        guard !sustainedActive else { return }
+        applyCategory(duck: false)
+        activate()
+        sustainedActive = true
+    }
+
+    func endSustained() {
+        guard sustainedActive else { return }
+        sustainedActive = false
+        applyCategory(duck: true)
+        deactivate()
+    }
+
+    func beginTransientDuck() {
+        guard sustainedActive else { return }
+        applyCategory(duck: true)
+    }
+
+    func endTransientDuck() {
+        guard sustainedActive else { return }
+        applyCategory(duck: false)
     }
 
     /// Activates the audio session so the next utterance ducks other
@@ -71,8 +116,12 @@ final class AudioPlaybackManager {
 
     /// Deactivates the session and signals other apps to restore their
     /// audio. Idempotent. Call once the synthesizer queue is empty.
+    ///
+    /// No-op while sustained mode is on (phone-only treadmill needs
+    /// the session to stay active across TTS gaps to keep the app
+    /// alive via .audio UIBackgroundMode).
     func deactivate() {
-        guard isSessionActive else { return }
+        guard isSessionActive, !sustainedActive else { return }
         do {
             try session.setActive(false, options: [.notifyOthersOnDeactivation])
             isSessionActive = false

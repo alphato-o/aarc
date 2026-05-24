@@ -116,6 +116,15 @@ final class RemoteTTS: NSObject {
         }
 
         AudioPlaybackManager.shared.activate()
+        // While the queue is in sustained mode (phone-only treadmill),
+        // the session is .mixWithOthers WITHOUT ducking. Flip on the
+        // .duckOthers option transiently so music drops while the
+        // coach speaks, then back. No-op otherwise. defer guarantees
+        // we clear the duck on every exit path — engine success,
+        // engine fail + player success, both fail + LocalTTS, or task
+        // cancellation.
+        AudioPlaybackManager.shared.beginTransientDuck()
+        defer { AudioPlaybackManager.shared.endTransientDuck() }
 
         // Primary path: AVAudioEngine with amplified mixer.
         do {

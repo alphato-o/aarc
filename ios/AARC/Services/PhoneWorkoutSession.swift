@@ -120,6 +120,15 @@ final class PhoneWorkoutSession: NSObject {
         // double-count steps and burn battery for no gain.
         if runType == .treadmill {
             startPedometerUpdates(from: now)
+            // Phone-only treadmill has no UIBackgroundMode that keeps
+            // the app alive when the screen sleeps or the runner
+            // briefly backgrounds AARC (outdoor gets .location;
+            // treadmill has nothing). Activating the audio session for
+            // the run's duration grants .audio background grace. We
+            // drop ducking while sustaining so background music isn't
+            // permanently quieter — TTS still ducks transiently via
+            // the queue's per-utterance path.
+            AudioPlaybackManager.shared.beginSustained()
         } else {
             startLocationUpdates(indoor: false)
         }
@@ -174,6 +183,9 @@ final class PhoneWorkoutSession: NSObject {
         locationManager = nil
         pedometer?.stopUpdates()
         pedometer = nil
+        // Release the sustained audio session if it was on (treadmill).
+        // No-op for outdoor runs that never entered sustained mode.
+        AudioPlaybackManager.shared.endSustained()
 
         // Drain any buffered route locations before HK seals the route.
         let route = pendingRouteLocations
@@ -236,34 +248,82 @@ final class PhoneWorkoutSession: NSObject {
 
     // MARK: - Pedometer (treadmill)
 
+    /// Default running stride length in metres. Used to estimate
+    /// distance from raw step count when `CMPedometer.distance`
+    /// returns nil — which happens more often than expected: some
+    /// device configurations don't expose distance even though step
+    /// counting works fine. 0.75 m matches Apple's documented adult
+    /// running stride average and is what apps like Strava use as
+    /// the indoor fallback.
+    private static let defaultStrideMeters: Double = 0.75
+
     private func startPedometerUpdates(from start: Date) {
         guard CMPedometer.isStepCountingAvailable() else {
             lastError = "Step counting not available on this device."
             log.error("CMPedometer step counting unavailable")
             return
         }
+
+        // Authorisation gate. Step counting works without explicit
+        // motion-activity permission, but iOS still prompts the first
+        // time a CMPedometer.startUpdates is issued. If the user
+        // denied earlier, the closure is never invoked and we'd sit
+        // forever at zero distance — surface a clear, actionable
+        // error so they can fix it from Settings.
+        let auth = CMPedometer.authorizationStatus()
+        log.info("CMPedometer auth=\(auth.rawValue, privacy: .public) stepAvailable=\(CMPedometer.isStepCountingAvailable()) distanceAvailable=\(CMPedometer.isDistanceAvailable()) cadenceAvailable=\(CMPedometer.isCadenceAvailable())")
+        switch auth {
+        case .denied, .restricted:
+            lastError = "Motion access denied — enable in Settings → Privacy & Security → Motion & Fitness → AARC."
+            log.error("CMPedometer authorization \(auth.rawValue, privacy: .public)")
+            return
+        case .notDetermined:
+            // startUpdates will trigger the prompt on first call.
+            break
+        case .authorized:
+            break
+        @unknown default:
+            break
+        }
+
         let p = CMPedometer()
+        let stride = Self.defaultStrideMeters
+        let distanceAvailable = CMPedometer.isDistanceAvailable()
         p.startUpdates(from: start) { [weak self] data, error in
             if let error {
                 Task { @MainActor [weak self] in
                     self?.lastError = "Pedometer: \(error.localizedDescription)"
+                    self?.log.error("Pedometer update error: \(error.localizedDescription, privacy: .public)")
                 }
                 return
             }
             guard let data else { return }
-            // CMPedometer.distance is an estimate (steps × stride
-            // length). On a treadmill it's the only signal we've got
-            // without external hardware. Cadence is reported in
-            // steps/sec — convert to SPM.
-            let cumulativeMeters = data.distance?.doubleValue ?? 0
+
+            // Distance: prefer CMPedometer's own estimate when the
+            // device reports it; fall back to step count × default
+            // stride otherwise. Without this fallback the chart sat
+            // at zero forever on the treadmill — distance was nil
+            // even though steps were ticking up.
+            let stepCount = data.numberOfSteps.doubleValue
+            let reportedDistance = data.distance?.doubleValue ?? 0
+            let cumulativeMeters: Double = {
+                if distanceAvailable, reportedDistance > 0 {
+                    return reportedDistance
+                }
+                // Step fallback. 0 steps → 0 meters, no chart movement,
+                // but no crash either.
+                return stepCount * stride
+            }()
             let spm: Double? = data.currentCadence.map { $0.doubleValue * 60 }
+
+            // Per-callback diagnostics so we can stream from Console
+            // and see exactly what the OS is feeding us.
+            self?.log.info("Pedometer tick: steps=\(stepCount, privacy: .public) reportedDistance=\(reportedDistance, privacy: .public) cumulative=\(cumulativeMeters, privacy: .public) cadence=\(spm ?? 0, privacy: .public)")
+
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.distanceMeters = cumulativeMeters
                 self.currentCadenceSPM = spm
-                // Push into the pace window so currentPaceSecPerKm()
-                // derives an instantaneous pace the same way the GPS
-                // path does.
                 self.paceWindow.append((t: .now, d: cumulativeMeters))
                 let cutoff = Date().addingTimeInterval(-self.paceWindowSeconds)
                 self.paceWindow.removeAll { $0.t < cutoff }
@@ -311,6 +371,12 @@ final class PhoneWorkoutSession: NSObject {
             lastSplit: nil,
             state: .running
         )
+        // Heartbeat every 5s so Console.app can distinguish "iOS
+        // suspended us" (heartbeat stops) from "pedometer never
+        // fired" (heartbeat continues but distance stays 0).
+        if Int(elapsed) % 5 == 0 {
+            log.info("Tick: elapsed=\(Int(elapsed), privacy: .public)s dist=\(self.distanceMeters, privacy: .public)m pace=\(currentPace ?? 0, privacy: .public) cadence=\(self.currentCadenceSPM ?? 0, privacy: .public)")
+        }
         LiveMetricsConsumer.shared.ingest(metrics)
     }
 
