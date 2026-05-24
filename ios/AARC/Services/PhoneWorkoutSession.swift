@@ -87,6 +87,20 @@ final class PhoneWorkoutSession: NSObject {
             guard auth == .authorizedWhenInUse || auth == .authorizedAlways else {
                 throw PhoneWorkoutError.locationNotAuthorized
             }
+        } else {
+            // Treadmill: hard-fail on denied Motion permission so the
+            // runner sees an actionable error in RunHome instead of a
+            // chart that sits at zero forever. Step counting in the
+            // foreground theoretically works without permission, but
+            // distance + cadence absolutely require it, and the run
+            // would be useless without distance.
+            guard CMPedometer.isStepCountingAvailable() else {
+                throw PhoneWorkoutError.motionNotAuthorized
+            }
+            let motionAuth = CMPedometer.authorizationStatus()
+            if motionAuth == .denied || motionAuth == .restricted {
+                throw PhoneWorkoutError.motionNotAuthorized
+            }
         }
 
         let config = HKWorkoutConfiguration()
@@ -123,12 +137,16 @@ final class PhoneWorkoutSession: NSObject {
             // Phone-only treadmill has no UIBackgroundMode that keeps
             // the app alive when the screen sleeps or the runner
             // briefly backgrounds AARC (outdoor gets .location;
-            // treadmill has nothing). Activating the audio session for
-            // the run's duration grants .audio background grace. We
-            // drop ducking while sustaining so background music isn't
-            // permanently quieter — TTS still ducks transiently via
-            // the queue's per-utterance path.
+            // treadmill has nothing). The sustained-audio-session
+            // approach we tried earlier didn't grant .audio background
+            // grace because iOS only counts the mode while audio is
+            // actively flowing — not just "session is active". The
+            // keepalive plays a silent PCM loop through a dedicated
+            // engine so we satisfy that requirement without producing
+            // audible output, and without permanently ducking music
+            // (no .duckOthers on the keepalive's output).
             AudioPlaybackManager.shared.beginSustained()
+            BackgroundAudioKeepalive.shared.start()
         } else {
             startLocationUpdates(indoor: false)
         }
@@ -183,8 +201,10 @@ final class PhoneWorkoutSession: NSObject {
         locationManager = nil
         pedometer?.stopUpdates()
         pedometer = nil
-        // Release the sustained audio session if it was on (treadmill).
-        // No-op for outdoor runs that never entered sustained mode.
+        // Release the sustained audio session + silent keepalive if
+        // they were on (treadmill). No-ops for outdoor runs that
+        // never entered sustained mode.
+        BackgroundAudioKeepalive.shared.stop()
         AudioPlaybackManager.shared.endSustained()
 
         // Drain any buffered route locations before HK seals the route.
@@ -458,6 +478,7 @@ extension PhoneWorkoutSession: @preconcurrency CLLocationManagerDelegate {
 enum PhoneWorkoutError: Error, LocalizedError {
     case healthKitUnavailable
     case locationNotAuthorized
+    case motionNotAuthorized
 
     var errorDescription: String? {
         switch self {
@@ -465,6 +486,8 @@ enum PhoneWorkoutError: Error, LocalizedError {
             return "HealthKit is not available on this device."
         case .locationNotAuthorized:
             return "Phone-only outdoor runs need Location permission. Open Settings → Permissions."
+        case .motionNotAuthorized:
+            return "Phone-only treadmill needs Motion & Fitness permission. Open Settings → AARC → Motion & Fitness and enable it."
         }
     }
 }

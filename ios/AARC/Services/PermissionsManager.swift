@@ -1,5 +1,6 @@
 import Foundation
 import CoreLocation
+import CoreMotion
 import HealthKit
 import AVFoundation
 import Speech
@@ -19,6 +20,8 @@ final class PermissionsManager {
     private(set) var notificationStatus: UNAuthorizationStatus = .notDetermined
     var locationAuthorized: Bool = false
     private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
+    var motionAuthorized: Bool = false
+    private(set) var motionStatus: CMAuthorizationStatus = .notDetermined
 
     var healthKitDescription: String {
         HKHealthStore.isHealthDataAvailable()
@@ -62,6 +65,16 @@ final class PermissionsManager {
         @unknown default: return "Unknown"
         }
     }
+    var motionDescription: String {
+        guard CMPedometer.isStepCountingAvailable() else { return "Unavailable" }
+        switch motionStatus {
+        case .authorized: return "Authorized"
+        case .denied: return "Denied — open Settings to enable"
+        case .restricted: return "Restricted"
+        case .notDetermined: return "Not requested"
+        @unknown default: return "Unknown"
+        }
+    }
 
     func refresh() async {
         microphoneAuthorized = AVAudioApplication.shared.recordPermission == .granted
@@ -74,6 +87,8 @@ final class PermissionsManager {
         notificationsAuthorized = (notificationStatus == .authorized || notificationStatus == .provisional)
         locationStatus = CLLocationManager().authorizationStatus
         locationAuthorized = (locationStatus == .authorizedAlways || locationStatus == .authorizedWhenInUse)
+        motionStatus = CMPedometer.authorizationStatus()
+        motionAuthorized = (motionStatus == .authorized)
     }
 
     func requestHealthKit() async {
@@ -108,6 +123,28 @@ final class PermissionsManager {
 
     func requestNotifications() async {
         _ = await PhoneNotificationCenter.shared.requestAuthorizationIfNeeded()
+        await refresh()
+    }
+
+    /// Phone-only treadmill needs Motion & Fitness permission. iOS
+    /// surfaces the prompt the first time CMPedometer.startUpdates is
+    /// invoked — calling queryPedometerData here is enough to trigger
+    /// it without actually starting a workout. If the user already
+    /// denied previously, this is a no-op and they have to flip the
+    /// switch in Settings → AARC → Motion & Fitness.
+    func requestMotion() async {
+        guard CMPedometer.isStepCountingAvailable() else {
+            await refresh()
+            return
+        }
+        let p = CMPedometer()
+        let from = Date().addingTimeInterval(-60)
+        let to = Date()
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            p.queryPedometerData(from: from, to: to) { _, _ in
+                cont.resume()
+            }
+        }
         await refresh()
     }
 
