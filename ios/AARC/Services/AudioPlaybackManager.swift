@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Observation
+import os.log
 
 /// Owns the iPhone's `AVAudioSession`. Categories the session for spoken
 /// audio that mixes with and ducks other audio (Spotify, Apple Music,
@@ -79,6 +80,7 @@ final class AudioPlaybackManager {
     /// `endTransientDuck()`.
     func beginSustained() {
         guard !sustainedActive else { return }
+        os_log("[audio] beginSustained — switching to .mixWithOthers (no duck) and activating session", log: OSLog(subsystem: "club.aarun.AARC", category: "Audio"), type: .info)
         applyCategory(duck: false)
         activate()
         sustainedActive = true
@@ -86,6 +88,7 @@ final class AudioPlaybackManager {
 
     func endSustained() {
         guard sustainedActive else { return }
+        os_log("[audio] endSustained", log: OSLog(subsystem: "club.aarun.AARC", category: "Audio"), type: .info)
         sustainedActive = false
         applyCategory(duck: true)
         deactivate()

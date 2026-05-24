@@ -17,6 +17,7 @@ struct SettingsView: View {
             Form {
                 Section("Diagnostics") {
                     NavigationLink("Permissions") { PermissionsView() }
+                    NavigationLink("Phone-only / Pedometer") { DiagnosticsView() }
                     NavigationLink("Script Preview (AI)") { ScriptPreviewView() }
                     NavigationLink("Coach Playground") { CoachPlayground() }
                     Button(action: ping) {
