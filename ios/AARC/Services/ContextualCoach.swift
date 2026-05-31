@@ -57,12 +57,14 @@ final class ContextualCoach {
     /// going long enough for averages to settle.
     private let warmupSeconds: TimeInterval = 120
 
-    /// Stationary detection: distance hasn't increased in this many
-    /// seconds, OR current pace is reported but is implausibly slow
-    /// (>= 15 min/km, i.e. ~4 km/h walking pace at best). 15s lands
-    /// before the runner thinks "shouldn't AARC have said something?".
+    /// Stationary detection: distance hasn't increased for this many
+    /// seconds. 15s lands before the runner thinks "shouldn't AARC have
+    /// said something?". We deliberately do NOT also trigger on an
+    /// implausibly-slow pace reading — that fires "stationary for 0
+    /// seconds" while the runner is still moving (distance is advancing,
+    /// so the still-timer keeps resetting to ~now). Slow-but-moving is
+    /// pace_drop's job; stationary means genuinely not moving.
     private let stationaryQuietSeconds: TimeInterval = 15
-    private let stationaryPaceThresholdSecPerKm: Double = 15 * 60
 
     /// The run type set when start(runType:) was called. Defaults to
     /// outdoor for older call sites that haven't been updated.
@@ -73,6 +75,13 @@ final class ContextualCoach {
     /// timer or relying solely on the (sometimes-absent) pace reading.
     private var lastDistanceMeters: Double = 0
     private var lastDistanceChangeAt: Date?
+
+    /// True once the runner has genuinely moved (>5m) at least once this
+    /// run. Stationary can only fire AFTER real movement — otherwise
+    /// fiddling with the treadmill console at t=0 (distance never leaves
+    /// ~0) trips a "you've stopped for 15s" roast about 0 metres, which
+    /// is nonsense. You can't have "stopped" if you never started.
+    private var hasMovedThisRun: Bool = false
 
     // MARK: - Internal state
 
@@ -132,6 +141,7 @@ final class ContextualCoach {
         lastMusicLyric = nil
         lastDistanceMeters = 0
         lastDistanceChangeAt = nil
+        hasMovedThisRun = false
         inFlight = false
         lastFiredTrigger = nil
         lastFiredAt = nil
@@ -164,6 +174,7 @@ final class ContextualCoach {
         if abs(metrics.distanceMeters - lastDistanceMeters) > 5 {
             lastDistanceMeters = metrics.distanceMeters
             lastDistanceChangeAt = now
+            hasMovedThisRun = true
         } else if lastDistanceChangeAt == nil {
             // Initialise the first time we see a tick — without this,
             // .stationary would fire from t=0 because "no previous
@@ -194,6 +205,14 @@ final class ContextualCoach {
         // baseline. Hold them back until the rolling averages settle.
         guard metrics.elapsed >= warmupSeconds else { return }
 
+        // Hold reactive coaching AND music banter when a must-play
+        // milestone (km split, halfway, finish) is imminent — let the
+        // director's protected window clear so the split lands clean and
+        // isn't cut off mid-line. The triggers have cooldowns and re-fire
+        // shortly after. Stationary (above) is exempt: if they've stopped,
+        // no milestone is imminent anyway.
+        if RunDirector.shared.isProtectedWindow { return }
+
         if let trigger = evaluateTriggers(now: now, metrics: metrics) {
             fire(trigger: trigger, metrics: metrics)
             return
@@ -222,22 +241,20 @@ final class ContextualCoach {
     }
 
     private func checkStationary(now: Date, metrics: LiveMetrics) -> AIClient.DynamicLineTrigger? {
+        // Can't have "stopped" if you never started. Suppress until the
+        // runner has actually moved at least once — kills the "stationary
+        // for 0 metres" roast that fired while they set up the treadmill.
+        guard hasMovedThisRun else { return nil }
         // Need to be past warmup and have seen at least one distance
         // sample to be a useful trigger.
         guard let lastMoved = lastDistanceChangeAt else { return nil }
         let stillSeconds = now.timeIntervalSince(lastMoved)
 
-        // Two ways to qualify as stationary: (a) distance hasn't moved
-        // for stationaryQuietSeconds; (b) pace reading is implausibly
-        // slow (>=15 min/km) sustained. Either is enough; both means
-        // the runner has definitely stopped.
-        let distanceFlatlined = stillSeconds >= stationaryQuietSeconds
-        let paceImplausible: Bool = {
-            guard let pace = metrics.currentPaceSecPerKm else { return false }
-            return pace >= stationaryPaceThresholdSecPerKm
-        }()
-
-        guard distanceFlatlined || paceImplausible else { return nil }
+        // Stationary = distance genuinely hasn't moved for
+        // stationaryQuietSeconds. This guarantees the stationarySeconds
+        // we report is always >= 15, so the coach can never say
+        // "stationary for 0 seconds."
+        guard stillSeconds >= stationaryQuietSeconds else { return nil }
         guard cooldownOk(.stationary, now: now) else { return nil }
         return .stationary
     }

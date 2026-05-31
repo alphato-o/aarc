@@ -35,10 +35,12 @@ enum MilestoneAnnouncement {
                 let crossedMeters = Double(epoch) * every
                 return distanceText(meters: crossedMeters)
             }
-            // One-shot distance trigger: announce the distance hit.
-            if let at = trigger.atMeters {
-                return distanceText(meters: at)
-            }
+            // One-shot distance trigger (a "surprise roast" the model
+            // scattered at an off-grid distance like 2800m). These are
+            // NOT km milestones, so they get no announcement — otherwise
+            // distanceText would snap 2800m → "3 kilometres." and the
+            // runner hears a phantom "3km" before the real per-km split
+            // fires at 3000m. The line speaks for itself.
             return nil
 
         case .time:
@@ -72,6 +74,14 @@ enum MilestoneAnnouncement {
         case .finish:
             return "Run complete."
         }
+    }
+
+    /// The announcement the per-km loop speaks when the runner crosses a
+    /// whole-km boundary ("3 kilometres."). Exposed so RunDirector can
+    /// warm the TTS cache a few seconds ahead of the split, so it lands
+    /// with zero generation latency.
+    static func kilometreText(km: Int) -> String {
+        distanceText(meters: Double(km) * 1000)
     }
 
     // MARK: - Formatting helpers

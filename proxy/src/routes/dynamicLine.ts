@@ -140,7 +140,7 @@ function buildUserPrompt(req: DynamicLineRequest): string {
     }
     lines.push(`- run type: ${c.runType}`);
     if (c.stationarySeconds !== undefined && c.stationarySeconds > 0) {
-        lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (distance has not moved)`);
+        lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (they were running and have now STOPPED — quote the seconds, never a distance)`);
     }
 
     if (req.customNote && req.customNote.trim().length > 0) {

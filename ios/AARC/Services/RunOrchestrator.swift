@@ -44,13 +44,17 @@ final class RunOrchestrator {
     /// Lets the user start running before the full Sonnet script is
     /// ready. The actual `start*` methods await this if it's still
     /// running, or use the result instantly if it's complete.
-    private var preGenOpenerTask: Task<String, Error>?
-
-    /// Speculative full-script generation (Sonnet, ~30-50s). Kicks off
-    /// alongside the opener so by the time the runner is a minute in,
-    /// the full script can be swapped into ScriptEngine with the per-km
-    /// loop + halfway + finish + surprise roasts.
-    private var preGenFullScriptTask: Task<GeneratedScript, Error>?
+    ///
+    /// Keyed by run type because the opener references the runner's
+    /// setting (outdoor scenery vs the treadmill belt) and the run type
+    /// isn't known until the user taps one of the two Start buttons. We
+    /// speculatively generate BOTH so whichever they pick is instant and
+    /// correctly themed. The full Sonnet script is NOT pre-generated —
+    /// it's generated at Start with the true run type (it swaps in well
+    /// before km 1 at any pace, so there's no perceived latency, and we
+    /// don't burn Sonnet tokens on a speculative script that's usually
+    /// the wrong run type or never used at all).
+    private var preGenOpenerTasks: [RunType: Task<String, Error>] = [:]
 
     /// Active full-script-swap task — pulls the full script (either
     /// from the in-flight pre-gen or a fresh /generate-script call) and
@@ -68,6 +72,12 @@ final class RunOrchestrator {
         guard phase != .generating else { return }
         phase = .generating
         lastError = nil
+
+        // Reshuffle the personal-context bullet rotation: each run picks
+        // a fresh 20-of-N subset, but the seed is stable across opener,
+        // script, dynamic-line, and music-comment calls within this run
+        // so the proxy prompt cache stays warm.
+        PersonalContextStore.shared.rerollRotation()
 
         let plan = ScriptPreviewStore.shared.currentPlan
         let runId = UUID()
@@ -170,36 +180,41 @@ final class RunOrchestrator {
         let plan = ScriptPreviewStore.shared.currentPlan
         let key = makeKey(plan: plan, personalityId: personalityId)
 
-        if preGenKey == key, preGenOpenerTask != nil { return }
-        preGenOpenerTask?.cancel()
-        preGenFullScriptTask?.cancel()
+        if preGenKey == key, !preGenOpenerTasks.isEmpty { return }
+        preGenOpenerTasks.values.forEach { $0.cancel() }
+        preGenOpenerTasks.removeAll()
         preGenKey = key
         isPreGenerating = true
 
-        // Both tasks use .outdoor as a stable runType — the actual
-        // line content is essentially runtype-agnostic for the cache,
-        // and the runType the user actually picks is re-sent when the
-        // real start fires (we don't reuse the pre-gen output if the
-        // chosen runType ends up differing in a way that matters; the
-        // prompt sees the truthful runType at start-time).
-        preGenOpenerTask = Task { @MainActor [weak self] in
-            guard let self else { throw CancellationError() }
-            return try await self.generateOpener(
-                plan: plan,
-                runType: .outdoor,
-                personalityId: personalityId
-            )
+        // Fresh bullet rotation for this pre-gen cycle; same seed will
+        // then be reused by the runtime calls (dynamic-line, etc.) so
+        // they all hit the prompt cache together.
+        PersonalContextStore.shared.rerollRotation()
+
+        // Speculatively generate the opener for BOTH run types — the
+        // user hasn't picked yet (they pick by tapping the Outdoor or
+        // Treadmill Start button), and the opener references the setting.
+        // Whichever button they tap then resolves instantly to the
+        // correctly-themed opener.
+        for runType in [RunType.outdoor, RunType.treadmill] {
+            preGenOpenerTasks[runType] = Task { @MainActor [weak self] in
+                guard let self else { throw CancellationError() }
+                return try await self.generateOpener(
+                    plan: plan,
+                    runType: runType,
+                    personalityId: personalityId
+                )
+            }
         }
 
-        preGenFullScriptTask = Task { @MainActor [weak self] in
-            defer { self?.isPreGenerating = false }
-            guard let self else { throw CancellationError() }
-            return try await self.generateFull(
-                plan: plan,
-                runType: .outdoor,
-                personalityId: personalityId,
-                skipOpener: true
-            )
+        // Clear the "pre-loading" hint once both openers settle. The
+        // full script is generated lazily at Start, so there's nothing
+        // else to wait on here.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let tasks = Array(self.preGenOpenerTasks.values)
+            for task in tasks { _ = try? await task.value }
+            self.isPreGenerating = false
         }
     }
 
@@ -240,13 +255,13 @@ final class RunOrchestrator {
         personalityId: String
     ) async throws -> String {
         let key = makeKey(plan: plan, personalityId: personalityId)
-        if preGenKey == key, let task = preGenOpenerTask {
+        if preGenKey == key, let task = preGenOpenerTasks[runType] {
             do {
                 let text = try await task.value
-                preGenOpenerTask = nil
+                preGenOpenerTasks[runType] = nil
                 return text
             } catch {
-                preGenOpenerTask = nil
+                preGenOpenerTasks[runType] = nil
             }
         }
         return try await generateOpener(
@@ -299,25 +314,20 @@ final class RunOrchestrator {
         personalityId: String
     ) {
         fullScriptSwapTask?.cancel()
-        let preGenTask = preGenFullScriptTask
-        let preGenMatches = preGenKey == makeKey(plan: plan, personalityId: personalityId)
-        preGenFullScriptTask = nil
 
         fullScriptSwapTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let full: GeneratedScript
-                if preGenMatches, let task = preGenTask {
-                    full = try await task.value
-                } else {
-                    preGenTask?.cancel()
-                    full = try await self.generateFull(
-                        plan: plan,
-                        runType: runType,
-                        personalityId: personalityId,
-                        skipOpener: true
-                    )
-                }
+                // Generate the full Sonnet script now, with the TRUE run
+                // type the user just chose. Completes in ~30-50s and
+                // swaps in before km 1 at any real pace; the opener
+                // covers t=0 in the meantime.
+                let full = try await self.generateFull(
+                    plan: plan,
+                    runType: runType,
+                    personalityId: personalityId,
+                    skipOpener: true
+                )
                 guard !Task.isCancelled else { return }
                 // The full script was generated with skipOpener=true so
                 // it doesn't include a t=0 line. Re-introduce the
@@ -381,8 +391,10 @@ final class RunOrchestrator {
     }
 
     private func makeKey(plan: RunPlan, personalityId: String) -> String {
-        // runType deliberately omitted — script content is largely
-        // runtype-agnostic, so one cached script serves both buttons.
+        // runType deliberately omitted — this key identifies the
+        // plan/personality the pre-gen openers were built for; the two
+        // run types are held separately in `preGenOpenerTasks` and
+        // looked up by run type in `resolveOpener`.
         "\(plan.kind.rawValue)|\(plan.distanceKm ?? 0)|\(plan.timeMinutes ?? 0)|\(personalityId)"
     }
 
@@ -410,7 +422,13 @@ final class RunOrchestrator {
                 }
             case .distance:
                 if message.triggerSpec.everyMeters != nil {
-                    if let first = message.rotationPool.first { early.insert(first) }
+                    // Warm the WHOLE rotation pool, not just the first
+                    // variant — the per-km loop reuses these same lines
+                    // every km for the rest of the run, so warming all of
+                    // them once means every split's roast plays instantly
+                    // (the director's pre-warm covers the deterministic
+                    // announcement; this covers the personality line).
+                    for variant in message.rotationPool { early.insert(variant) }
                 }
             default:
                 break

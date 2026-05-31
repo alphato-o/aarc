@@ -49,6 +49,10 @@ final class LiveMetricsConsumer {
     func ingest(_ metrics: LiveMetrics) {
         self.latest = metrics
         self.lastUpdateAt = .now
+        // Director runs FIRST so its predictions (next-milestone ETA,
+        // protect window) are fresh when ScriptEngine fires and
+        // ContextualCoach decides whether there's room for banter.
+        RunDirector.shared.processTick(metrics)
         // Forward to the script engine so generated lines fire at the
         // right moments. No-op when the engine isn't active.
         ScriptEngine.shared.processTick(metrics)
@@ -86,6 +90,7 @@ final class LiveMetricsConsumer {
             )
         }
         ContextualCoach.shared.start(runType: pendingRunType)
+        RunDirector.shared.start(plan: ScriptPreviewStore.shared.currentPlan)
         LiveActivityController.shared.start(
             runId: runId,
             personalityId: pendingPersonalityId,
@@ -112,6 +117,7 @@ final class LiveMetricsConsumer {
         // early, any unspoken lines just go quiet.
         ScriptEngine.shared.stop()
         ContextualCoach.shared.stop()
+        RunDirector.shared.stop()
         LiveActivityController.shared.end()
 
         // Kick off persistence in the background. HK may take a few
