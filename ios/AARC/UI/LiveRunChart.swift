@@ -169,6 +169,10 @@ struct LiveRunChart: View {
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: samples.count)
         .animation(.spring(response: 0.6, dampingFraction: 0.85), value: xMaxKm)
+        // Hard backstop: clip to the chart frame so a spring overshoot,
+        // a fixed-width frontier bar at the edge, or any other transient
+        // can never paint outside the container.
+        .clipped()
     }
 
     /// Normalised y for the live frontier dot — rides the speed line.
@@ -243,24 +247,26 @@ struct LiveRunChart: View {
 
     private var hasHR: Bool { samples.contains { $0.heartRate != nil } }
 
-    /// Speed range in km/h, derived from the per-bucket pace samples.
-    /// Padded so the line doesn't slam the chart rails.
+    /// Speed range in km/h. Derived from the committed per-bucket pace
+    /// samples AND the current live speed, so a surge that hasn't been
+    /// bucketed yet (and the live frontier dot) is always inside the
+    /// range instead of clamping to the top rail. Padded with 15%
+    /// headroom so even the tallest bar leaves visible margin.
     private var speedRange: (min: Double, max: Double) {
-        let values = samples.compactMap(\.paceSecPerKm).filter { $0 > 0 }.map { 3600 / $0 }
-        guard !values.isEmpty else { return (6, 14) }
-        let lo = values.min() ?? 6
-        let hi = values.max() ?? 14
-        let pad = max(0.5, (hi - lo) * 0.1)
+        var values = samples.compactMap(\.paceSecPerKm).filter { $0 > 0 }.map { 3600 / $0 }
+        if let live = liveSpeedKmh, live > 0 { values.append(live) }
+        guard let lo = values.min(), let hi = values.max() else { return (6, 14) }
+        let pad = max(0.5, (hi - lo) * 0.15)
         return (Swift.max(0, lo - pad), hi + pad)
     }
 
     private var hrRange: (min: Double, max: Double) {
-        let values = samples.compactMap(\.heartRate)
-        guard !values.isEmpty else { return (60, 180) }
-        let lo = values.min() ?? 60
-        let hi = values.max() ?? 180
-        // Widen the range a touch so the bars don't slam the rails.
-        let pad = max(8, (hi - lo) * 0.1)
+        // Include the live HR so a sudden spike stays inside the range
+        // (same reasoning as speedRange). 15% headroom off the rails.
+        var values = samples.compactMap(\.heartRate)
+        if let live = liveHeartRateBPM, live > 0 { values.append(live) }
+        guard let lo = values.min(), let hi = values.max() else { return (60, 180) }
+        let pad = max(8, (hi - lo) * 0.15)
         return (max(40, lo - pad), hi + pad)
     }
 
