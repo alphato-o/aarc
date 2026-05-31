@@ -25,8 +25,8 @@ struct DiagnosticsView: View {
     @State private var pedometerTestResult: String = "Not run yet."
     @State private var pedometerTestBusy: Bool = false
     @State private var workoutSession = PhoneWorkoutSession.shared
-    @State private var logText: String = "(tap Refresh to load)"
-    @State private var refreshingLogs: Bool = false
+    @State private var logText: String = "Loading…"
+    @State private var refreshingLogs: Bool = true
 
     var body: some View {
         Form {
@@ -81,9 +81,13 @@ struct DiagnosticsView: View {
                     }
                     .disabled(refreshingLogs)
                     Spacer()
+                    if refreshingLogs {
+                        ProgressView()
+                    }
                     Button("Copy logs") {
                         UIPasteboard.general.string = logText
                     }
+                    .disabled(refreshingLogs)
                 }
                 ScrollView {
                     Text(logText)
@@ -116,40 +120,42 @@ struct DiagnosticsView: View {
         let from = Date().addingTimeInterval(-5 * 60)
         let to = Date()
         let started = Date()
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            p.queryPedometerData(from: from, to: to) { data, error in
-                Task { @MainActor in
-                    let elapsed = Date().timeIntervalSince(started)
-                    var lines: [String] = []
-                    lines.append("queryPedometerData → \(String(format: "%.2f", elapsed))s")
-                    if let error {
-                        lines.append("ERROR: \(error.localizedDescription)")
-                    } else if let data {
-                        lines.append("steps: \(data.numberOfSteps.intValue)")
-                        if let d = data.distance {
-                            lines.append("distance: \(String(format: "%.2f", d.doubleValue)) m")
-                        } else {
-                            lines.append("distance: nil")
-                        }
-                        if let c = data.currentCadence {
-                            lines.append("cadence (steps/sec): \(String(format: "%.2f", c.doubleValue))")
-                        } else {
-                            lines.append("cadence: nil")
-                        }
-                        if let pace = data.currentPace {
-                            lines.append("currentPace (sec/m): \(String(format: "%.2f", pace.doubleValue))")
-                        } else {
-                            lines.append("currentPace: nil")
-                        }
-                        lines.append("authStatus: \(authStatusText)")
+        // Marked @Sendable to strip the @MainActor isolation Swift 6 would
+        // otherwise inherit from the enclosing function. CMPedometer fires
+        // the callback on its own private dispatch queue; without this the
+        // runtime traps with _dispatch_assert_queue_fail at entry.
+        let result: String = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            let handler: @Sendable (CMPedometerData?, Error?) -> Void = { data, error in
+                let elapsed = Date().timeIntervalSince(started)
+                var lines: [String] = []
+                lines.append("queryPedometerData → \(String(format: "%.2f", elapsed))s")
+                if let error {
+                    lines.append("ERROR: \(error.localizedDescription)")
+                } else if let data {
+                    lines.append("steps: \(data.numberOfSteps.intValue)")
+                    if let d = data.distance {
+                        lines.append("distance: \(String(format: "%.2f", d.doubleValue)) m")
                     } else {
-                        lines.append("Both data and error nil — API bug")
+                        lines.append("distance: nil")
                     }
-                    pedometerTestResult = lines.joined(separator: "\n")
-                    cont.resume()
+                    if let c = data.currentCadence {
+                        lines.append("cadence (steps/sec): \(String(format: "%.2f", c.doubleValue))")
+                    } else {
+                        lines.append("cadence: nil")
+                    }
+                    if let pace = data.currentPace {
+                        lines.append("currentPace (sec/m): \(String(format: "%.2f", pace.doubleValue))")
+                    } else {
+                        lines.append("currentPace: nil")
+                    }
+                } else {
+                    lines.append("Both data and error nil — API bug")
                 }
+                cont.resume(returning: lines.joined(separator: "\n"))
             }
+            p.queryPedometerData(from: from, to: to, withHandler: handler)
         }
+        pedometerTestResult = result + "\nauthStatus: " + authStatusText
     }
 
     // MARK: - OSLog reader
@@ -157,31 +163,34 @@ struct DiagnosticsView: View {
     private func refreshLogs() async {
         refreshingLogs = true
         defer { refreshingLogs = false }
-        do {
-            let store = try OSLogStore(scope: .currentProcessIdentifier)
-            // Anchor 5 minutes back from now.
-            let anchor = store.position(date: Date().addingTimeInterval(-5 * 60))
-            let predicate = NSPredicate(format: "subsystem == %@", "club.aarun.AARC")
-            let entries = try store.getEntries(at: anchor, matching: predicate)
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm:ss.SSS"
-            var collected: [String] = []
-            for entry in entries {
-                guard let logEntry = entry as? OSLogEntryLog else { continue }
-                let ts = formatter.string(from: logEntry.date)
-                let cat = logEntry.category
-                collected.append("\(ts) [\(cat)] \(logEntry.composedMessage)")
+        // OSLogStore.getEntries is a synchronous scan over the process's
+        // ring buffer and can take >1s with a noisy app. Run it on a
+        // background thread so the navigation push isn't blocked and the
+        // form renders immediately with a spinner in the log section.
+        let result: String = await Task.detached(priority: .userInitiated) {
+            do {
+                let store = try OSLogStore(scope: .currentProcessIdentifier)
+                let anchor = store.position(date: Date().addingTimeInterval(-5 * 60))
+                let predicate = NSPredicate(format: "subsystem == %@", "club.aarun.AARC")
+                let entries = try store.getEntries(at: anchor, matching: predicate)
+                let formatter = DateFormatter()
+                formatter.dateFormat = "HH:mm:ss.SSS"
+                var collected: [String] = []
+                for entry in entries {
+                    guard let logEntry = entry as? OSLogEntryLog else { continue }
+                    let ts = formatter.string(from: logEntry.date)
+                    let cat = logEntry.category
+                    collected.append("\(ts) [\(cat)] \(logEntry.composedMessage)")
+                }
+                if collected.isEmpty {
+                    return "(no entries for subsystem club.aarun.AARC in the last 5 min — try reproducing now, then Refresh)"
+                }
+                return collected.reversed().joined(separator: "\n")
+            } catch {
+                return "OSLogStore failed: \(error.localizedDescription)"
             }
-            if collected.isEmpty {
-                logText = "(no entries for subsystem club.aarun.AARC in the last 5 min — try reproducing now, then Refresh)"
-            } else {
-                // Show newest at top so a long run's freshest events are
-                // immediately visible.
-                logText = collected.reversed().joined(separator: "\n")
-            }
-        } catch {
-            logText = "OSLogStore failed: \(error.localizedDescription)"
-        }
+        }.value
+        logText = result
     }
 
     // MARK: - Helpers

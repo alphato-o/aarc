@@ -319,9 +319,13 @@ final class PhoneWorkoutSession: NSObject {
         let stride = Self.defaultStrideMeters
         let distanceAvailable = CMPedometer.isDistanceAvailable()
         log.info("[pedometer] calling startUpdates…")
-        p.startUpdates(from: start) { [weak self] data, error in
-            // This closure runs on a private CMPedometer queue, not main.
-            // We log here directly (Logger is Sendable).
+        // @Sendable strips the implicit @MainActor isolation Swift 6 would
+        // inherit from this @MainActor method. Without it, the runtime
+        // inserts dispatch_assert_queue(main) at the closure's entry and
+        // traps on the first callback (CMPedometer fires on its own private
+        // dispatch queue). That trap is exactly what was killing the
+        // phone-only treadmill session silently — symptom: "no data".
+        let handler: @Sendable (CMPedometerData?, Error?) -> Void = { [weak self] data, error in
             if let error {
                 Task { @MainActor [weak self] in
                     self?.lastError = "Pedometer: \(error.localizedDescription)"
@@ -330,7 +334,9 @@ final class PhoneWorkoutSession: NSObject {
                 return
             }
             guard let data else {
-                self?.log.error("[pedometer.cb] both data and error nil — bizarre")
+                Task { @MainActor [weak self] in
+                    self?.log.error("[pedometer.cb] both data and error nil — bizarre")
+                }
                 return
             }
 
@@ -345,10 +351,9 @@ final class PhoneWorkoutSession: NSObject {
             }()
             let spm: Double? = data.currentCadence.map { $0.doubleValue * 60 }
 
-            self?.log.info("[pedometer.cb] steps=\(stepCount, privacy: .public) reportedDist=\(reportedDistance, privacy: .public) wasNil=\(reportedDistanceIsNil, privacy: .public) cumulative=\(cumulativeMeters, privacy: .public) cadence=\(spm ?? -1, privacy: .public)")
-
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.log.info("[pedometer.cb] steps=\(stepCount, privacy: .public) reportedDist=\(reportedDistance, privacy: .public) wasNil=\(reportedDistanceIsNil, privacy: .public) cumulative=\(cumulativeMeters, privacy: .public) cadence=\(spm ?? -1, privacy: .public)")
                 self.distanceMeters = cumulativeMeters
                 self.currentCadenceSPM = spm
                 self.paceWindow.append((t: .now, d: cumulativeMeters))
@@ -356,6 +361,7 @@ final class PhoneWorkoutSession: NSObject {
                 self.paceWindow.removeAll { $0.t < cutoff }
             }
         }
+        p.startUpdates(from: start, withHandler: handler)
         self.pedometer = p
         log.info("[pedometer] startUpdates returned — waiting for first callback")
     }
