@@ -138,7 +138,7 @@ struct ActiveRunView: View {
     // Top: TIME and DISTANCE side by side, both heavy mono digits with
     // a soft pink+blue glow — the two numbers the runner glances at
     // most often. Bottom: a single row of 4 minor tiles (PACE, HR,
-    // KCAL, CADENCE), smaller font, accent stroke per metric.
+    // KCAL, KM/H), smaller font, accent stroke per metric.
 
     private var cockpit: some View {
         let metrics = consumer.latest
@@ -160,7 +160,7 @@ struct ActiveRunView: View {
                 cockpitTile(label: "PACE", value: formatPace(metrics?.currentPaceSecPerKm), accent: .cyan)
                 cockpitTile(label: "HR", value: formatHR(metrics?.currentHeartRate), accent: .red)
                 cockpitTile(label: "KCAL", value: formatKcal(metrics?.energyKcal), accent: .orange)
-                cockpitTile(label: "SPM", value: formatCadence(metrics?.cadenceStepsPerMinute), accent: .mint)
+                cockpitTile(label: "KM/H", value: formatSpeed(metrics?.currentPaceSecPerKm), accent: .mint)
             }
         }
         .frame(maxWidth: .infinity)
@@ -217,9 +217,12 @@ struct ActiveRunView: View {
         return String(format: "%.0fm", m)
     }
 
-    private func formatCadence(_ spm: Double?) -> String {
-        guard let s = spm, s.isFinite, s > 0 else { return "—" }
-        return "\(Int(s.rounded()))"
+    /// Real-time speed in km/h, derived from current pace. Lets the
+    /// runner compare against the treadmill console's set speed at a
+    /// glance (cadence read empty on phone-only runs and wasn't useful).
+    private func formatSpeed(_ secPerKm: Double?) -> String {
+        guard let s = secPerKm, s.isFinite, s > 0 else { return "—" }
+        return String(format: "%.1f", 3600.0 / s)
     }
 
     // MARK: - B. Kinetic visualizer
@@ -232,9 +235,17 @@ struct ActiveRunView: View {
         LiveRunChart(
             samples: chartStore.samples,
             liveDistanceMeters: consumer.latest?.distanceMeters ?? 0,
+            liveSpeedKmh: liveSpeedKmh,
             liveHeartRateBPM: consumer.latest?.currentHeartRate
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Current speed in km/h for the chart's live frontier dot, derived
+    /// from current pace. nil when there's no usable pace reading.
+    private var liveSpeedKmh: Double? {
+        guard let pace = consumer.latest?.currentPaceSecPerKm, pace > 0 else { return nil }
+        return 3600.0 / pace
     }
 
     // MARK: - C. Media command
@@ -408,6 +419,7 @@ struct ActiveRunView: View {
         //      polling traffic after dismiss.
         ContextualCoach.shared.stop()
         ScriptEngine.shared.stop()
+        RunDirector.shared.stop()
         VoiceFeedbackQueue.shared.stopAll()
 
         // Phone-only run: tell PhoneWorkoutSession to end.

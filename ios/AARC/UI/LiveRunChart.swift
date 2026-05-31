@@ -6,19 +6,22 @@ import AARCKit
 ///
 /// X-axis: distance in km, auto-scaling through round steps so the
 /// chart stays readable from t=0 (first 100m) all the way out to a
-/// 50km ultra. Y-axis: dual-series normalized so heart rate (red) and
-/// pace (cyan, inverted — faster = taller) share a 0…1 vertical
-/// canvas. Each bar = one 100m sample, locked in once recorded.
+/// 50km ultra. Two normalized line series share a 0…1 vertical canvas:
+/// speed (blue, km/h) and heart rate (red, bpm). A dual y-axis labels
+/// km/h on the leading edge and bpm on the trailing edge so the runner
+/// can read real units off either line. HR is watch-only — on a
+/// phone-only treadmill run only the speed line draws.
 ///
-/// The frontier (rightmost bar) pulses softly to convey "you are
-/// here, the chart is still growing." Older bars subtly fade-in as
-/// they're added so the visual reads as a slowly-painting telemetry
-/// trace rather than a sudden jump.
+/// The frontier dot pulses at the runner's current position, riding
+/// vertically on the speed line so it tracks live performance.
 struct LiveRunChart: View {
     let samples: [LiveRunChartSample]
     let liveDistanceMeters: Double
-    /// Drawn so the live frontier dot pulses with HR. Optional — if
-    /// nil, the dot pulses at a calm idle rate.
+    /// Current speed in km/h — positions the live frontier dot
+    /// vertically on the speed line. nil when there's no pace reading
+    /// (dot falls back to mid-height).
+    let liveSpeedKmh: Double?
+    /// Current HR — reserved for future use (dot pulse rate). Optional.
     let liveHeartRateBPM: Double?
 
     /// Auto-scale steps for the X-axis. Picked from a fixed ladder so
@@ -45,8 +48,10 @@ struct LiveRunChart: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            legendChip(label: "HR", color: hrAccent, range: hrRangeLabel)
-            legendChip(label: "Pace", color: paceAccent, range: paceRangeLabel)
+            legendChip(label: "Speed", color: speedAccent, range: speedRangeLabel)
+            if hasHR {
+                legendChip(label: "HR", color: hrAccent, range: hrRangeLabel)
+            }
             Spacer(minLength: 4)
             Text(String(format: "%.2f km", liveDistanceMeters / 1000))
                 .font(.caption2.weight(.semibold).monospacedDigit())
@@ -71,35 +76,39 @@ struct LiveRunChart: View {
 
     private var chart: some View {
         Chart {
-            // HR bars — left of each bucket position.
-            ForEach(samples, id: \.bucketIndex) { sample in
-                if let hr = sample.heartRate {
-                    BarMark(
-                        x: .value("Distance", sample.distanceKm - 0.025),
-                        y: .value("HR", normalize(hr, in: hrRange)),
-                        width: .fixed(hrBarWidth)
-                    )
-                    .foregroundStyle(hrGradient)
-                    .cornerRadius(2)
-                }
-            }
-
-            // Pace bars — right of each bucket position. Pace is inverted
-            // so a fast bar is TALL (intuitive).
+            // Speed line (blue) — km/h, normalised in the speed range so
+            // faster = higher. `series:` keeps it a distinct line from HR.
             ForEach(samples, id: \.bucketIndex) { sample in
                 if let pace = sample.paceSecPerKm, pace > 0 {
-                    BarMark(
-                        x: .value("Distance", sample.distanceKm + 0.025),
-                        y: .value("Pace", 1 - normalize(pace, in: paceRange)),
-                        width: .fixed(paceBarWidth)
+                    LineMark(
+                        x: .value("Distance", sample.distanceKm),
+                        y: .value("Speed", normalize(3600 / pace, in: speedRange)),
+                        series: .value("Series", "speed")
                     )
-                    .foregroundStyle(paceGradient)
-                    .cornerRadius(2)
+                    .foregroundStyle(speedAccent)
+                    .lineStyle(StrokeStyle(lineWidth: 2.4))
+                    .interpolationMethod(.catmullRom)
                 }
             }
 
-            // Live frontier marker — pulsing dot at the runner's
-            // current distance, plus a faint vertical guide.
+            // HR line (red) — normalised in the HR range. Only present on
+            // watch runs; phone-only treadmill has no HR, so this is empty
+            // and the chart reads as a clean speed-only trace.
+            ForEach(samples, id: \.bucketIndex) { sample in
+                if let hr = sample.heartRate {
+                    LineMark(
+                        x: .value("Distance", sample.distanceKm),
+                        y: .value("HR", normalize(hr, in: hrRange)),
+                        series: .value("Series", "hr")
+                    )
+                    .foregroundStyle(hrAccent)
+                    .lineStyle(StrokeStyle(lineWidth: 2))
+                    .interpolationMethod(.catmullRom)
+                }
+            }
+
+            // Live frontier marker — pulsing dot riding the speed line at
+            // the runner's current position, plus a faint vertical guide.
             let nowKm = liveDistanceMeters / 1000
             RuleMark(x: .value("Now", nowKm))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
@@ -107,7 +116,7 @@ struct LiveRunChart: View {
 
             PointMark(
                 x: .value("Now", nowKm),
-                y: .value("Live", 0.5)
+                y: .value("Live", dotY)
             )
             .symbol {
                 FrontierDot()
@@ -115,7 +124,32 @@ struct LiveRunChart: View {
         }
         .chartXScale(domain: 0...xMaxKm)
         .chartYScale(domain: 0...1)
-        .chartYAxis(.hidden)
+        .chartYAxis {
+            // Leading axis labelled km/h (speed). Map normalised tick
+            // positions back to real units via the speed range.
+            AxisMarks(position: .leading, values: axisTicks) { value in
+                AxisGridLine().foregroundStyle(.white.opacity(0.06))
+                if let t = value.as(Double.self) {
+                    AxisValueLabel {
+                        Text(speedAxisLabel(t))
+                            .font(.caption2)
+                            .foregroundStyle(speedAccent.opacity(0.8))
+                    }
+                }
+            }
+            // Trailing axis labelled bpm (HR) — only when HR is present.
+            if hasHR {
+                AxisMarks(position: .trailing, values: axisTicks) { value in
+                    if let t = value.as(Double.self) {
+                        AxisValueLabel {
+                            Text(hrAxisLabel(t))
+                                .font(.caption2)
+                                .foregroundStyle(hrAccent.opacity(0.8))
+                        }
+                    }
+                }
+            }
+        }
         .chartXAxis {
             AxisMarks(values: xAxisValues) { value in
                 AxisGridLine().foregroundStyle(.white.opacity(0.06))
@@ -131,6 +165,25 @@ struct LiveRunChart: View {
         }
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: samples.count)
         .animation(.spring(response: 0.6, dampingFraction: 0.85), value: xMaxKm)
+    }
+
+    /// Normalised y for the live frontier dot — rides the speed line.
+    private var dotY: Double {
+        guard let kmh = liveSpeedKmh else { return 0.5 }
+        return normalize(kmh, in: speedRange)
+    }
+
+    /// Shared tick positions for both y-axes (normalised 0…1).
+    private let axisTicks: [Double] = [0, 0.25, 0.5, 0.75, 1.0]
+
+    private func speedAxisLabel(_ t: Double) -> String {
+        let v = speedRange.min + t * (speedRange.max - speedRange.min)
+        return v >= 10 ? String(format: "%.0f", v) : String(format: "%.1f", v)
+    }
+
+    private func hrAxisLabel(_ t: Double) -> String {
+        let v = hrRange.min + t * (hrRange.max - hrRange.min)
+        return "\(Int(v))"
     }
 
     // MARK: - Scale
@@ -162,26 +215,20 @@ struct LiveRunChart: View {
         return stride(from: 0, through: max, by: step).map { $0 }
     }
 
-    // MARK: - Bar widths
-
-    private var hrBarWidth: CGFloat { barWidth(for: xMaxKm) }
-    private var paceBarWidth: CGFloat { barWidth(for: xMaxKm) }
-
-    /// Bars get visually narrower as the x-axis expands, otherwise the
-    /// chart turns into a coloured wall. Empirical pixel widths that
-    /// hold up across iPhone sizes.
-    private func barWidth(for axisMax: Double) -> CGFloat {
-        switch axisMax {
-        case ...1: return 8
-        case ...2: return 6
-        case ...5: return 4
-        case ...10: return 3
-        case ...20: return 2
-        default: return 1.4
-        }
-    }
-
     // MARK: - Series ranges
+
+    private var hasHR: Bool { samples.contains { $0.heartRate != nil } }
+
+    /// Speed range in km/h, derived from the per-bucket pace samples.
+    /// Padded so the line doesn't slam the chart rails.
+    private var speedRange: (min: Double, max: Double) {
+        let values = samples.compactMap(\.paceSecPerKm).filter { $0 > 0 }.map { 3600 / $0 }
+        guard !values.isEmpty else { return (6, 14) }
+        let lo = values.min() ?? 6
+        let hi = values.max() ?? 14
+        let pad = max(0.5, (hi - lo) * 0.1)
+        return (Swift.max(0, lo - pad), hi + pad)
+    }
 
     private var hrRange: (min: Double, max: Double) {
         let values = samples.compactMap(\.heartRate)
@@ -193,15 +240,6 @@ struct LiveRunChart: View {
         return (max(40, lo - pad), hi + pad)
     }
 
-    private var paceRange: (min: Double, max: Double) {
-        let values = samples.compactMap(\.paceSecPerKm).filter { $0 > 0 }
-        guard !values.isEmpty else { return (4 * 60, 8 * 60) }
-        let lo = values.min() ?? 240
-        let hi = values.max() ?? 480
-        let pad = max(15, (hi - lo) * 0.1)
-        return (max(120, lo - pad), hi + pad)
-    }
-
     private var hrRangeLabel: String {
         guard !samples.contains(where: { $0.heartRate != nil }) else {
             return "\(Int(hrRange.min))–\(Int(hrRange.max)) bpm"
@@ -209,10 +247,11 @@ struct LiveRunChart: View {
         return "—"
     }
 
-    private var paceRangeLabel: String {
-        let hasPace = samples.contains(where: { ($0.paceSecPerKm ?? 0) > 0 })
-        guard hasPace else { return "—" }
-        return "\(formatPaceShort(paceRange.min))–\(formatPaceShort(paceRange.max))"
+    private var speedRangeLabel: String {
+        let hasSpeed = samples.contains(where: { ($0.paceSecPerKm ?? 0) > 0 })
+        guard hasSpeed else { return "—" }
+        let r = speedRange
+        return String(format: "%.1f–%.1f km/h", r.min, r.max)
     }
 
     private func normalize(_ v: Double, in range: (min: Double, max: Double)) -> Double {
@@ -230,40 +269,14 @@ struct LiveRunChart: View {
             : String(format: "%.1f", km)
     }
 
-    private func formatPaceShort(_ secPerKm: Double) -> String {
-        guard secPerKm.isFinite, secPerKm > 0 else { return "—" }
-        let m = Int(secPerKm) / 60
-        let r = Int(secPerKm) % 60
-        return String(format: "%d:%02d", m, r)
-    }
-
     // MARK: - Visual style
 
     private var hrAccent: Color { Color(red: 1.0, green: 0.35, blue: 0.55) }
-    private var paceAccent: Color { Color(red: 0.35, green: 0.85, blue: 1.0) }
-
-    private var hrGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                hrAccent,
-                Color(red: 1.0, green: 0.55, blue: 0.85).opacity(0.55),
-            ],
-            startPoint: .top, endPoint: .bottom
-        )
-    }
-    private var paceGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                paceAccent,
-                Color(red: 0.30, green: 1.0, blue: 0.85).opacity(0.55),
-            ],
-            startPoint: .top, endPoint: .bottom
-        )
-    }
+    private var speedAccent: Color { Color(red: 0.35, green: 0.85, blue: 1.0) }
 }
 
 /// Pulsing dot painted at the chart frontier so the user reads "this
-/// is where you are RIGHT NOW; bars are still growing." A spring
+/// is where you are RIGHT NOW; the line is still growing." A spring
 /// SwiftUI animation continuously scales the dot up + down.
 private struct FrontierDot: View {
     @State private var pulse: Bool = false
@@ -304,6 +317,7 @@ private struct FrontierDot: View {
             )
         },
         liveDistanceMeters: 420,
+        liveSpeedKmh: 10.2,
         liveHeartRateBPM: 148
     )
     .frame(height: 220)
@@ -323,6 +337,7 @@ private struct FrontierDot: View {
             )
         },
         liveDistanceMeters: 8050,
+        liveSpeedKmh: 11.4,
         liveHeartRateBPM: 162
     )
     .frame(height: 220)

@@ -101,6 +101,12 @@ struct VerticalRollingText: View {
             .foregroundStyle(color)
             .lineSpacing(lineSpacing)
             .multilineTextAlignment(.leading)
+            // Size to the FULL content height regardless of the
+            // container's proposed height. Without this the Text is
+            // proposed the (short) container height, truncates to fit,
+            // and the height we measure below comes back truncated — so
+            // overflow reads ~0 and the text caps instead of rolling.
+            .fixedSize(horizontal: false, vertical: true)
             .background(
                 GeometryReader { g in
                     Color.clear
