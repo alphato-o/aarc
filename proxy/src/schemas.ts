@@ -15,7 +15,7 @@ export const GenerateScriptRequestSchema = z
         personalityId: z.string().default("roast_coach"),
         runType: z.enum(["outdoor", "treadmill"]).default("outdoor"),
         recentRunSummary: z.string().max(500).optional(),
-        userMemory: z.array(z.string().max(200)).max(20).optional(),
+        userMemory: z.array(z.string().max(400)).max(20).optional(),
         /// When true, the model is told NOT to include a t=0 START
         /// ROAST line — the iOS client has already generated and
         /// played one via /dynamic-line so the runner can start moving

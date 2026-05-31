@@ -181,13 +181,13 @@ struct SettingsView: View {
                         .font(.callout)
                         .frame(minHeight: 160)
                         .autocorrectionDisabled()
-                    Text("\(personalContext.bullets.count) bullet\(personalContext.bullets.count == 1 ? "" : "s") sent with every script + reactive line")
+                    personalContextStatus
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } header: {
                     Text("Personal trolls")
                 } footer: {
-                    Text("One bullet per line. The coach weaves these into roasts during the run — short, specific, blunt. Think \"FydeOS has 10 users\", \"Will never be Sam Altman\", \"Phi Browser is going nowhere\". Edit freely; clearing the field restores the built-in defaults on next launch.")
+                    Text("One bullet per line. The coach weaves these into roasts during the run — short, specific, blunt. Think \"FydeOS has 10 users\", \"Will never be Sam Altman\", \"Phi Browser is going nowhere\". Above 20 bullets, each run picks a different 20-of-N subset so the troll cycles. Bullets >400 chars are rejected by the proxy. Edit freely; clearing the field restores the defaults on next launch.")
                 }
 
                 Section("About") {
@@ -196,6 +196,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .tint(Theme.link)
         }
     }
 
@@ -206,6 +207,25 @@ struct SettingsView: View {
             get: { AudioPlaybackManager.shared.isMuted },
             set: { AudioPlaybackManager.shared.isMuted = $0 }
         )
+    }
+
+    @ViewBuilder
+    private var personalContextStatus: some View {
+        let all = personalContext.allBullets
+        let cap = PersonalContextStore.perCallCap
+        let oversize = all.filter { $0.count > 400 }.count
+        let sentCount = min(all.count, cap)
+        VStack(alignment: .leading, spacing: 2) {
+            if all.count > cap {
+                Text("\(all.count) bullets total — \(sentCount) sent per run, rotated each run.")
+            } else {
+                Text("\(all.count) bullet\(all.count == 1 ? "" : "s") sent with every script + reactive line.")
+            }
+            if oversize > 0 {
+                Text("⚠︎ \(oversize) bullet\(oversize == 1 ? "" : "s") >400 chars — will be rejected by the proxy. Shorten or split.")
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 
     private var personalContextBinding: Binding<String> {
