@@ -6,14 +6,15 @@ import AARCKit
 ///
 /// X-axis: distance in km, auto-scaling through round steps so the
 /// chart stays readable from t=0 (first 100m) all the way out to a
-/// 50km ultra. Two normalized line series share a 0…1 vertical canvas:
-/// speed (blue, km/h) and heart rate (red, bpm). A dual y-axis labels
-/// km/h on the leading edge and bpm on the trailing edge so the runner
-/// can read real units off either line. HR is watch-only — on a
-/// phone-only treadmill run only the speed line draws.
+/// 50km ultra. Two normalized bar series share a 0…1 vertical canvas,
+/// OVERLAPPED on the same x: a wide translucent speed bar (blue, km/h)
+/// behind a narrow solid HR bar (red, bpm), so both heights read
+/// independently. A dual y-axis labels km/h on the leading edge and bpm
+/// on the trailing edge. HR is watch-only — on a phone-only treadmill
+/// run only the speed bars draw.
 ///
-/// The frontier dot pulses at the runner's current position, riding
-/// vertically on the speed line so it tracks live performance.
+/// The frontier dot pulses at the runner's current position, riding the
+/// live speed value so it tracks performance as the bars grow.
 struct LiveRunChart: View {
     let samples: [LiveRunChartSample]
     let liveDistanceMeters: Double
@@ -76,39 +77,42 @@ struct LiveRunChart: View {
 
     private var chart: some View {
         Chart {
-            // Speed line (blue) — km/h, normalised in the speed range so
-            // faster = higher. `series:` keeps it a distinct line from HR.
+            // Speed bars (blue) — WIDE and translucent, drawn first so
+            // they sit behind. Normalised km/h, so a faster split is
+            // taller. One bar per 100m bucket; they march left-to-right
+            // as the run grows.
             ForEach(samples, id: \.bucketIndex) { sample in
                 if let pace = sample.paceSecPerKm, pace > 0 {
-                    LineMark(
+                    BarMark(
                         x: .value("Distance", sample.distanceKm),
                         y: .value("Speed", normalize(3600 / pace, in: speedRange)),
-                        series: .value("Series", "speed")
+                        width: .fixed(speedBarWidth)
                     )
-                    .foregroundStyle(speedAccent)
-                    .lineStyle(StrokeStyle(lineWidth: 2.4))
-                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(speedAccent.opacity(0.40))
+                    .cornerRadius(1.5)
                 }
             }
 
-            // HR line (red) — normalised in the HR range. Only present on
-            // watch runs; phone-only treadmill has no HR, so this is empty
-            // and the chart reads as a clean speed-only trace.
+            // HR bars (red) — NARROWER and solid, centered on the SAME x
+            // as the speed bar and drawn on top. Because the back bar is
+            // wide+translucent and the front bar is narrow+solid, both
+            // heights read independently even where they overlap. HR is
+            // watch-only — empty on phone-only treadmill, so the chart
+            // reads as clean speed-only bars there.
             ForEach(samples, id: \.bucketIndex) { sample in
                 if let hr = sample.heartRate {
-                    LineMark(
+                    BarMark(
                         x: .value("Distance", sample.distanceKm),
                         y: .value("HR", normalize(hr, in: hrRange)),
-                        series: .value("Series", "hr")
+                        width: .fixed(hrBarWidth)
                     )
-                    .foregroundStyle(hrAccent)
-                    .lineStyle(StrokeStyle(lineWidth: 2))
-                    .interpolationMethod(.catmullRom)
+                    .foregroundStyle(hrAccent.opacity(0.95))
+                    .cornerRadius(1)
                 }
             }
 
-            // Live frontier marker — pulsing dot riding the speed line at
-            // the runner's current position, plus a faint vertical guide.
+            // Live frontier marker — pulsing dot at the runner's current
+            // position, riding the speed value, plus a faint vertical guide.
             let nowKm = liveDistanceMeters / 1000
             RuleMark(x: .value("Now", nowKm))
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 4]))
@@ -215,6 +219,26 @@ struct LiveRunChart: View {
         return stride(from: 0, through: max, by: step).map { $0 }
     }
 
+    // MARK: - Bar widths
+
+    /// The wide (background) speed bar. Narrows as the x-axis expands so
+    /// the chart doesn't turn into a solid wall on long runs.
+    private var speedBarWidth: CGFloat {
+        switch xMaxKm {
+        case ...1: return 10
+        case ...2: return 8
+        case ...5: return 5
+        case ...10: return 3.5
+        case ...20: return 2.4
+        default: return 1.6
+        }
+    }
+
+    /// The narrow (foreground) HR bar — centered on the same x as the
+    /// speed bar so it reads as a solid stripe inside the translucent
+    /// speed column. Floored so it never vanishes on long runs.
+    private var hrBarWidth: CGFloat { max(1, speedBarWidth * 0.46) }
+
     // MARK: - Series ranges
 
     private var hasHR: Bool { samples.contains { $0.heartRate != nil } }
@@ -276,7 +300,7 @@ struct LiveRunChart: View {
 }
 
 /// Pulsing dot painted at the chart frontier so the user reads "this
-/// is where you are RIGHT NOW; the line is still growing." A spring
+/// is where you are RIGHT NOW; the bars are still growing." A spring
 /// SwiftUI animation continuously scales the dot up + down.
 private struct FrontierDot: View {
     @State private var pulse: Bool = false
