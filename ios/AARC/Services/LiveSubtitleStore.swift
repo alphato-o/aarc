@@ -20,11 +20,40 @@ final class LiveSubtitleStore {
     /// replace the current line immediately.
     private let dwellSeconds: TimeInterval = 6
 
+    /// Which voice spoke the line — drives the subtitle's name label and
+    /// tint so the runner can see who's talking in the two-hander.
+    enum Voice: Equatable {
+        case ricky
+        case pippa
+
+        /// Derived from the queue item's source. Pippa's lines are sourced
+        /// "pippa:…"; everything else is the Roast Coach.
+        static func from(source: String) -> Voice {
+            source.hasPrefix("pippa") ? .pippa : .ricky
+        }
+
+        var label: String {
+            switch self {
+            case .ricky: return "RICKY"
+            case .pippa: return "PIPPA"
+            }
+        }
+
+        /// Liked lines are calibrated per persona.
+        var personalityId: String {
+            switch self {
+            case .ricky: return "roast_coach"
+            case .pippa: return "pippa"
+            }
+        }
+    }
+
     struct Line: Identifiable, Equatable {
         let id: UUID
         let text: String
         let source: String
         let priority: VoicePriority
+        let voice: Voice
         let startedAt: Date
         var isPlaying: Bool
         /// Total seconds the bar should remain visible from `startedAt`,
@@ -57,6 +86,7 @@ final class LiveSubtitleStore {
             text: item.text,
             source: item.source,
             priority: item.priority,
+            voice: .from(source: item.source),
             startedAt: .now,
             isPlaying: true,
             estimatedTotalDwell: estTotalDwell,
@@ -101,7 +131,7 @@ final class LiveSubtitleStore {
             LikedLinesStore.shared.like(
                 text: line.text,
                 source: line.source,
-                personalityId: "roast_coach"
+                personalityId: line.voice.personalityId
             )
         }
         currentLine?.liked.toggle()

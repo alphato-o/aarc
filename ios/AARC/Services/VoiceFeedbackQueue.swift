@@ -34,6 +34,13 @@ struct VoiceItem: Identifiable, Sendable {
     /// Currently unused; reserved for future "force local for an offline-only
     /// safety line" needs.
     let preferRemoteVoiceOverride: Bool?
+    /// ElevenLabs voice for this line. nil → the default Roast Coach voice.
+    /// Pippa's lines carry her voice id here.
+    let voiceId: String?
+    /// Links a his→her exchange. When one member is preempted or dropped,
+    /// its siblings are purged so an orphaned reaction can't play out of
+    /// context. nil for standalone lines.
+    let segmentId: UUID?
 
     init(
         id: UUID = UUID(),
@@ -43,7 +50,9 @@ struct VoiceItem: Identifiable, Sendable {
         dedupKey: String? = nil,
         createdAt: Date = .now,
         expiresAfter: TimeInterval? = nil,
-        preferRemoteVoiceOverride: Bool? = nil
+        preferRemoteVoiceOverride: Bool? = nil,
+        voiceId: String? = nil,
+        segmentId: UUID? = nil
     ) {
         self.id = id
         self.text = text
@@ -53,6 +62,8 @@ struct VoiceItem: Identifiable, Sendable {
         self.createdAt = createdAt
         self.expiresAfter = expiresAfter
         self.preferRemoteVoiceOverride = preferRemoteVoiceOverride
+        self.voiceId = voiceId
+        self.segmentId = segmentId
     }
 
     func isStale(at now: Date = .now) -> Bool {
@@ -137,6 +148,12 @@ final class VoiceFeedbackQueue {
             playbackTask?.cancel()
             playbackTask = nil
             Speaker.shared.stopActiveBackend()
+            // If the preempted line was half of a two-voice exchange, drop
+            // its partner too — an orphaned reaction to a cut-off line
+            // would play out of context.
+            if let seg = cur.segmentId {
+                pending.removeAll { $0.segmentId == seg }
+            }
             currentlyPlaying = nil
             // Push the new item to the front of the queue, then drain.
             pending.insert(item, at: 0)
@@ -198,6 +215,10 @@ final class VoiceFeedbackQueue {
             if candidate.isStale() {
                 droppedStale += 1
                 log.info("VoiceQueue drop stale src=\(candidate.source, privacy: .public)")
+                // Drop the rest of the exchange too if this was part of one.
+                if let seg = candidate.segmentId {
+                    pending.removeAll { $0.segmentId == seg }
+                }
                 continue
             }
             return candidate
@@ -227,6 +248,7 @@ final class VoiceFeedbackQueue {
         playbackTask = Task { @MainActor [weak self] in
             await Speaker.shared.playSync(
                 text: item.text,
+                voiceId: item.voiceId,
                 preferRemoteOverride: item.preferRemoteVoiceOverride,
                 onAudioStart: {
                     LiveSubtitleStore.shared.startedPlaying(item)

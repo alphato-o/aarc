@@ -46,6 +46,9 @@ final class RunDirector {
     /// prompt's suggested everySeconds: 300). Used only to predict the
     /// protect window; ScriptEngine still fires on the real trigger.
     private let timeIntervalSeconds: TimeInterval = 300
+    /// Minimum clear air before the next must-play for Pippa to react —
+    /// roughly two spoken lines (his + hers) plus a beat.
+    private let exchangeRoomSeconds: TimeInterval = 20
 
     // MARK: - Observable state (read by ContextualCoach + diagnostics)
 
@@ -62,6 +65,15 @@ final class RunDirector {
     var isProtectedWindow: Bool {
         guard let eta = nextMustPlayETA else { return false }
         return eta <= protectLeadSeconds
+    }
+
+    /// True when there's enough clear air before the next must-play to fit
+    /// a full two-voice exchange (Ricky's line + Pippa's reaction ≈ 2×).
+    /// `Conversation` consults this to decide whether Pippa reacts — so a
+    /// km split never lands while the duo is still mid-banter.
+    var hasRoomForExchange: Bool {
+        guard let eta = nextMustPlayETA else { return true }
+        return eta > exchangeRoomSeconds
     }
 
     // MARK: - Internal

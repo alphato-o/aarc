@@ -419,6 +419,7 @@ struct ActiveRunView: View {
         //      polling traffic after dismiss.
         ContextualCoach.shared.stop()
         ScriptEngine.shared.stop()
+        Conversation.shared.stop()
         RunDirector.shared.stop()
         VoiceFeedbackQueue.shared.stopAll()
 

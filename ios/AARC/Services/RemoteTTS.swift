@@ -26,9 +26,13 @@ import OSLog
 final class RemoteTTS: NSObject {
     static let shared = RemoteTTS()
 
-    /// Hardcoded ElevenLabs voice. We picked one and we're sticking with
-    /// it; no user-facing voice picker.
+    /// Primary ElevenLabs voice — the Roast Coach (Ricky). Default for
+    /// any line that doesn't specify a voice.
     static let voiceId: String = "lKMAeQD7Brvj7QCWByqK"
+
+    /// Pippa — the second voice (seductive-but-mean British woman who
+    /// reacts to Ricky). Passed explicitly on her lines.
+    static let pippaVoiceId: String = "ShB6BQqbEXZxWO5511Qq"
 
     /// Cumulative bytes pulled from the proxy this session — diagnostic.
     private(set) var bytesFetchedThisSession: Int = 0
@@ -86,10 +90,10 @@ final class RemoteTTS: NSObject {
     /// it. Used by the queue to surface the subtitle at the moment
     /// the runner hears the first syllable, not at the start of the
     /// fetch.
-    func play(text: String, onAudioStart: (@MainActor @Sendable () -> Void)? = nil) async {
+    func play(text: String, voiceId: String = RemoteTTS.voiceId, onAudioStart: (@MainActor @Sendable () -> Void)? = nil) async {
         guard !text.isEmpty else { return }
 
-        let key = AudioCache.key(voiceId: Self.voiceId, text: text)
+        let key = AudioCache.key(voiceId: voiceId, text: text)
         let url: URL
         if let cached = await AudioCache.shared.url(forKey: key) {
             url = cached
@@ -97,7 +101,7 @@ final class RemoteTTS: NSObject {
             lastError = nil
         } else {
             do {
-                let data = try await fetchAudio(text: text)
+                let data = try await fetchAudio(text: text, voiceId: voiceId)
                 bytesFetchedThisSession += data.count
                 url = try await AudioCache.shared.store(data: data, forKey: key)
                 lastWasCacheHit = false
@@ -236,12 +240,12 @@ final class RemoteTTS: NSObject {
     /// RunOrchestrator to warm the cache during the prepare phase so the
     /// warmup at t=0 plays instantly. Best-effort; on failure the live
     /// `play(text:)` path will retry or fall back.
-    func prefetch(_ text: String) async {
+    func prefetch(_ text: String, voiceId: String = RemoteTTS.voiceId) async {
         guard !text.isEmpty else { return }
-        let key = AudioCache.key(voiceId: Self.voiceId, text: text)
+        let key = AudioCache.key(voiceId: voiceId, text: text)
         if await AudioCache.shared.url(forKey: key) != nil { return }
         do {
-            let data = try await fetchAudio(text: text)
+            let data = try await fetchAudio(text: text, voiceId: voiceId)
             bytesFetchedThisSession += data.count
             _ = try await AudioCache.shared.store(data: data, forKey: key)
             lastError = nil
@@ -252,13 +256,13 @@ final class RemoteTTS: NSObject {
 
     // MARK: - Network
 
-    private func fetchAudio(text: String) async throws -> Data {
+    private func fetchAudio(text: String, voiceId: String = RemoteTTS.voiceId) async throws -> Data {
         let url = Config.apiBaseURL.appendingPathComponent("tts")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.timeoutInterval = 15
-        let body: [String: Any] = ["text": text, "voiceId": Self.voiceId]
+        let body: [String: Any] = ["text": text, "voiceId": voiceId]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await URLSession.shared.data(for: request)

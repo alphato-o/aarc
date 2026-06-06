@@ -20,7 +20,12 @@ struct LiveSubtitleBar: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
+                // Who's speaking — name chip in the voice's tint.
+                Text(line.voice.label)
+                    .font(.caption2.bold())
+                    .tracking(1.4)
+                    .foregroundStyle(barAccent)
                 // VerticalRollingText pinned to the available frame —
                 // never grows the container, just rolls inside it.
                 VerticalRollingText(
@@ -103,6 +108,11 @@ struct LiveSubtitleBar: View {
     /// priority so milestone / coaching / banter are visually
     /// distinguishable at a glance.
     private var barAccent: Color {
+        // Pippa always reads pink, whatever priority she inherited from the
+        // line she's reacting to — so the two voices are instantly distinct.
+        if line.voice == .pippa {
+            return Color(red: 1.0, green: 0.45, blue: 0.75)
+        }
         switch line.priority {
         case .milestone: return Color(red: 1.0, green: 0.55, blue: 0.30)   // amber
         case .coaching: return Color(red: 0.40, green: 0.85, blue: 1.0)    // cyan
@@ -118,6 +128,7 @@ struct LiveSubtitleBar: View {
             text: "Three kilometres in. Christ, you still upright?",
             source: "script:per_km",
             priority: .milestone,
+            voice: .ricky,
             startedAt: .now,
             isPlaying: true,
             estimatedTotalDwell: 12,
@@ -138,6 +149,7 @@ struct LiveSubtitleBar: View {
             text: "Oh, 'I'd catch a grenade for ya' — would you though? Have you actually SEEN a grenade?",
             source: "coach:music_riff",
             priority: .banter,
+            voice: .ricky,
             startedAt: .now.addingTimeInterval(-3),
             isPlaying: false,
             estimatedTotalDwell: 12,

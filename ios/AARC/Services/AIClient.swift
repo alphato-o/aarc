@@ -229,6 +229,57 @@ actor AIClient {
         let error: String?
     }
 
+    // MARK: - React line (/react-line) — Pippa reacting to a Ricky line
+
+    struct ReactLineContext: Codable, Sendable {
+        var elapsedSeconds: Double
+        var distanceMeters: Double
+        var currentHR: Double?
+        var currentPaceSecPerKm: Double?
+        var planKind: String        // "distance" | "time" | "open"
+        var runType: String         // "outdoor" | "treadmill"
+    }
+
+    struct ReactLineRequest: Codable, Sendable {
+        var personalityId: String = "pippa"
+        /// The line Ricky just spoke — what she reacts to.
+        var partnerLine: String
+        /// Where his line came from ("script:every_km", "coach:stationary"…).
+        var partnerSource: String?
+        var runContext: ReactLineContext
+        var recentDispatched: [String]?
+        var personalNotes: [String]?
+        var likedLineExamples: [String]?
+    }
+
+    /// Generate Pippa's reaction to a line Ricky just spoke. Same envelope
+    /// shape as /dynamic-line; reuses DynamicLineResult.
+    func reactLine(_ request: ReactLineRequest) async throws -> DynamicLineResult {
+        let url = Config.apiBaseURL.appendingPathComponent("react-line")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        urlRequest.timeoutInterval = 15
+        urlRequest.httpBody = try encoder.encode(request)
+
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw AIError.transport("non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw AIError.httpStatus(http.statusCode, body: body.prefix(500).description)
+        }
+        let envelope = try decoder.decode(DynamicEnvelope.self, from: data)
+        guard envelope.ok else {
+            throw AIError.proxy(envelope.error ?? "unknown")
+        }
+        guard let text = envelope.text, let model = envelope.model else {
+            throw AIError.proxy("missing fields in proxy response")
+        }
+        return DynamicLineResult(text: text, model: model)
+    }
+
     // MARK: - Music comment (/music-comment)
 
     struct MusicTrack: Codable, Sendable {

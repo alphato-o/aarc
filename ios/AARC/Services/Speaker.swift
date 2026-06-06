@@ -38,14 +38,18 @@ final class Speaker {
         priority: VoicePriority = .coaching,
         source: String = "speaker",
         dedupKey: String? = nil,
-        expiresAfter: TimeInterval? = nil
+        expiresAfter: TimeInterval? = nil,
+        voiceId: String? = nil,
+        segmentId: UUID? = nil
     ) {
         let item = VoiceItem(
             text: text,
             priority: priority,
             source: source,
             dedupKey: dedupKey,
-            expiresAfter: expiresAfter
+            expiresAfter: expiresAfter,
+            voiceId: voiceId,
+            segmentId: segmentId
         )
         VoiceFeedbackQueue.shared.enqueue(item)
     }
@@ -68,6 +72,7 @@ final class Speaker {
     /// fetch.
     func playSync(
         text: String,
+        voiceId: String? = nil,
         preferRemoteOverride: Bool? = nil,
         onAudioStart: (@MainActor @Sendable () -> Void)? = nil
     ) async {
@@ -76,7 +81,11 @@ final class Speaker {
         if Task.isCancelled { return }
         let useRemote = preferRemoteOverride ?? preferRemoteVoice
         if useRemote {
-            await RemoteTTS.shared.play(text: text, onAudioStart: onAudioStart)
+            await RemoteTTS.shared.play(
+                text: text,
+                voiceId: voiceId ?? RemoteTTS.voiceId,
+                onAudioStart: onAudioStart
+            )
         } else {
             await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
         }

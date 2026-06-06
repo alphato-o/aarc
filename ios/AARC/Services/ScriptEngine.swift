@@ -169,7 +169,8 @@ final class ScriptEngine {
         source: String,
         priority: VoicePriority = .coaching,
         dedupKey: String? = nil,
-        expiresAfter: TimeInterval? = nil
+        expiresAfter: TimeInterval? = nil,
+        segmentId: UUID? = nil
     ) -> Bool {
         guard isActive else { return false }
         Speaker.shared.speak(
@@ -177,7 +178,8 @@ final class ScriptEngine {
             priority: priority,
             source: source,
             dedupKey: dedupKey,
-            expiresAfter: expiresAfter
+            expiresAfter: expiresAfter,
+            segmentId: segmentId
         )
         recordDispatch(text: text)
         return true
@@ -312,12 +314,25 @@ final class ScriptEngine {
         }
 
         let text = nextVariantText(for: message)
+        // Tag with a segment id so Pippa's reaction (if she reacts) is
+        // bound to this line as an atomic pair in the queue.
+        let segment = UUID()
         Speaker.shared.speak(
             text,
             priority: .milestone,
-            source: "script:\(message.id)"
+            source: "script:\(message.id)",
+            segmentId: segment
         )
         recordDispatch(text: text)
+        // Second voice reacts to the roast (not the announcement). No-op
+        // if Pippa is disabled or the Director says there's no room.
+        Conversation.shared.rickySpoke(
+            text: text,
+            source: "script:\(message.id)",
+            priority: .milestone,
+            segmentId: segment,
+            metrics: metrics
+        )
     }
 
     private func recordDispatch(text: String) {

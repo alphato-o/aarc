@@ -92,6 +92,14 @@ struct CoachPlayground: View {
             }
 
             Section {
+                pippaButton
+            } header: {
+                Text("Pippa (second voice)")
+            } footer: {
+                Text("Plays the last Ricky line above (or a sample) in his voice, then asks /react-line for Pippa's reaction and plays it in HER voice — the two-hander as it lands in a run. Use this to audition her voice and iterate her persona server-side.")
+            }
+
+            Section {
                 if let lastFired {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Last line spoken").font(.caption).foregroundStyle(.secondary)
@@ -186,6 +194,65 @@ struct CoachPlayground: View {
     }
 
     // MARK: - Helpers
+
+    private var pippaButton: some View {
+        Button {
+            firePippa()
+        } label: {
+            Label(busy == "pippa" ? "Generating…" : "Hear Pippa react",
+                  systemImage: "person.2.wave.2.fill")
+        }
+        .disabled(busy != nil)
+    }
+
+    /// Fallback Ricky line to react to when nothing's been fired yet.
+    private static let samplePartnerLine =
+        "Three kilometres, and you're already breathing like a broken kettle. Genuinely heroic, in a tragic sort of way."
+
+    private func firePippa() {
+        busy = "pippa"
+        lastError = nil
+        let rickyLine = lastFired ?? Self.samplePartnerLine
+        let notes = PersonalContextStore.shared.bullets
+        let request = AIClient.ReactLineRequest(
+            personalityId: "pippa",
+            partnerLine: rickyLine,
+            partnerSource: "script:test",
+            runContext: syntheticReactContext(),
+            recentDispatched: nil,
+            personalNotes: notes.isEmpty ? nil : notes,
+            likedLineExamples: nil
+        )
+        Task { @MainActor in
+            defer { busy = nil }
+            do {
+                // Ricky's line first (his voice), then Pippa's reaction
+                // (her voice) — both through the real Speaker pipeline.
+                Speaker.shared.speak(rickyLine, priority: .milestone, source: "script:test")
+                let result = try await AIClient.shared.reactLine(request)
+                Speaker.shared.speak(
+                    result.text,
+                    priority: .milestone,
+                    source: "pippa:react",
+                    voiceId: RemoteTTS.pippaVoiceId
+                )
+                lastFired = "RICKY: \(rickyLine)\n\nPIPPA: \(result.text)"
+            } catch {
+                lastError = error.localizedDescription
+            }
+        }
+    }
+
+    private func syntheticReactContext() -> AIClient.ReactLineContext {
+        AIClient.ReactLineContext(
+            elapsedSeconds: 600,
+            distanceMeters: 1500,
+            currentHR: 175,
+            currentPaceSecPerKm: 360,
+            planKind: "distance",
+            runType: "treadmill"
+        )
+    }
 
     private func syntheticDynamicContext() -> AIClient.DynamicLineContext {
         AIClient.DynamicLineContext(

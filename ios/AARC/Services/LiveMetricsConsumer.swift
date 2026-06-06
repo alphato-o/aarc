@@ -117,6 +117,7 @@ final class LiveMetricsConsumer {
         // early, any unspoken lines just go quiet.
         ScriptEngine.shared.stop()
         ContextualCoach.shared.stop()
+        Conversation.shared.stop()
         RunDirector.shared.stop()
         LiveActivityController.shared.end()
 

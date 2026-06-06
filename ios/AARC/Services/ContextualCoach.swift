@@ -414,11 +414,20 @@ final class ContextualCoach {
                 // milestone burst — a pace_drop comment 2 minutes late is
                 // noise. Milestones at the front of the queue take priority
                 // and may even preempt a coaching line that's mid-play.
+                let segment = UUID()
                 ScriptEngine.shared.tryInject(
                     text: result.text,
                     source: "coach:\(trigger.rawValue)",
                     priority: .coaching,
-                    expiresAfter: 120
+                    expiresAfter: 120,
+                    segmentId: segment
+                )
+                Conversation.shared.rickySpoke(
+                    text: result.text,
+                    source: "coach:\(trigger.rawValue)",
+                    priority: .coaching,
+                    segmentId: segment,
+                    metrics: metrics
                 )
                 self.lastFiredTrigger = trigger.rawValue
                 self.lastFiredAt = .now
@@ -525,12 +534,21 @@ final class ContextualCoach {
             // song will have moved on.  dedupKey prevents queueing the same
             // line of the same song twice across rapid re-probes.
             let dedup = "music:\(track.artist)|\(track.title)|\(selection.line)"
+            let segment = UUID()
             ScriptEngine.shared.tryInject(
                 text: result.text,
                 source: "coach:music_riff",
                 priority: .banter,
                 dedupKey: dedup,
-                expiresAfter: 60
+                expiresAfter: 60,
+                segmentId: segment
+            )
+            Conversation.shared.rickySpoke(
+                text: result.text,
+                source: "coach:music_riff",
+                priority: .banter,
+                segmentId: segment,
+                metrics: metrics
             )
             lastFiredTrigger = "music_riff"
             lastFiredAt = .now
