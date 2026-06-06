@@ -82,7 +82,8 @@ struct LiveRunChart: View {
             // taller. One bar per 100m bucket; they march left-to-right
             // as the run grows.
             ForEach(samples, id: \.bucketIndex) { sample in
-                if let pace = sample.paceSecPerKm, pace > 0 {
+                if let pace = sample.paceSecPerKm, pace > 0,
+                   Self.plausibleSpeedKmh.contains(3600 / pace) {
                     BarMark(
                         x: .value("Distance", sample.distanceKm),
                         y: .value("Speed", normalize(3600 / pace, in: speedRange)),
@@ -100,7 +101,7 @@ struct LiveRunChart: View {
             // watch-only — empty on phone-only treadmill, so the chart
             // reads as clean speed-only bars there.
             ForEach(samples, id: \.bucketIndex) { sample in
-                if let hr = sample.heartRate {
+                if let hr = sample.heartRate, Self.plausibleHR.contains(hr) {
                     BarMark(
                         x: .value("Distance", sample.distanceKm),
                         y: .value("HR", normalize(hr, in: hrRange)),
@@ -247,14 +248,25 @@ struct LiveRunChart: View {
 
     private var hasHR: Bool { samples.contains { $0.heartRate != nil } }
 
+    /// Plausible sensor bounds. A reading outside these is a glitch
+    /// (pedometer hiccup, HR artifact) and must NOT drive the auto-scale
+    /// — otherwise one bad sample makes the axis read "300 bpm" / "60
+    /// km/h" and squashes every real bar to nothing. Out-of-range
+    /// samples are excluded from the range; if one is ever plotted it
+    /// just clamps to the top via `normalize` and is clipped to frame.
+    private static let plausibleSpeedKmh: ClosedRange<Double> = 0...28   // ~2:09/km, faster than any human sustains
+    private static let plausibleHR: ClosedRange<Double> = 30...220
+
     /// Speed range in km/h. Derived from the committed per-bucket pace
     /// samples AND the current live speed, so a surge that hasn't been
     /// bucketed yet (and the live frontier dot) is always inside the
-    /// range instead of clamping to the top rail. Padded with 15%
-    /// headroom so even the tallest bar leaves visible margin.
+    /// range instead of clamping to the top rail. Implausible readings
+    /// are filtered out so a glitch can't blow out the scale. Padded
+    /// with 15% headroom so even the tallest bar leaves visible margin.
     private var speedRange: (min: Double, max: Double) {
         var values = samples.compactMap(\.paceSecPerKm).filter { $0 > 0 }.map { 3600 / $0 }
         if let live = liveSpeedKmh, live > 0 { values.append(live) }
+        values = values.filter { Self.plausibleSpeedKmh.contains($0) }
         guard let lo = values.min(), let hi = values.max() else { return (6, 14) }
         let pad = max(0.5, (hi - lo) * 0.15)
         return (Swift.max(0, lo - pad), hi + pad)
@@ -262,9 +274,11 @@ struct LiveRunChart: View {
 
     private var hrRange: (min: Double, max: Double) {
         // Include the live HR so a sudden spike stays inside the range
-        // (same reasoning as speedRange). 15% headroom off the rails.
+        // (same reasoning as speedRange); drop implausible artifacts so a
+        // bad sample can't blow out the scale. 15% headroom off the rails.
         var values = samples.compactMap(\.heartRate)
         if let live = liveHeartRateBPM, live > 0 { values.append(live) }
+        values = values.filter { Self.plausibleHR.contains($0) }
         guard let lo = values.min(), let hi = values.max() else { return (60, 180) }
         let pad = max(8, (hi - lo) * 0.15)
         return (max(40, lo - pad), hi + pad)
