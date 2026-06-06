@@ -237,3 +237,41 @@ export interface MusicCommentResponse {
     text: string;
     model: string;
 }
+
+// ---------------------------------------------------------------------------
+// /react-line — a second voice (Pippa) reacting to a line the primary coach
+// (Ricky) just spoke. Two-hander continuity: her reply is conditioned on his
+// line. Primary-voice generation is untouched; this is an additive pass.
+// ---------------------------------------------------------------------------
+
+export const ReactLineRequestSchema = z.object({
+    personalityId: z.string().default("pippa"),
+    /// The line the primary coach JUST spoke — the thing she reacts to.
+    partnerLine: z.string().min(1).max(500),
+    /// Where his line came from ("script:every_km", "coach:stationary",
+    /// "coach:music_riff", …) — lets her calibrate tone to the moment.
+    partnerSource: z.string().max(64).optional(),
+    runContext: z.object({
+        elapsedSeconds: z.number().nonnegative(),
+        distanceMeters: z.number().nonnegative(),
+        currentHR: z.number().positive().optional(),
+        currentPaceSecPerKm: z.number().positive().optional(),
+        planKind: z.enum(["distance", "time", "open"]),
+        runType: z.enum(["outdoor", "treadmill"]),
+    }),
+    /// Recent exchange (both voices) so she doesn't repeat and can build on it.
+    recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
+    personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
+    likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
+});
+
+export type ReactLineRequest = z.infer<typeof ReactLineRequestSchema>;
+
+export const ReactLineModelOutputSchema = z.object({
+    text: z.string().min(1).max(500),
+});
+
+export interface ReactLineResponse {
+    text: string;
+    model: string;
+}

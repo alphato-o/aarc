@@ -1,5 +1,6 @@
 import { generateScriptHandler } from "./routes/generateScript";
 import { dynamicLineHandler } from "./routes/dynamicLine";
+import { reactLineHandler } from "./routes/reactLine";
 import { musicCommentHandler } from "./routes/musicComment";
 import { ttsHandler } from "./routes/tts";
 
@@ -31,6 +32,10 @@ export default {
 
         if (request.method === "POST" && url.pathname === "/dynamic-line") {
             return dynamicLineHandler(request, env);
+        }
+
+        if (request.method === "POST" && url.pathname === "/react-line") {
+            return reactLineHandler(request, env);
         }
 
         if (request.method === "POST" && url.pathname === "/music-comment") {
