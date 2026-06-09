@@ -41,6 +41,24 @@ final class RemoteTTS: NSObject {
     /// Last upstream error string, if the most recent attempt fell back.
     private(set) var lastError: String?
 
+    // MARK: - Live diagnostics (observed by Coach Playground)
+
+    /// What the TTS engine is doing right now.
+    enum Activity: Equatable {
+        case idle
+        case synthesizing(chars: Int)   // waiting on ElevenLabs v3
+        case playing(remote: Bool)      // remote == false → Apple fallback
+    }
+    private(set) var activity: Activity = .idle
+    /// When the current ElevenLabs synth started — for a live elapsed readout.
+    private(set) var synthStartedAt: Date?
+    /// What actually voiced the last line: "ElevenLabs" or "Apple (fallback)".
+    private(set) var lastBackend: String?
+    /// Fetch latency of the last non-cached synth, in milliseconds.
+    private(set) var lastLatencyMs: Int?
+    /// Character count of the last line — latency on v3 scales with this.
+    private(set) var lastChars: Int?
+
     // MARK: - Amplified engine path
 
     private let engine = AVAudioEngine()
@@ -92,16 +110,23 @@ final class RemoteTTS: NSObject {
     /// fetch.
     func play(text: String, voiceId: String = RemoteTTS.voiceId, onAudioStart: (@MainActor @Sendable () -> Void)? = nil) async {
         guard !text.isEmpty else { return }
+        lastChars = text.count
+        defer { activity = .idle; synthStartedAt = nil }
 
         let key = AudioCache.key(voiceId: voiceId, text: text)
         let url: URL
         if let cached = await AudioCache.shared.url(forKey: key) {
             url = cached
             lastWasCacheHit = true
+            lastLatencyMs = 0
             lastError = nil
         } else {
+            activity = .synthesizing(chars: text.count)
+            synthStartedAt = Date()
+            let started = Date()
             do {
                 let data = try await fetchAudio(text: text, voiceId: voiceId)
+                lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                 bytesFetchedThisSession += data.count
                 url = try await AudioCache.shared.store(data: data, forKey: key)
                 lastWasCacheHit = false
@@ -113,12 +138,19 @@ final class RemoteTTS: NSObject {
                 // the user explicitly killed the voice pipeline — which
                 // is exactly the bug we saw on the treadmill End tap.
                 if Task.isCancelled { return }
+                // Most common non-cancel case: an ElevenLabs v3 synth that
+                // ran past the timeout (long lines take ~25s). Surface it
+                // and fall back to Apple so the runner is never silent.
                 lastError = error.localizedDescription
+                lastBackend = "Apple (fallback)"
+                activity = .playing(remote: false)
                 await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
                 return
             }
         }
 
+        activity = .playing(remote: true)
+        lastBackend = "ElevenLabs"
         AudioPlaybackManager.shared.activate()
         // While the queue is in sustained mode (phone-only treadmill),
         // the session is .mixWithOthers WITHOUT ducking. Flip on the
@@ -147,6 +179,8 @@ final class RemoteTTS: NSObject {
         } catch {
             if Task.isCancelled { return }
             lastError = "AVAudioPlayer: \(error.localizedDescription)"
+            lastBackend = "Apple (fallback)"
+            activity = .playing(remote: false)
             await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
         }
     }
@@ -254,6 +288,33 @@ final class RemoteTTS: NSObject {
         }
     }
 
+    /// Like `prefetch`, but returns the measured latency and whether the
+    /// line was already cached — so the Coach Playground can show a live
+    /// progress bar of warming an entire run's worth of voice lines (and
+    /// the real ElevenLabs cost of doing so). Updates `activity` too so the
+    /// status panel reflects it.
+    func warmMeasured(_ text: String, voiceId: String = RemoteTTS.voiceId) async -> (ms: Int, cached: Bool) {
+        guard !text.isEmpty else { return (0, true) }
+        let key = AudioCache.key(voiceId: voiceId, text: text)
+        if await AudioCache.shared.url(forKey: key) != nil { return (0, true) }
+        activity = .synthesizing(chars: text.count)
+        synthStartedAt = Date()
+        defer { activity = .idle; synthStartedAt = nil }
+        let started = Date()
+        do {
+            let data = try await fetchAudio(text: text, voiceId: voiceId)
+            bytesFetchedThisSession += data.count
+            _ = try await AudioCache.shared.store(data: data, forKey: key)
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
+        let ms = Int(Date().timeIntervalSince(started) * 1000)
+        lastLatencyMs = ms
+        lastChars = text.count
+        return (ms, false)
+    }
+
     // MARK: - Network
 
     private func fetchAudio(text: String, voiceId: String = RemoteTTS.voiceId) async throws -> Data {
@@ -261,7 +322,11 @@ final class RemoteTTS: NSObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.timeoutInterval = 15
+        // eleven_v3 latency scales with length: ~3s for a short coach line,
+        // but ~25s for one of Jessica's long passages. 15s was cutting the
+        // long ones off and dumping them to Apple TTS — 60s gives v3 room
+        // to finish even at the long end.
+        request.timeoutInterval = 60
         let body: [String: Any] = ["text": text, "voiceId": voiceId]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

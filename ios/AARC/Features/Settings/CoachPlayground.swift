@@ -35,8 +35,18 @@ struct CoachPlayground: View {
     @State private var simPaceSec: Double = 300   // 5:00 /km
     @State private var simResult: DirectorSim.Result?
 
+    // TTS engine (live)
+    @State private var tts = RemoteTTS.shared
+
+    // Warm-a-whole-run
+    @State private var warmItems: [WarmItem] = []
+    @State private var warming = false
+    @State private var warmStartedAt: Date?
+    @State private var warmTotalMs: Int?
+
     var body: some View {
         Form {
+            ttsStatusSection
             scriptPreviewSection
             directorSimSection
             dynamicTriggersSection
@@ -45,6 +55,62 @@ struct CoachPlayground: View {
             resultSection
         }
         .navigationTitle("Coach Playground")
+    }
+
+    // MARK: - 0. TTS engine status (live)
+
+    @ViewBuilder
+    private var ttsStatusSection: some View {
+        Section {
+            switch tts.activity {
+            case .idle:
+                Label("Idle", systemImage: "checkmark.circle")
+                    .foregroundStyle(.secondary)
+            case .synthesizing(let chars):
+                HStack(spacing: 10) {
+                    ProgressView()
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Synthesizing on ElevenLabs v3")
+                        Text("\(chars) chars").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    synthElapsed
+                }
+            case .playing(let remote):
+                Label(remote ? "Playing — ElevenLabs" : "Playing — Apple (fallback)",
+                      systemImage: remote ? "speaker.wave.2.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(remote ? .green : .orange)
+            }
+
+            if let backend = tts.lastBackend {
+                LabeledContent("Last voice") {
+                    Text(backend).foregroundStyle(backend == "ElevenLabs" ? .green : .orange)
+                }
+            }
+            if let ms = tts.lastLatencyMs {
+                LabeledContent("Last synth") {
+                    Text(tts.lastWasCacheHit
+                         ? "cache hit"
+                         : "\(ms) ms" + (tts.lastChars.map { " · \($0) chars" } ?? ""))
+                        .monospacedDigit()
+                }
+            }
+            if let err = tts.lastError {
+                Text("⚠︎ \(err)").font(.caption).foregroundStyle(.orange)
+            }
+        } header: {
+            Text("TTS engine (ElevenLabs v3)")
+        } footer: {
+            Text("v3 latency scales with length — ~3s for a short line, ~25s for a long Jessica passage. Requests now wait up to 60s before falling back to Apple's voice (shown in orange). Watch this while you fire any test below.")
+        }
+    }
+
+    private var synthElapsed: some View {
+        TimelineView(.periodic(from: .now, by: 0.3)) { ctx in
+            Text(tts.synthStartedAt.map { String(format: "%.1fs", ctx.date.timeIntervalSince($0)) } ?? "")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - 1. Run script preview (Opus)
@@ -77,11 +143,124 @@ struct CoachPlayground: View {
                 ForEach(script.messages) { msg in
                     scriptLineRow(msg)
                 }
+
+                Button {
+                    warmAll()
+                } label: {
+                    HStack {
+                        Label(warming ? "Warming voices…" : "Warm all voices (ElevenLabs)",
+                              systemImage: "flame.fill")
+                        Spacer()
+                        if warming { ProgressView() }
+                    }
+                }
+                .disabled(warming)
+
+                if !warmItems.isEmpty {
+                    warmProgressView
+                }
             }
         } header: {
             Text("Run script preview")
         } footer: {
-            Text("Generates the full pre-warmed run script on the SOTA model (Claude Opus 4.8) — the exact backbone a real run is built from: opener, per-km loop, halfway, near-finish, finish and surprise roasts. Tap any line to hear it in Ricky's voice.")
+            Text("Generates the full pre-warmed run script on the SOTA model (Claude Opus 4.8) — opener, per-km loop, halfway, near-finish, finish and surprise roasts. Tap any line to hear it. \"Warm all voices\" then pre-synthesizes every line + announcement through ElevenLabs (as a real run does at start) so you can see exactly how long warming a whole run takes.")
+        }
+    }
+
+    @ViewBuilder
+    private var warmProgressView: some View {
+        let done = warmDoneCount
+        let total = warmItems.count
+        VStack(alignment: .leading, spacing: 6) {
+            ProgressView(value: Double(done), total: Double(max(1, total)))
+            HStack {
+                Text("\(done)/\(total) warmed").font(.caption2)
+                Spacer()
+                if warming {
+                    warmElapsed
+                } else if let ms = warmTotalMs {
+                    Text("done in \(String(format: "%.1f", Double(ms) / 1000))s")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            ForEach(warmItems) { item in
+                HStack(spacing: 6) {
+                    warmStatusIcon(item.status)
+                    Text(item.label).font(.caption2).lineLimit(1)
+                    Spacer()
+                    warmStatusText(item.status)
+                }
+            }
+        }
+    }
+
+    private var warmElapsed: some View {
+        TimelineView(.periodic(from: .now, by: 0.3)) { ctx in
+            Text(warmStartedAt.map { String(format: "%.1fs", ctx.date.timeIntervalSince($0)) } ?? "")
+                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func warmStatusIcon(_ status: WarmItem.Status) -> some View {
+        switch status {
+        case .pending:
+            Image(systemName: "circle.dotted").foregroundStyle(.tertiary).font(.caption2)
+        case .warming:
+            ProgressView().controlSize(.mini)
+        case .done(_, let cached):
+            Image(systemName: cached ? "checkmark.seal.fill" : "checkmark.circle.fill")
+                .foregroundStyle(cached ? .blue : .green).font(.caption2)
+        }
+    }
+
+    @ViewBuilder
+    private func warmStatusText(_ status: WarmItem.Status) -> some View {
+        switch status {
+        case .pending: Text("—").font(.caption2).foregroundStyle(.tertiary)
+        case .warming: Text("…").font(.caption2).foregroundStyle(.secondary)
+        case .done(let ms, let cached):
+            Text(cached ? "cached" : "\(String(format: "%.1f", Double(ms) / 1000))s")
+                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+        }
+    }
+
+    private var warmDoneCount: Int {
+        warmItems.filter { if case .done = $0.status { return true }; return false }.count
+    }
+
+    /// Build the warm list from the previewed script: every rotation
+    /// variant of every line plus the deterministic milestone announcements
+    /// — exactly what a real run pre-warms at start.
+    private func warmAll() {
+        guard let script = previewScript else { return }
+        let plan = RunPlan.distance(km: previewDistanceKm)
+        var items: [WarmItem] = []
+        for msg in script.messages {
+            let pool = msg.rotationPool
+            for (i, variant) in pool.enumerated() {
+                let base = msg.triggerSpec.humanDescription
+                let label = pool.count > 1 ? "\(base) #\(i + 1)" : base
+                items.append(WarmItem(label: label, text: variant, voiceId: RemoteTTS.voiceId))
+            }
+        }
+        for ann in MilestoneAnnouncement.prefetchTexts(for: plan) {
+            items.append(WarmItem(label: "announce: \(ann)", text: ann, voiceId: RemoteTTS.voiceId))
+        }
+        warmItems = items
+        warming = true
+        warmTotalMs = nil
+        warmStartedAt = Date()
+        Task { @MainActor in
+            defer { warming = false }
+            let t0 = Date()
+            for idx in warmItems.indices {
+                warmItems[idx].status = .warming
+                let (ms, cached) = await RemoteTTS.shared.warmMeasured(warmItems[idx].text,
+                                                                       voiceId: warmItems[idx].voiceId)
+                warmItems[idx].status = .done(ms: ms, cached: cached)
+            }
+            warmTotalMs = Int(Date().timeIntervalSince(t0) * 1000)
         }
     }
 
@@ -471,6 +650,23 @@ struct CoachPlayground: View {
     private func formatPace(_ secPerKm: Double) -> String {
         let s = Int(secPerKm.rounded())
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+// MARK: - Warm-a-whole-run item
+
+/// One voice clip queued for pre-warming in the script preview.
+struct WarmItem: Identifiable {
+    let id = UUID()
+    let label: String
+    let text: String
+    let voiceId: String
+    var status: Status = .pending
+
+    enum Status: Equatable {
+        case pending
+        case warming
+        case done(ms: Int, cached: Bool)
     }
 }
 
