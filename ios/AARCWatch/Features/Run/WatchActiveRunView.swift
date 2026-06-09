@@ -25,7 +25,11 @@ struct WatchActiveRunView: View {
         // session is live. safeAreaInset reserves its own strip so all the
         // existing metrics below stay exactly where they were.
         .safeAreaInset(edge: .top, spacing: 0) {
-            RunningManHeader(isRunning: host.state == .running)
+            RunningManHeader(
+                isRunning: host.state == .running,
+                speedMps: speedMps(host.liveMetrics.currentPaceSecPerKm),
+                cadenceSPM: host.liveMetrics.cadenceStepsPerMinute
+            )
         }
         .navigationBarBackButtonHidden(true)
         .alert("End run?", isPresented: $showEndConfirm) {
@@ -251,48 +255,73 @@ struct WatchActiveRunView: View {
         guard let bpm, bpm > 0 else { return "—" }
         return "\(Int(bpm))"
     }
+
+    /// Forward speed in m/s from pace, for the running-man animation. 0 when
+    /// there's no usable pace reading (the runner then idles gently).
+    private func speedMps(_ secPerKm: Double?) -> Double {
+        guard let s = secPerKm, s.isFinite, s > 0 else { return 0 }
+        return 1000.0 / s
+    }
 }
 
 // MARK: - Running man
 
 /// A little runner who jogs in place at the top of the screen while a
-/// session is live: the figure bobs at a running cadence and the ground
-/// rushes past beneath it (leftward speed lines), so it reads as forward
-/// motion without leaving its spot. Freezes and dims when paused.
+/// session is live. The bob is DYNAMIC: the figure bobs once per real
+/// footfall (driven by the watch's live cadence, falling back to a
+/// pace-derived proxy), and the ground rushes past beneath it at a rate
+/// set by the runner's actual speed. Fly and the legs spin up + the ground
+/// blurs by; plod and it slackens. Freezes and dims when paused.
 ///
-/// Driven by a TimelineView so the loop is seamless and self-pausing — the
-/// system also stops it automatically when the wrist drops / the display
-/// goes always-on, so there's no battery cost when it isn't being watched.
+/// The phase is INTEGRATED frame-to-frame (`bobPhase += 2π·f·dt`) rather
+/// than computed as `sin(absoluteTime × frequency)` — the latter would
+/// scramble the phase the instant the cadence changed. Inputs are eased so
+/// pace/cadence jitter doesn't make the runner twitch. Updates only while
+/// running AND the screen is active, so there's no cost when the wrist
+/// drops or it isn't on screen.
 private struct RunningManHeader: View {
     let isRunning: Bool
+    /// Forward speed in m/s (drives the ground rush + the pace fallback).
+    let speedMps: Double
+    /// Live cadence in steps/min from HealthKit, if available.
+    let cadenceSPM: Double?
+
+    @Environment(\.scenePhase) private var scenePhase
 
     /// Brighter than the brand's dark green so the runner pops on the black
     /// watch background.
     private let runnerColor = Color(red: 0.36, green: 0.82, blue: 0.46)
     private let stripHeight: CGFloat = 30
+    private let dashGap: CGFloat = 15
+
+    // Integrated animation state (kept small via wrap). Seeded to a lively
+    // mid-run value so the runner starts moving immediately, then eases to
+    // the real numbers.
+    @State private var bobPhase: Double = 0
+    @State private var groundPhase: Double = 0
+    @State private var smoothedSpeed: Double = 2.6
+    @State private var smoothedCadence: Double = 168
+    @State private var lastTick: Date?
+
+    @State private var tick = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isRunning)) { timeline in
-            // Absolute time → periodic phase; no stored start date needed.
-            let t = isRunning ? timeline.date.timeIntervalSinceReferenceDate : 0
-            ZStack {
-                if isRunning {
-                    speedLines(t: t)
-                }
-                runner(t: t)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: stripHeight)
+        ZStack {
+            speedLines
+            runner
         }
+        .frame(maxWidth: .infinity)
         .frame(height: stripHeight)
         .background(Color.black)        // opaque so scrolling content can't peek behind
         .opacity(isRunning ? 1 : 0.45)  // dim when paused — the runner has stopped
         .accessibilityHidden(true)
+        .onReceive(tick) { advance(to: $0) }
     }
 
-    private func runner(t: TimeInterval) -> some View {
-        // ~2.6 footfalls/sec body bob — a natural running cadence.
-        let bob = CGFloat(sin(t * 2 * .pi * 2.6)) * 2.5
+    private var runner: some View {
+        // A touch more bounce the faster you move — reads as effort.
+        let amp = 2.0 + min(2.2, smoothedSpeed * 0.35)
+        let bob = CGFloat(sin(bobPhase)) * CGFloat(amp)
         return Image(systemName: "figure.run")
             .font(.system(size: 24, weight: .bold))
             .foregroundStyle(runnerColor)
@@ -300,21 +329,20 @@ private struct RunningManHeader: View {
             .offset(y: bob)
     }
 
-    private func speedLines(t: TimeInterval) -> some View {
+    private var speedLines: some View {
         Canvas { ctx, size in
-            let gap: CGFloat = 15
-            let speed: Double = 85          // points/sec, scrolling left
             let len: CGFloat = 9
             let y = size.height * 0.62      // near the runner's feet
-            let shift = CGFloat((t * speed).truncatingRemainder(dividingBy: Double(gap)))
+            let shift = CGFloat(groundPhase)
             var x = size.width - shift
-            while x > -gap {
+            while x > -dashGap {
                 let rect = CGRect(x: x - len, y: y, width: len, height: 2)
                 ctx.fill(Path(roundedRect: rect, cornerRadius: 1),
                          with: .color(runnerColor.opacity(0.45)))
-                x -= gap
+                x -= dashGap
             }
         }
+        .opacity(isRunning ? 1 : 0)
         // Soft fade at both edges so dashes appear / vanish gently.
         .mask(
             LinearGradient(
@@ -323,14 +351,59 @@ private struct RunningManHeader: View {
             )
         )
     }
+
+    /// One animation step: ease the inputs, then integrate the bob + ground
+    /// phases by the elapsed time.
+    private func advance(to now: Date) {
+        guard isRunning, scenePhase == .active else {
+            lastTick = nil          // resume cleanly next time
+            return
+        }
+        let dt = lastTick.map { now.timeIntervalSince($0) } ?? 0
+        lastTick = now
+        guard dt > 0, dt < 0.5 else { return }   // skip the first tick + any long gap
+
+        let ease = min(1.0, dt / 0.7)            // ~0.7s time constant
+        smoothedSpeed += (speedMps - smoothedSpeed) * ease
+        let targetCadence = (cadenceSPM.map { $0 > 30 ? $0 : paceCadence } ?? paceCadence)
+        smoothedCadence += (targetCadence - smoothedCadence) * ease
+
+        bobPhase = (bobPhase + 2 * .pi * bobHz * dt)
+            .truncatingRemainder(dividingBy: 2 * .pi)
+        groundPhase = (groundPhase + groundPointsPerSecond * dt)
+            .truncatingRemainder(dividingBy: Double(dashGap))
+    }
+
+    /// Bob frequency in Hz — one body bob per footfall.
+    private var bobHz: Double {
+        min(3.4, max(1.2, smoothedCadence / 60.0))
+    }
+
+    /// Pace-derived cadence proxy (steps/min) when HK cadence isn't there:
+    /// ~150 shuffling up to ~190 flying.
+    private var paceCadence: Double {
+        min(195, max(145, 150 + smoothedSpeed * 12))
+    }
+
+    /// Ground scroll speed in points/sec — proportional to real speed, so
+    /// faster running visibly blurs the ground past. Floored so it still
+    /// drifts at a crawl.
+    private var groundPointsPerSecond: Double {
+        min(150, max(8, smoothedSpeed * 28))
+    }
 }
 
-#Preview("Running") {
-    RunningManHeader(isRunning: true)
+#Preview("Running fast") {
+    RunningManHeader(isRunning: true, speedMps: 4.2, cadenceSPM: 182)
+        .background(Color.black)
+}
+
+#Preview("Jogging") {
+    RunningManHeader(isRunning: true, speedMps: 2.4, cadenceSPM: 158)
         .background(Color.black)
 }
 
 #Preview("Paused") {
-    RunningManHeader(isRunning: false)
+    RunningManHeader(isRunning: false, speedMps: 0, cadenceSPM: nil)
         .background(Color.black)
 }
