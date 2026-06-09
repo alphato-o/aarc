@@ -3,13 +3,20 @@
  * or OpenRouter based on which API key is present in the environment.
  * The route handlers don't need to know which provider is in play.
  *
- * Env precedence (set exactly one):
+ * Provider (set exactly one key):
  *   OPENROUTER_API_KEY  →  OpenRouter via openai-compatible api
  *   ANTHROPIC_API_KEY   →  Anthropic native /v1/messages
  *
- * Optional overrides:
- *   OPENROUTER_MODEL  (default: "anthropic/claude-sonnet-4.5")
- *   ANTHROPIC_MODEL   (default: "claude-sonnet-4-6")
+ * Model selection is PER PURPOSE (script / reply / summary), each with a
+ * sensible Sonnet default and an optional per-purpose env override, e.g.
+ * OPENROUTER_MODEL_REPLY. The legacy bare OPENROUTER_MODEL / ANTHROPIC_MODEL
+ * are deliberately NO LONGER consulted: a single global override silently
+ * forced every task — scripts, reactive lines, Jessica, music — onto one
+ * model and masked the per-purpose defaults. (That's how everything ended
+ * up on one reasoning model whose hidden reasoning tokens blew the small
+ * reply token budget and truncated the spicier lines.) If a stale
+ * OPENROUTER_MODEL secret is still set, it's now harmless — delete it with
+ * `wrangler secret delete OPENROUTER_MODEL` to avoid confusion.
  */
 
 import { callAnthropic, AnthropicError } from "./anthropic";
@@ -17,8 +24,17 @@ import { callOpenRouter, OpenRouterError } from "./openrouter";
 
 export interface LLMEnv {
     OPENROUTER_API_KEY?: string;
-    OPENROUTER_MODEL?: string;
     ANTHROPIC_API_KEY?: string;
+    /// Optional per-purpose model overrides (else the Sonnet defaults).
+    OPENROUTER_MODEL_SCRIPT?: string;
+    OPENROUTER_MODEL_REPLY?: string;
+    OPENROUTER_MODEL_SUMMARY?: string;
+    ANTHROPIC_MODEL_SCRIPT?: string;
+    ANTHROPIC_MODEL_REPLY?: string;
+    ANTHROPIC_MODEL_SUMMARY?: string;
+    /// Deprecated + ignored — kept only so existing secrets don't trip
+    /// type checks. See the note above.
+    OPENROUTER_MODEL?: string;
     ANTHROPIC_MODEL?: string;
 }
 
@@ -61,7 +77,12 @@ export async function callLLM(
     env: LLMEnv,
 ): Promise<CallResult> {
     if (env.OPENROUTER_API_KEY) {
-        const model = env.OPENROUTER_MODEL ?? DEFAULT_OPENROUTER_MODELS[params.purpose];
+        const override: Record<Purpose, string | undefined> = {
+            script: env.OPENROUTER_MODEL_SCRIPT,
+            reply: env.OPENROUTER_MODEL_REPLY,
+            summary: env.OPENROUTER_MODEL_SUMMARY,
+        };
+        const model = override[params.purpose] ?? DEFAULT_OPENROUTER_MODELS[params.purpose];
         const text = await callOpenRouter({
             apiKey: env.OPENROUTER_API_KEY,
             model,
@@ -76,7 +97,12 @@ export async function callLLM(
     }
 
     if (env.ANTHROPIC_API_KEY) {
-        const model = env.ANTHROPIC_MODEL ?? DEFAULT_ANTHROPIC_MODELS[params.purpose];
+        const override: Record<Purpose, string | undefined> = {
+            script: env.ANTHROPIC_MODEL_SCRIPT,
+            reply: env.ANTHROPIC_MODEL_REPLY,
+            summary: env.ANTHROPIC_MODEL_SUMMARY,
+        };
+        const model = override[params.purpose] ?? DEFAULT_ANTHROPIC_MODELS[params.purpose];
         const text = await callAnthropic({
             apiKey: env.ANTHROPIC_API_KEY,
             model,
