@@ -46,9 +46,11 @@ final class RunDirector {
     /// prompt's suggested everySeconds: 300). Used only to predict the
     /// protect window; ScriptEngine still fires on the real trigger.
     private let timeIntervalSeconds: TimeInterval = 300
-    /// Minimum clear air before the next must-play for Jessica to react —
-    /// roughly two spoken lines (his + hers) plus a beat.
-    private let exchangeRoomSeconds: TimeInterval = 20
+    /// Minimum clear air before the next must-play for Jessica to react.
+    /// Jessica now runs a long erotic passage (~30–50s), so we reserve a
+    /// big window: she only joins when there's genuinely room for the full
+    /// indulgence before the next split — keeping km markers clean.
+    private let exchangeRoomSeconds: TimeInterval = 45
     /// EMA weight on each freshly-measured pipeline latency sample.
     private let leadEMAAlpha: Double = 0.3
     /// Clamp for the measured pipeline lead so one slow/fast sample can't
@@ -60,6 +62,10 @@ final class RunDirector {
 
     private(set) var isActive = false
     private(set) var smoothedSpeedMps: Double = 0
+    /// When false, `processTick` skips the TTS pre-warm prefetch. The Coach
+    /// Playground's dry Director simulator sets this so a sped-up mock run
+    /// can exercise the real gating logic without firing network calls.
+    var prewarmEnabled = true
     /// Seconds until the next must-play milestone, or nil if none is
     /// predictable right now (stopped, or an open plan with no km
     /// imminent because speed is unusable).
@@ -241,6 +247,7 @@ final class RunDirector {
     }
 
     private func prewarmImminent(_ candidates: [Milestone]) {
+        guard prewarmEnabled else { return }
         for m in candidates where m.eta >= 0 && m.eta <= prewarmLeadSeconds {
             guard !prewarmed.contains(m.key) else { continue }
             prewarmed.insert(m.key)
