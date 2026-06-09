@@ -40,15 +40,19 @@ export interface CallResult {
     model: string;
 }
 
+// Sonnet across the board — scripts, in-run reactive lines, Jessica's
+// reactions and music all run on Sonnet for sharper wit and stronger
+// persona hold. Reactive latency is covered by the Director's predictive
+// offset + pre-warming, so the extra Sonnet time doesn't land stale.
 const DEFAULT_OPENROUTER_MODELS: Record<Purpose, string> = {
     script: "anthropic/claude-sonnet-4.5",
-    reply: "anthropic/claude-haiku-4.5",
+    reply: "anthropic/claude-sonnet-4.5",
     summary: "anthropic/claude-sonnet-4.5",
 };
 
 const DEFAULT_ANTHROPIC_MODELS: Record<Purpose, string> = {
     script: "claude-sonnet-4-6",
-    reply: "claude-haiku-4-5-20251001",
+    reply: "claude-sonnet-4-6",
     summary: "claude-sonnet-4-6",
 };
 
