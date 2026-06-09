@@ -268,7 +268,9 @@ export const ReactLineRequestSchema = z.object({
 export type ReactLineRequest = z.infer<typeof ReactLineRequestSchema>;
 
 export const ReactLineModelOutputSchema = z.object({
-    text: z.string().min(1).max(500),
+    // Jessica speaks in a longer, immersive erotic passage, so allow well
+    // past the one-liner cap the other voices use.
+    text: z.string().min(1).max(1000),
 });
 
 export interface ReactLineResponse {

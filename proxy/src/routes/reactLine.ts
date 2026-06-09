@@ -51,7 +51,10 @@ export async function reactLineHandler(
                 purpose: "reply",
                 systemPrompt,
                 userPrompt,
-                maxTokens: 400,
+                // Jessica runs long — an immersive erotic passage, not a
+                // one-liner — so she needs more room than the other reply
+                // lines.
+                maxTokens: 700,
                 cacheSystem: true,
             },
             env,

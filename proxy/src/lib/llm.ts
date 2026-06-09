@@ -56,18 +56,19 @@ export interface CallResult {
     model: string;
 }
 
-// Sonnet across the board — scripts, in-run reactive lines, Jessica's
-// reactions and music all run on Sonnet for sharper wit and stronger
-// persona hold. Reactive latency is covered by the Director's predictive
-// offset + pre-warming, so the extra Sonnet time doesn't land stale.
+// The full run script is PRE-WARMED (generated before the run starts), so
+// its latency is absorbed — it runs on the best Anthropic model, Opus 4.8,
+// for maximum wit + craft. The in-run reactive lines (reply: Ricky's live
+// reactions, Jessica, music) stay on the faster Sonnet 4.5 so they don't
+// land stale mid-run.
 const DEFAULT_OPENROUTER_MODELS: Record<Purpose, string> = {
-    script: "anthropic/claude-sonnet-4.5",
+    script: "anthropic/claude-opus-4.8",
     reply: "anthropic/claude-sonnet-4.5",
     summary: "anthropic/claude-sonnet-4.5",
 };
 
 const DEFAULT_ANTHROPIC_MODELS: Record<Purpose, string> = {
-    script: "claude-sonnet-4-6",
+    script: "claude-opus-4-8",
     reply: "claude-sonnet-4-6",
     summary: "claude-sonnet-4-6",
 };

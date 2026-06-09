@@ -5,9 +5,10 @@ export interface Env {
     ELEVENLABS_API_KEY?: string;
 }
 
-/// Max characters per request — keeps a single line under ~10s of audio
-/// and prevents accidental cost blowups (we get billed per character).
-const MAX_TEXT = 600;
+/// Max characters per request. Bumped to fit Jessica's longer erotic
+/// passages (~a minute of audio); the short coach lines are nowhere near
+/// it. We're billed per character, so this is a ceiling, not a target.
+const MAX_TEXT = 1200;
 
 const TTSRequestSchema = z.object({
     text: z.string().min(1).max(MAX_TEXT),
