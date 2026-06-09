@@ -239,13 +239,13 @@ export interface MusicCommentResponse {
 }
 
 // ---------------------------------------------------------------------------
-// /react-line — a second voice (Pippa) reacting to a line the primary coach
+// /react-line — a second voice (Jessica) reacting to a line the primary coach
 // (Ricky) just spoke. Two-hander continuity: her reply is conditioned on his
 // line. Primary-voice generation is untouched; this is an additive pass.
 // ---------------------------------------------------------------------------
 
 export const ReactLineRequestSchema = z.object({
-    personalityId: z.string().default("pippa"),
+    personalityId: z.string().default("jessica"),
     /// The line the primary coach JUST spoke — the thing she reacts to.
     partnerLine: z.string().min(1).max(500),
     /// Where his line came from ("script:every_km", "coach:stationary",

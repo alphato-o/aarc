@@ -9,7 +9,7 @@ import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 
 export type Env = LLMEnv;
 
-/// Second-voice reaction. Pippa reacts to a line the primary coach (Ricky)
+/// Second-voice reaction. Jessica reacts to a line the primary coach (Ricky)
 /// just spoke. Additive — the primary voice's generation is untouched; this
 /// is conditioned on his line so the two read as a continuous two-hander.
 export async function reactLineHandler(
