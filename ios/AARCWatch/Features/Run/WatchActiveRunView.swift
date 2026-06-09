@@ -21,6 +21,12 @@ struct WatchActiveRunView: View {
             diagnosticsPage.tag(Page.diagnostics)
         }
         .tabViewStyle(.page)
+        // Pinned running-man animation across the top of every page while a
+        // session is live. safeAreaInset reserves its own strip so all the
+        // existing metrics below stay exactly where they were.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            RunningManHeader(isRunning: host.state == .running)
+        }
         .navigationBarBackButtonHidden(true)
         .alert("End run?", isPresented: $showEndConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -245,4 +251,86 @@ struct WatchActiveRunView: View {
         guard let bpm, bpm > 0 else { return "—" }
         return "\(Int(bpm))"
     }
+}
+
+// MARK: - Running man
+
+/// A little runner who jogs in place at the top of the screen while a
+/// session is live: the figure bobs at a running cadence and the ground
+/// rushes past beneath it (leftward speed lines), so it reads as forward
+/// motion without leaving its spot. Freezes and dims when paused.
+///
+/// Driven by a TimelineView so the loop is seamless and self-pausing — the
+/// system also stops it automatically when the wrist drops / the display
+/// goes always-on, so there's no battery cost when it isn't being watched.
+private struct RunningManHeader: View {
+    let isRunning: Bool
+
+    /// Brighter than the brand's dark green so the runner pops on the black
+    /// watch background.
+    private let runnerColor = Color(red: 0.36, green: 0.82, blue: 0.46)
+    private let stripHeight: CGFloat = 30
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !isRunning)) { timeline in
+            // Absolute time → periodic phase; no stored start date needed.
+            let t = isRunning ? timeline.date.timeIntervalSinceReferenceDate : 0
+            ZStack {
+                if isRunning {
+                    speedLines(t: t)
+                }
+                runner(t: t)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: stripHeight)
+        }
+        .frame(height: stripHeight)
+        .background(Color.black)        // opaque so scrolling content can't peek behind
+        .opacity(isRunning ? 1 : 0.45)  // dim when paused — the runner has stopped
+        .accessibilityHidden(true)
+    }
+
+    private func runner(t: TimeInterval) -> some View {
+        // ~2.6 footfalls/sec body bob — a natural running cadence.
+        let bob = CGFloat(sin(t * 2 * .pi * 2.6)) * 2.5
+        return Image(systemName: "figure.run")
+            .font(.system(size: 24, weight: .bold))
+            .foregroundStyle(runnerColor)
+            .shadow(color: runnerColor.opacity(0.55), radius: 4)
+            .offset(y: bob)
+    }
+
+    private func speedLines(t: TimeInterval) -> some View {
+        Canvas { ctx, size in
+            let gap: CGFloat = 15
+            let speed: Double = 85          // points/sec, scrolling left
+            let len: CGFloat = 9
+            let y = size.height * 0.62      // near the runner's feet
+            let shift = CGFloat((t * speed).truncatingRemainder(dividingBy: Double(gap)))
+            var x = size.width - shift
+            while x > -gap {
+                let rect = CGRect(x: x - len, y: y, width: len, height: 2)
+                ctx.fill(Path(roundedRect: rect, cornerRadius: 1),
+                         with: .color(runnerColor.opacity(0.45)))
+                x -= gap
+            }
+        }
+        // Soft fade at both edges so dashes appear / vanish gently.
+        .mask(
+            LinearGradient(
+                colors: [.clear, .white, .white, .clear],
+                startPoint: .leading, endPoint: .trailing
+            )
+        )
+    }
+}
+
+#Preview("Running") {
+    RunningManHeader(isRunning: true)
+        .background(Color.black)
+}
+
+#Preview("Paused") {
+    RunningManHeader(isRunning: false)
+        .background(Color.black)
 }
