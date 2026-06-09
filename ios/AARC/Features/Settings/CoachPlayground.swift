@@ -92,11 +92,11 @@ struct CoachPlayground: View {
             }
 
             Section {
-                pippaButton
+                jessicaButton
             } header: {
-                Text("Pippa (second voice)")
+                Text("Jessica (second voice)")
             } footer: {
-                Text("Plays the last Ricky line above (or a sample) in his voice, then asks /react-line for Pippa's reaction and plays it in HER voice — the two-hander as it lands in a run. Use this to audition her voice and iterate her persona server-side.")
+                Text("Plays the last Ricky line above (or a sample) in his voice, then asks /react-line for Jessica's reaction and plays it in HER voice — the two-hander as it lands in a run. Use this to audition her voice and iterate her persona server-side.")
             }
 
             Section {
@@ -195,11 +195,11 @@ struct CoachPlayground: View {
 
     // MARK: - Helpers
 
-    private var pippaButton: some View {
+    private var jessicaButton: some View {
         Button {
-            firePippa()
+            fireJessica()
         } label: {
-            Label(busy == "pippa" ? "Generating…" : "Hear Pippa react",
+            Label(busy == "jessica" ? "Generating…" : "Hear Jessica react",
                   systemImage: "person.2.wave.2.fill")
         }
         .disabled(busy != nil)
@@ -209,13 +209,13 @@ struct CoachPlayground: View {
     private static let samplePartnerLine =
         "Three kilometres, and you're already breathing like a broken kettle. Genuinely heroic, in a tragic sort of way."
 
-    private func firePippa() {
-        busy = "pippa"
+    private func fireJessica() {
+        busy = "jessica"
         lastError = nil
         let rickyLine = lastFired ?? Self.samplePartnerLine
         let notes = PersonalContextStore.shared.bullets
         let request = AIClient.ReactLineRequest(
-            personalityId: "pippa",
+            personalityId: "jessica",
             partnerLine: rickyLine,
             partnerSource: "script:test",
             runContext: syntheticReactContext(),
@@ -226,17 +226,17 @@ struct CoachPlayground: View {
         Task { @MainActor in
             defer { busy = nil }
             do {
-                // Ricky's line first (his voice), then Pippa's reaction
+                // Ricky's line first (his voice), then Jessica's reaction
                 // (her voice) — both through the real Speaker pipeline.
                 Speaker.shared.speak(rickyLine, priority: .milestone, source: "script:test")
                 let result = try await AIClient.shared.reactLine(request)
                 Speaker.shared.speak(
                     result.text,
                     priority: .milestone,
-                    source: "pippa:react",
-                    voiceId: RemoteTTS.pippaVoiceId
+                    source: "jessica:react",
+                    voiceId: RemoteTTS.jessicaVoiceId
                 )
-                lastFired = "RICKY: \(rickyLine)\n\nPIPPA: \(result.text)"
+                lastFired = "RICKY: \(rickyLine)\n\nJESSICA: \(result.text)"
             } catch {
                 lastError = error.localizedDescription
             }

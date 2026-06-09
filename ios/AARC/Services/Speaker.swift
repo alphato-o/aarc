@@ -40,7 +40,8 @@ final class Speaker {
         dedupKey: String? = nil,
         expiresAfter: TimeInterval? = nil,
         voiceId: String? = nil,
-        segmentId: UUID? = nil
+        segmentId: UUID? = nil,
+        decisionAt: Date? = nil
     ) {
         let item = VoiceItem(
             text: text,
@@ -49,7 +50,8 @@ final class Speaker {
             dedupKey: dedupKey,
             expiresAfter: expiresAfter,
             voiceId: voiceId,
-            segmentId: segmentId
+            segmentId: segmentId,
+            decisionAt: decisionAt
         )
         VoiceFeedbackQueue.shared.enqueue(item)
     }

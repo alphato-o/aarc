@@ -46,9 +46,15 @@ final class RunDirector {
     /// prompt's suggested everySeconds: 300). Used only to predict the
     /// protect window; ScriptEngine still fires on the real trigger.
     private let timeIntervalSeconds: TimeInterval = 300
-    /// Minimum clear air before the next must-play for Pippa to react —
+    /// Minimum clear air before the next must-play for Jessica to react —
     /// roughly two spoken lines (his + hers) plus a beat.
     private let exchangeRoomSeconds: TimeInterval = 20
+    /// EMA weight on each freshly-measured pipeline latency sample.
+    private let leadEMAAlpha: Double = 0.3
+    /// Clamp for the measured pipeline lead so one slow/fast sample can't
+    /// send the projection haywire. ~1.5s (warm cache) to ~18s (cold
+    /// LLM + TTS + download on a bad connection).
+    private let leadClamp: ClosedRange<TimeInterval> = 1.5...18
 
     // MARK: - Observable state (read by ContextualCoach + diagnostics)
 
@@ -59,6 +65,12 @@ final class RunDirector {
     /// imminent because speed is unusable).
     private(set) var nextMustPlayETA: TimeInterval?
 
+    /// Measured time from "we snapshot the run state to generate a line"
+    /// to "the runner hears it" — LLM + TTS + download + queue wait. Fed
+    /// by freshly-generated coach lines (see `recordPipelineLatency`).
+    /// Bootstraps at 6s; converges on the real device/connection latency.
+    private(set) var pipelineLeadSeconds: TimeInterval = 6
+
     /// True while a must-play milestone is within `protectLeadSeconds`.
     /// ContextualCoach consults this to hold lyric/music + reactive
     /// banter so the upcoming split/halfway/finish lands clean.
@@ -68,12 +80,32 @@ final class RunDirector {
     }
 
     /// True when there's enough clear air before the next must-play to fit
-    /// a full two-voice exchange (Ricky's line + Pippa's reaction ≈ 2×).
-    /// `Conversation` consults this to decide whether Pippa reacts — so a
+    /// a full two-voice exchange (Ricky's line + Jessica's reaction ≈ 2×).
+    /// `Conversation` consults this to decide whether Jessica reacts — so a
     /// km split never lands while the duo is still mid-banter.
     var hasRoomForExchange: Bool {
         guard let eta = nextMustPlayETA else { return true }
         return eta > exchangeRoomSeconds
+    }
+
+    /// Project the run state forward by the measured pipeline latency, so a
+    /// dynamically-generated line that QUOTES the runner's progress is
+    /// accurate at the moment it's actually heard — not stale by the time
+    /// the gen + TTS + download finishes. Without this, "you're at 3.5k"
+    /// lands when the runner is already at 3.6–3.7k. Distance advances at
+    /// the smoothed current speed; elapsed advances by the lead directly.
+    func projected(distance: Double, elapsed: TimeInterval) -> (distance: Double, elapsed: TimeInterval) {
+        let lead = pipelineLeadSeconds
+        return (distance + smoothedSpeedMps * lead, elapsed + lead)
+    }
+
+    /// Record one observed pipeline latency (audible time − snapshot time)
+    /// from a freshly-generated line, smoothed into `pipelineLeadSeconds`.
+    /// Cached / pre-warmed lines must NOT call this (they'd drag the
+    /// estimate to ~0); only fresh-generation coach lines do.
+    func recordPipelineLatency(_ seconds: TimeInterval) {
+        let clamped = min(leadClamp.upperBound, max(leadClamp.lowerBound, seconds))
+        pipelineLeadSeconds = leadEMAAlpha * clamped + (1 - leadEMAAlpha) * pipelineLeadSeconds
     }
 
     // MARK: - Internal

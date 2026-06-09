@@ -372,9 +372,17 @@ final class ContextualCoach {
             guard trigger == .stationary, let last = lastDistanceChangeAt else { return nil }
             return Date().timeIntervalSince(last)
         }()
+        // Snapshot time + project the distance/elapsed forward by the
+        // measured pipeline latency, so when Ricky quotes the runner's
+        // progress it's accurate at the moment it's actually heard.
+        let decisionAt = Date()
+        let projected = RunDirector.shared.projected(
+            distance: metrics.distanceMeters,
+            elapsed: metrics.elapsed
+        )
         let context = AIClient.DynamicLineContext(
-            elapsedSeconds: metrics.elapsed,
-            distanceMeters: metrics.distanceMeters,
+            elapsedSeconds: projected.elapsed,
+            distanceMeters: projected.distance,
             currentHR: metrics.currentHeartRate,
             avgHR: avgHR,
             currentPaceSecPerKm: metrics.currentPaceSecPerKm,
@@ -420,7 +428,8 @@ final class ContextualCoach {
                     source: "coach:\(trigger.rawValue)",
                     priority: .coaching,
                     expiresAfter: 120,
-                    segmentId: segment
+                    segmentId: segment,
+                    decisionAt: decisionAt
                 )
                 Conversation.shared.rickySpoke(
                     text: result.text,
@@ -498,9 +507,14 @@ final class ContextualCoach {
         metrics: LiveMetrics
     ) async {
         let plan = ScriptPreviewStore.shared.currentPlan
+        let decisionAt = Date()
+        let projected = RunDirector.shared.projected(
+            distance: metrics.distanceMeters,
+            elapsed: metrics.elapsed
+        )
         let context = AIClient.MusicCommentContext(
-            elapsedSeconds: metrics.elapsed,
-            distanceMeters: metrics.distanceMeters,
+            elapsedSeconds: projected.elapsed,
+            distanceMeters: projected.distance,
             currentHR: metrics.currentHeartRate,
             currentPaceSecPerKm: metrics.currentPaceSecPerKm,
             planKind: plan.kind.rawValue,
@@ -541,7 +555,8 @@ final class ContextualCoach {
                 priority: .banter,
                 dedupKey: dedup,
                 expiresAfter: 60,
-                segmentId: segment
+                segmentId: segment,
+                decisionAt: decisionAt
             )
             Conversation.shared.rickySpoke(
                 text: result.text,

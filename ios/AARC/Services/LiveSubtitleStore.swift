@@ -24,18 +24,18 @@ final class LiveSubtitleStore {
     /// tint so the runner can see who's talking in the two-hander.
     enum Voice: Equatable {
         case ricky
-        case pippa
+        case jessica
 
-        /// Derived from the queue item's source. Pippa's lines are sourced
-        /// "pippa:…"; everything else is the Roast Coach.
+        /// Derived from the queue item's source. Jessica's lines are sourced
+        /// "jessica:…"; everything else is the Roast Coach.
         static func from(source: String) -> Voice {
-            source.hasPrefix("pippa") ? .pippa : .ricky
+            source.hasPrefix("jessica") ? .jessica : .ricky
         }
 
         var label: String {
             switch self {
             case .ricky: return "RICKY"
-            case .pippa: return "PIPPA"
+            case .jessica: return "JESSICA"
             }
         }
 
@@ -43,7 +43,7 @@ final class LiveSubtitleStore {
         var personalityId: String {
             switch self {
             case .ricky: return "roast_coach"
-            case .pippa: return "pippa"
+            case .jessica: return "jessica"
             }
         }
     }

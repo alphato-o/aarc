@@ -430,8 +430,13 @@ final class RunOrchestrator {
                     // announcement; this covers the personality line).
                     for variant in message.rotationPool { early.insert(variant) }
                 }
-            default:
-                break
+            case .halfway, .nearFinish, .finish:
+                // One-shot big-moment roasts. Their TEXT is fixed once the
+                // script is generated, but they fire deep into the run, so
+                // without warming them the halfway / finish line pays a full
+                // gen-less-but-still-cold TTS round-trip right at the moment
+                // it should land. Warm them now so they play instantly.
+                for variant in message.rotationPool { early.insert(variant) }
             }
         }
         let plan = ScriptPreviewStore.shared.currentPlan

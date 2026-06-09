@@ -108,9 +108,9 @@ struct LiveSubtitleBar: View {
     /// priority so milestone / coaching / banter are visually
     /// distinguishable at a glance.
     private var barAccent: Color {
-        // Pippa always reads pink, whatever priority she inherited from the
+        // Jessica always reads pink, whatever priority she inherited from the
         // line she's reacting to — so the two voices are instantly distinct.
-        if line.voice == .pippa {
+        if line.voice == .jessica {
             return Color(red: 1.0, green: 0.45, blue: 0.75)
         }
         switch line.priority {

@@ -30,9 +30,9 @@ final class RemoteTTS: NSObject {
     /// any line that doesn't specify a voice.
     static let voiceId: String = "lKMAeQD7Brvj7QCWByqK"
 
-    /// Pippa — the second voice (seductive-but-mean British woman who
-    /// reacts to Ricky). Passed explicitly on her lines.
-    static let pippaVoiceId: String = "ShB6BQqbEXZxWO5511Qq"
+    /// Jessica — the second voice (seductive, explicit, conflicted British
+    /// woman who reacts to Ricky). Passed explicitly on her lines.
+    static let jessicaVoiceId: String = "jP5jSWhfXz3nfQENMtf4"
 
     /// Cumulative bytes pulled from the proxy this session — diagnostic.
     private(set) var bytesFetchedThisSession: Int = 0

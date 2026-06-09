@@ -273,15 +273,16 @@ struct LiveRunChart: View {
     }
 
     private var hrRange: (min: Double, max: Double) {
-        // Include the live HR so a sudden spike stays inside the range
-        // (same reasoning as speedRange); drop implausible artifacts so a
-        // bad sample can't blow out the scale. 15% headroom off the rails.
+        // Top is PINNED at 200 bpm so a typical ~180 max reads at ~90%
+        // height and the red bars never cap / slam the rail — they keep
+        // their resolution near the top where the runner spends the back
+        // half of a hard run. Bottom tracks the data (floored) for detail
+        // lower down; implausible artifacts are dropped either way.
         var values = samples.compactMap(\.heartRate)
         if let live = liveHeartRateBPM, live > 0 { values.append(live) }
         values = values.filter { Self.plausibleHR.contains($0) }
-        guard let lo = values.min(), let hi = values.max() else { return (60, 180) }
-        let pad = max(8, (hi - lo) * 0.15)
-        return (max(40, lo - pad), hi + pad)
+        let lo = values.min() ?? 100
+        return (max(40, lo - 10), 200)
     }
 
     private var hrRangeLabel: String {

@@ -35,12 +35,17 @@ struct VoiceItem: Identifiable, Sendable {
     /// safety line" needs.
     let preferRemoteVoiceOverride: Bool?
     /// ElevenLabs voice for this line. nil → the default Roast Coach voice.
-    /// Pippa's lines carry her voice id here.
+    /// Jessica's lines carry her voice id here.
     let voiceId: String?
     /// Links a his→her exchange. When one member is preempted or dropped,
     /// its siblings are purged so an orphaned reaction can't play out of
     /// context. nil for standalone lines.
     let segmentId: UUID?
+    /// When the run-state used to generate this line was snapshotted. Set
+    /// only on freshly-generated coach lines so the queue can measure the
+    /// gen→audible latency and feed the Director's lookahead. nil for
+    /// scripted / cached / reaction lines.
+    let decisionAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -52,7 +57,8 @@ struct VoiceItem: Identifiable, Sendable {
         expiresAfter: TimeInterval? = nil,
         preferRemoteVoiceOverride: Bool? = nil,
         voiceId: String? = nil,
-        segmentId: UUID? = nil
+        segmentId: UUID? = nil,
+        decisionAt: Date? = nil
     ) {
         self.id = id
         self.text = text
@@ -64,6 +70,7 @@ struct VoiceItem: Identifiable, Sendable {
         self.preferRemoteVoiceOverride = preferRemoteVoiceOverride
         self.voiceId = voiceId
         self.segmentId = segmentId
+        self.decisionAt = decisionAt
     }
 
     func isStale(at now: Date = .now) -> Bool {
@@ -252,6 +259,11 @@ final class VoiceFeedbackQueue {
                 preferRemoteOverride: item.preferRemoteVoiceOverride,
                 onAudioStart: {
                     LiveSubtitleStore.shared.startedPlaying(item)
+                    // Measure the gen→audible latency for fresh coach lines
+                    // so the Director can project live numbers forward.
+                    if let decisionAt = item.decisionAt {
+                        RunDirector.shared.recordPipelineLatency(Date().timeIntervalSince(decisionAt))
+                    }
                 }
             )
             // Preemption path cancels this task before resuming the

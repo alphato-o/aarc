@@ -229,7 +229,7 @@ actor AIClient {
         let error: String?
     }
 
-    // MARK: - React line (/react-line) — Pippa reacting to a Ricky line
+    // MARK: - React line (/react-line) — Jessica reacting to a Ricky line
 
     struct ReactLineContext: Codable, Sendable {
         var elapsedSeconds: Double
@@ -241,7 +241,7 @@ actor AIClient {
     }
 
     struct ReactLineRequest: Codable, Sendable {
-        var personalityId: String = "pippa"
+        var personalityId: String = "jessica"
         /// The line Ricky just spoke — what she reacts to.
         var partnerLine: String
         /// Where his line came from ("script:every_km", "coach:stationary"…).
@@ -252,7 +252,7 @@ actor AIClient {
         var likedLineExamples: [String]?
     }
 
-    /// Generate Pippa's reaction to a line Ricky just spoke. Same envelope
+    /// Generate Jessica's reaction to a line Ricky just spoke. Same envelope
     /// shape as /dynamic-line; reuses DynamicLineResult.
     func reactLine(_ request: ReactLineRequest) async throws -> DynamicLineResult {
         let url = Config.apiBaseURL.appendingPathComponent("react-line")
