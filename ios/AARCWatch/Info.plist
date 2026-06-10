@@ -22,6 +22,15 @@
 	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>club.aarun.AARC</string>
+	<key>WKBackgroundModes</key>
+	<array>
+		<string>workout-processing</string>
+	</array>
+	<!-- iOS-style key kept too; harmless. The load-bearing key on watchOS
+	     is WKBackgroundModes above: without it, watchOS never delivers
+	     handle(workoutConfiguration:) and refuses background workout
+	     starts (HK error 14), which silently killed every phone-initiated
+	     run until 2026-06-11. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>workout-processing</string>
