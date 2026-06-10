@@ -29,12 +29,21 @@ final class RunOrchestrator {
     enum Phase: String, Sendable {
         case idle
         case generating         // foreground generation (user is waiting)
-        case sentToWatch        // phone-initiated: handed off to watch
+        case awaitingWatch      // start dispatched — waiting for watch ack
+        case watchTimedOut      // watch never answered / declined — fallback card
         case error
     }
 
     private(set) var phase: Phase = .idle
     var lastError: String?
+
+    /// Human-readable reason shown on the watch-timeout card.
+    private(set) var watchFailureReason: String?
+
+    /// The start command currently awaiting a watch acknowledgement.
+    private var pendingWatchStart: (runId: UUID, runType: RunType, personalityId: String)?
+    private var watchAckTask: Task<Void, Never>?
+    private var watchStartAttempts = 0
 
     /// True while a speculative pre-generation is in flight. UI binds
     /// to this to show a faint "Coach pre-loading…" hint.
@@ -105,10 +114,19 @@ final class RunOrchestrator {
     /// Phone tapped Start. Use the pre-gen opener if ready, else generate.
     /// Full script is kicked off in the background and swapped into
     /// ScriptEngine when ready.
+    ///
+    /// HARD GUARANTEE: this flow always terminates, within ~22s, in one
+    /// of (a) the watch tracking (ack/workoutStarted received), (b) a
+    /// surfaced watch-timeout card offering phone-only + retry, or (c) a
+    /// named error. No silent dead ends — that requirement came from two
+    /// field incidents where the handover died invisibly.
     func startFromPhone(runType: RunType, personalityId: String = "roast_coach") async {
-        guard phase != .generating else { return }
+        guard phase != .generating, phase != .awaitingWatch else { return }
         phase = .generating
         lastError = nil
+        watchFailureReason = nil
+
+        PersonalContextStore.shared.rerollRotation()
 
         // Stash so the Live Activity (started later from ingestStarted)
         // can render the right label.
@@ -118,28 +136,180 @@ final class RunOrchestrator {
         let plan = ScriptPreviewStore.shared.currentPlan
         let runId = UUID()
 
+        // Close the cold-launch race: previously a Start tapped before
+        // the `.task` activation completed was silently dropped.
+        _ = await PhoneSession.shared.ensureActivated()
+
+        // Fast-fail on registry drift. On 2026-06-10 the iPhone's pairing
+        // registry reported the watch app as not-installed ALL DAY — in
+        // that state iOS refuses every channel below, while the watch
+        // happily shows "iPhone reachable". Surface the precise condition
+        // in two seconds instead of timing out into mystery.
+        if !PhoneSession.shared.isWatchAppInstalled {
+            phase = .watchTimedOut
+            watchFailureReason = PhoneSession.shared.isPaired
+                ? "iPhone's registry says the watch app isn't installed — a known dev-install glitch. Reboot the watch (or reinstall the watch app via Xcode), or run phone-only."
+                : "No paired Apple Watch detected."
+            return
+        }
+
         do {
             let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
             ScriptPreviewStore.shared.latest = stub
             prefetchEarlyLines(script: stub)
-
-            PhoneSession.shared.sendStateEvent(
-                .startWorkout(runId: runId, runType: runType, personalityId: personalityId)
-            )
             scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
-            // Buzz the wrist + leave a tappable card on the watch (via
-            // iOS->Apple Watch notification mirroring) so the user
-            // doesn't have to manually launch the watch app. Tapping
-            // the watch notification launches AARCWatch, which consumes
-            // the queued startWorkout via WatchConnectivity.
-            Task { @MainActor in
-                await PhoneNotificationCenter.shared.scheduleStartCue()
-            }
-            phase = .sentToWatch
+
+            pendingWatchStart = (runId, runType, personalityId)
+            watchStartAttempts = 0
+            phase = .awaitingWatch
+            await dispatchWatchStart()
         } catch {
             phase = .error
             lastError = error.localizedDescription
         }
+    }
+
+    /// One delivery attempt across every channel, then arm the ack timer.
+    private func dispatchWatchStart() async {
+        guard let pending = pendingWatchStart else { return }
+        watchStartAttempts += 1
+
+        // Channel 1+2: WC sendMessage (instant when reachable) +
+        // applicationContext (latest-state, delivered on watch activation).
+        PhoneSession.shared.sendStartCommand(
+            .startWorkout(runId: pending.runId, runType: pending.runType, personalityId: pending.personalityId)
+        )
+
+        // Channel 3: HealthKit startWatchApp — background-launches the
+        // watch app even when it isn't running (the Apple Fitness path);
+        // works without the phone being locked, unlike the notification.
+        if let launchError = await WatchLaunchService.launch(runType: pending.runType) {
+            // Don't abort: WC may still deliver. But remember the reason
+            // so the timeout card can show it.
+            watchFailureReason = launchError.errorDescription
+        }
+
+        if watchStartAttempts == 1 {
+            // Channel 4 (courtesy): wrist notification — only mirrors if
+            // the phone locks within ~4s, so never relied upon.
+            Task { @MainActor in
+                await PhoneNotificationCenter.shared.scheduleStartCue()
+            }
+            // Suspension-proof fallback: if the user locks the phone and
+            // the watch never starts, in-app timers freeze — this local
+            // notification at t+25s is the surface that still fires.
+            Task { @MainActor in
+                await PhoneNotificationCenter.shared.scheduleWatchTimeoutFallback()
+            }
+        }
+
+        armWatchAckTimer()
+    }
+
+    private func armWatchAckTimer() {
+        watchAckTask?.cancel()
+        watchAckTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(10))
+            guard let self, !Task.isCancelled, self.phase == .awaitingWatch else { return }
+            if self.watchStartAttempts < 2 {
+                // One retry with a fresh sentAt (also re-fires startWatchApp).
+                await self.dispatchWatchStart()
+            } else {
+                self.phase = .watchTimedOut
+                if self.watchFailureReason == nil {
+                    self.watchFailureReason = "The watch didn't respond. Open AARC on the watch, or run phone-only."
+                }
+            }
+        }
+    }
+
+    /// Watch accepted the start (early ack, ~1s after delivery).
+    func watchAcknowledgedStart(runId: UUID) {
+        guard phase == .awaitingWatch || phase == .watchTimedOut else { return }
+        settleWatchStart()
+    }
+
+    /// Watch can't act on the start — fall back immediately, no timeout.
+    func watchDeclinedStart(runId: UUID, reason: String) {
+        guard phase == .awaitingWatch else { return }
+        watchAckTask?.cancel()
+        watchAckTask = nil
+        phase = .watchTimedOut
+        watchFailureReason = "Watch declined: \(reason)"
+        PhoneNotificationCenter.shared.cancelWatchTimeoutFallback()
+    }
+
+    /// The definitive confirmation: workoutStarted arrived. Adoption
+    /// semantics — ANY fresh started-run settles a pending handover,
+    /// even if the runId differs (e.g. the watch started from the
+    /// HK launch before the parameter context landed).
+    func confirmWatchStarted(runId: UUID) {
+        guard phase == .awaitingWatch || phase == .watchTimedOut else { return }
+        settleWatchStart()
+    }
+
+    private func settleWatchStart() {
+        watchAckTask?.cancel()
+        watchAckTask = nil
+        pendingWatchStart = nil
+        watchFailureReason = nil
+        phase = .idle
+        PhoneNotificationCenter.shared.cancelStartCue()
+        PhoneNotificationCenter.shared.cancelWatchTimeoutFallback()
+    }
+
+    /// Reachability self-heal: the moment the link wakes up, re-push the
+    /// pending command (fresh sentAt) without consuming the retry budget.
+    func linkBecameReachable() {
+        guard phase == .awaitingWatch, let p = pendingWatchStart else { return }
+        PhoneSession.shared.sendStartCommand(
+            .startWorkout(runId: p.runId, runType: p.runType, personalityId: p.personalityId)
+        )
+    }
+
+    /// User picked "Start on phone instead" from the timeout card.
+    /// Cancels the watch-side start (best effort) so a late delivery
+    /// can't double-track, then starts phone-only.
+    func startOnPhoneInstead() async {
+        let runType = LiveMetricsConsumer.shared.pendingRunType
+        if let p = pendingWatchStart {
+            PhoneSession.shared.sendStateEvent(.cancelStart(runId: p.runId))
+        }
+        watchAckTask?.cancel()
+        watchAckTask = nil
+        pendingWatchStart = nil
+        watchFailureReason = nil
+        PhoneNotificationCenter.shared.cancelStartCue()
+        PhoneNotificationCenter.shared.cancelWatchTimeoutFallback()
+        phase = .idle
+        await startPhoneOnly(runType: runType)
+    }
+
+    /// User picked "Retry" from the timeout card.
+    func retryWatchStart() async {
+        guard pendingWatchStart != nil else {
+            phase = .idle
+            return
+        }
+        watchStartAttempts = 0
+        watchFailureReason = nil
+        phase = .awaitingWatch
+        await dispatchWatchStart()
+    }
+
+    /// Dismiss the timeout card without starting anything.
+    func dismissWatchTimeout() {
+        guard phase == .watchTimedOut else { return }
+        if let p = pendingWatchStart {
+            PhoneSession.shared.sendStateEvent(.cancelStart(runId: p.runId))
+        }
+        watchAckTask?.cancel()
+        watchAckTask = nil
+        pendingWatchStart = nil
+        watchFailureReason = nil
+        PhoneNotificationCenter.shared.cancelStartCue()
+        PhoneNotificationCenter.shared.cancelWatchTimeoutFallback()
+        phase = .idle
     }
 
     /// Watch sent prepareWorkout. Same opener-first flow, then reply

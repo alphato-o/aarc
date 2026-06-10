@@ -40,6 +40,14 @@ final class WorkoutSessionHost: NSObject {
     var countdownRemaining: Int = 0
     private var countdownTask: Task<Void, Never>?
 
+    /// Watchdog for the `.preparing` phase: if the phone doesn't answer
+    /// (scriptReady/scriptFailed) within this window, surface an error
+    /// with a "start without coach" escape — the watch must NEVER wedge
+    /// waiting on the phone (local-first rule). Field incident: a wedged
+    /// WC link left the watch spinning in preparing indefinitely.
+    private var preparingWatchdog: Task<Void, Never>?
+    private let preparingTimeoutSeconds: TimeInterval = 15
+
     /// Pending parameters captured during preparing phase, used when
     /// the countdown completes and we actually start the HK session.
     private var pendingRunType: RunType = .treadmill
@@ -107,6 +115,16 @@ final class WorkoutSessionHost: NSObject {
             WatchSession.shared.sendStateEvent(
                 .prepareWorkout(runId: runId, runType: runType, personalityId: personalityId)
             )
+            // Watchdog: never wedge in preparing. If the phone doesn't
+            // answer in time, surface an error with a one-tap
+            // "start without coach" escape — the run is local-first.
+            preparingWatchdog?.cancel()
+            preparingWatchdog = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(self?.preparingTimeoutSeconds ?? 15))
+                guard let self, !Task.isCancelled, self.phase == .preparing else { return }
+                self.lastError = "iPhone didn't answer. Start without the coach — it can join later."
+                self.phase = .error
+            }
         } else {
             // Phone already has the script (phone-initiated flow);
             // jump straight to the countdown.
@@ -118,6 +136,8 @@ final class WorkoutSessionHost: NSObject {
     /// Called by WatchSession on receipt of .scriptReady.
     func onScriptReady() {
         guard phase == .preparing else { return }
+        preparingWatchdog?.cancel()
+        preparingWatchdog = nil
         beginCountdown()
     }
 
@@ -125,6 +145,8 @@ final class WorkoutSessionHost: NSObject {
     /// skip the coach by tapping Start again from the error state.
     func onScriptFailed(reason: String) {
         guard phase == .preparing else { return }
+        preparingWatchdog?.cancel()
+        preparingWatchdog = nil
         self.lastError = reason
         self.phase = .error
     }
@@ -132,11 +154,40 @@ final class WorkoutSessionHost: NSObject {
     /// Cancel the prepare/countdown flow before it becomes a real
     /// workout (e.g. user changed their mind during the spinner).
     func cancelPreparation() {
+        preparingWatchdog?.cancel()
+        preparingWatchdog = nil
         countdownTask?.cancel()
         countdownTask = nil
         phase = .idle
         lastError = nil
         pendingRunId = nil
+    }
+
+    /// Local-first escape hatch: start tracking NOW with whatever
+    /// parameters are pending, without waiting for the phone. The coach
+    /// attaches automatically once `workoutStarted` reaches the phone
+    /// (its engines key off that event). Reachable from the preparing
+    /// timeout / error screens.
+    func startWithoutCoach() {
+        preparingWatchdog?.cancel()
+        preparingWatchdog = nil
+        lastError = nil
+        beginCountdown()
+    }
+
+    /// Phone fell back to phone-only and cancelled this start. If we're
+    /// still pending/counting down the same run, abandon it; if the run
+    /// just started (late delivery race), end + discard so the user
+    /// never gets a ghost workout double-tracked alongside phone-only.
+    func cancelRemoteStart(runId: UUID) {
+        if (phase == .preparing || phase == .countingDown), pendingRunId == runId {
+            cancelPreparation()
+            return
+        }
+        if phase == .running, currentRunId == runId,
+           let startedAt, Date().timeIntervalSince(startedAt) < 60 {
+            Task { _ = await endRun() }
+        }
     }
 
     private func beginCountdown() {
@@ -193,7 +244,12 @@ final class WorkoutSessionHost: NSObject {
         isTestData: Bool,
         skipHealthKitWrite: Bool
     ) async throws {
-        guard state == .idle || state == .ended else { return }
+        // Throw instead of silently returning: a silent return here left
+        // the phase machine stranded in .countingDown with no exit. The
+        // countdown path catches and surfaces this as .error.
+        guard state == .idle || state == .ended else {
+            throw WorkoutHostError.alreadyActive
+        }
 
         try await HealthKitClient.shared.requestAuthorization()
 
@@ -541,4 +597,16 @@ private extension LiveMetrics {
         lastSplit: nil,
         state: .idle
     )
+}
+
+/// Errors thrown by the watch-side workout host's start path.
+enum WorkoutHostError: Error, LocalizedError {
+    case alreadyActive
+
+    var errorDescription: String? {
+        switch self {
+        case .alreadyActive:
+            return "A workout is already active."
+        }
+    }
 }

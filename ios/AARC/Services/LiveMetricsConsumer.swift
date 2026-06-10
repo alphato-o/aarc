@@ -72,6 +72,25 @@ final class LiveMetricsConsumer {
     }
 
     func ingestStarted(runId: UUID, startedAt: Date) {
+        // Dedupe: queued WC transports can replay workoutStarted (e.g.
+        // a userInfo copy landing after the sendMessage copy). A repeat
+        // of the current run must not reset the engines mid-run.
+        if currentRunId == runId, isRunActive { return }
+
+        // Anti-double-tracking: if the user already fell back to
+        // phone-only and the watch starts LATE (delayed delivery of the
+        // original command), end the watch's run instead of running two
+        // trackers at once. The phone-only run is the user's explicit
+        // choice; the late watch run is a ghost.
+        if PhoneWorkoutSession.shared.isActive {
+            PhoneSession.shared.sendStateEvent(.endWorkout)
+            return
+        }
+
+        // Settle the orchestrator's pending handover (adoption: any
+        // fresh started run counts, even with a different runId).
+        RunOrchestrator.shared.confirmWatchStarted(runId: runId)
+
         self.currentRunId = runId
         self.startedAt = startedAt
         self.lastFinishedWorkoutUUID = nil

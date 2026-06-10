@@ -32,6 +32,12 @@ struct WatchRootView: View {
                         Divider()
                         Group {
                             LabeledContent("Phone reachable", value: session.isReachable ? "Yes" : "No")
+                            if session.buildMismatch {
+                                Text("⚠︎ Phone build \(session.counterpartBuild ?? "?") ≠ watch \(AppVersion.build) — redeploy both")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                                    .multilineTextAlignment(.center)
+                            }
                             if let last = session.lastInboundText {
                                 Text("Last: \(last)")
                                     .foregroundStyle(.secondary)
@@ -174,6 +180,11 @@ struct WatchRootView: View {
             Text("Get ready")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Button("Cancel") {
+                host.cancelPreparation()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
         }
         .padding(.vertical, 8)
     }
@@ -188,12 +199,19 @@ struct WatchRootView: View {
             Text(host.lastError ?? "Something went wrong")
                 .font(.caption)
                 .multilineTextAlignment(.center)
-            Button("Try again") {
-                host.cancelPreparation()
+            // Local-first escape: the watch can ALWAYS track a run on
+            // its own — the coach attaches later if the phone recovers.
+            Button("Start without coach") {
+                host.startWithoutCoach()
             }
             .buttonStyle(.borderedProminent)
-            .tint(.orange)
+            .tint(.green)
             .controlSize(.small)
+            Button("Back") {
+                host.cancelPreparation()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
         }
     }
 

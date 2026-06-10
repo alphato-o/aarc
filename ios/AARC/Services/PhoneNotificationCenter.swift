@@ -45,6 +45,7 @@ final class PhoneNotificationCenter: NSObject {
     /// without affecting unrelated notifications.
     enum Identifier {
         static let startCue = "aarc.startCue"
+        static let watchTimeoutFallback = "aarc.watchTimeoutFallback"
     }
 
     /// Thread identifier so multiple Start taps group together on the
@@ -136,6 +137,47 @@ final class PhoneNotificationCenter: NSObject {
             .removePendingNotificationRequests(withIdentifiers: [Identifier.startCue])
         UNUserNotificationCenter.current()
             .removeDeliveredNotifications(withIdentifiers: [Identifier.startCue])
+    }
+
+    // MARK: - Watch-timeout fallback
+
+    /// Suspension-proof fallback surface for the phone→watch handover.
+    /// The in-app ack timers freeze when the user locks the phone (the
+    /// normal move right after tapping Start) — this pre-scheduled local
+    /// notification at t+25s is the one surface that still fires if the
+    /// watch never started. Cancelled the moment the watch acks.
+    func scheduleWatchTimeoutFallback() async {
+        let status = await requestAuthorizationIfNeeded()
+        guard status == .authorized || status == .provisional else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Watch didn't start"
+        content.body = "Your watch hasn't begun tracking. Open AARC to run phone-only instead."
+        content.threadIdentifier = startCueThread
+        content.sound = .default
+        content.relevanceScore = 1.0
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 25, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: Identifier.watchTimeoutFallback,
+            content: content,
+            trigger: trigger
+        )
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: [Identifier.watchTimeoutFallback])
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            log.info("Watch-timeout fallback notification scheduled (t+25s)")
+        } catch {
+            log.error("scheduleWatchTimeoutFallback failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    func cancelWatchTimeoutFallback() {
+        UNUserNotificationCenter.current()
+            .removePendingNotificationRequests(withIdentifiers: [Identifier.watchTimeoutFallback])
+        UNUserNotificationCenter.current()
+            .removeDeliveredNotifications(withIdentifiers: [Identifier.watchTimeoutFallback])
     }
 }
 

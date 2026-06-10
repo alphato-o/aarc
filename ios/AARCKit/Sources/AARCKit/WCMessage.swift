@@ -8,6 +8,10 @@ public enum WCMessage: Codable, Sendable {
     /// Phone is initiating a run. Watch should skip the preparing phase
     /// because the phone already has a script ready and stored locally.
     case startWorkout(runId: UUID, runType: RunType, personalityId: String)
+    /// Phone gave up waiting for the watch and fell back to phone-only.
+    /// If the watch is still pending/counting down this runId, abandon
+    /// it; if it just started it, end + discard — never double-track.
+    case cancelStart(runId: UUID)
     /// Phone finished generating a script for a watch-initiated request.
     case scriptReady(scriptId: String)
     /// Phone failed to generate a script. The watch should surface the
@@ -19,6 +23,14 @@ public enum WCMessage: Codable, Sendable {
     case hello(text: String)
 
     // Watch → Phone
+    /// Watch received + accepted a startWorkout command and is counting
+    /// down. Early ACK so the phone knows the handover landed within ~1s
+    /// instead of waiting for the HK session to actually start.
+    case startAck(runId: UUID)
+    /// Watch received a startWorkout but can't act on it (already
+    /// running, HealthKit denied, stale command…). Lets the phone fall
+    /// back immediately instead of waiting out a timeout.
+    case startDeclined(runId: UUID, reason: String)
     /// Watch user tapped Start. Phone should generate a script for this
     /// run and reply with .scriptReady or .scriptFailed.
     case prepareWorkout(runId: UUID, runType: RunType, personalityId: String)

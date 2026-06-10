@@ -79,7 +79,9 @@ struct RunHomeView: View {
     private var statusFooter: some View {
         if let err = orchestrator.lastError {
             errorBox(err)
-        } else if orchestrator.phase == .sentToWatch {
+        } else if orchestrator.phase == .watchTimedOut {
+            watchTimeoutCard
+        } else if orchestrator.phase == .awaitingWatch {
             SentToWatchCard()
         } else if trackingSource == .phone {
             Text("Phone is the tracker. GPS, pace, and route via the iPhone — no watch needed.")
@@ -228,9 +230,125 @@ struct RunHomeView: View {
     /// Watch but the watch app isn't actually reachable. Tappable —
     /// one tap flips the source to Phone only so the runner doesn't
     /// have to fish through Settings while waiting on a treadmill.
+    /// Red card shown when a phone-initiated watch start timed out or
+    /// was declined. The guarantee surface: every handover attempt ends
+    /// here (with one-tap phone-only + retry) or in a tracking run —
+    /// never a silent dead end.
+    private var watchTimeoutCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "applewatch.slash")
+                    .foregroundStyle(.red)
+                Text("Watch didn't start")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.red)
+            }
+            Text(orchestrator.watchFailureReason ?? "No response from the watch.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.75))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button {
+                    Task { await orchestrator.startOnPhoneInstead() }
+                } label: {
+                    Text("Start on phone")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+
+                Button {
+                    Task { await orchestrator.retryWatchStart() }
+                } label: {
+                    Text("Retry watch")
+                        .font(.caption.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    orchestrator.dismissWatchTimeout()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+            }
+            .controlSize(.small)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.red.opacity(0.4), lineWidth: 1)
+        )
+    }
+
     @ViewBuilder
     private var watchUnreachableBanner: some View {
-        if trackingSource == .watch, !phoneSession.isReachable {
+        // Registry drift (the 2026-06-10 failure): iPhone's pairing
+        // registry lost the watch app's install record — every WC channel
+        // is dead at the OS level while the watch still shows "iPhone
+        // reachable". Distinct banner because the remedy is different.
+        if trackingSource == .watch, phoneSession.isPaired,
+           phoneSession.activationState == .activated,
+           !phoneSession.isWatchAppInstalled {
+            Button {
+                trackingSourceRaw = TrackingSource.phone.rawValue
+            } label: {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.applewatch")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.red)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Watch app not registered")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.red)
+                        Text("iPhone thinks the watch app isn't installed (dev-install glitch). Reboot the watch or reinstall it — or tap to run phone-only.")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .multilineTextAlignment(.leading)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.red.opacity(0.4), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        } else if phoneSession.buildMismatch, trackingSource == .watch {
+            // Dev-deploy drift tripwire: watch and phone are running
+            // different builds — schema changes decode-fail silently in
+            // that state, so say it loudly the moment it's detected.
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath.circle")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Watch build ≠ phone build")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text("Watch is on build \(phoneSession.counterpartBuild ?? "?"), phone on \(AppVersion.build). Handover may fail — redeploy both targets.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+        } else if trackingSource == .watch, !phoneSession.isReachable {
             Button {
                 trackingSourceRaw = TrackingSource.phone.rawValue
             } label: {
