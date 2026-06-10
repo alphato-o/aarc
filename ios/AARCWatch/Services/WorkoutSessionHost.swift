@@ -337,13 +337,16 @@ final class WorkoutSessionHost: NSObject {
         // Best-effort: mirroring failing must never block the run.
         do {
             try await session.startMirroringToCompanionDevice()
+            WatchBreadcrumbs.shared.drop("mirror ok")
         } catch {
+            WatchBreadcrumbs.shared.drop("mirror err: \(error)")
             lastError = nil  // not user-facing; WC still carries the run
         }
 
         let beginDate = Date()
         session.startActivity(with: beginDate)
         try await builder.beginCollection(at: beginDate)
+        WatchBreadcrumbs.shared.drop("beginCollection ok")
 
         if locationType == .outdoor {
             self.routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
@@ -463,6 +466,7 @@ final class WorkoutSessionHost: NSObject {
     @discardableResult
     func endRun() async -> UUID? {
         guard let session, let builder, state != .ended, state != .idle else { return nil }
+        WatchBreadcrumbs.shared.drop("endRun begin (state \(state.rawValue))")
         location?.stop()
         location = nil
         ticker?.cancel()
@@ -639,6 +643,11 @@ extension WorkoutSessionHost: @preconcurrency HKWorkoutSessionDelegate {
         date: Date
     ) {
         Task { @MainActor in
+            // Forensics: phone-initiated sessions were observed dying
+            // seconds after start with no visible reason. Record every
+            // transition (1=notStarted 2=running 3=ended 4=paused
+            // 5=prepared 6=stopped).
+            WatchBreadcrumbs.shared.drop("HK \(fromState.rawValue)→\(toState.rawValue)")
             switch toState {
             case .notStarted, .prepared:
                 self.state = .idle
@@ -671,7 +680,11 @@ extension WorkoutSessionHost: @preconcurrency HKWorkoutSessionDelegate {
     }
 
     nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
-        Task { @MainActor in self.lastError = error.localizedDescription }
+        let detail = "\(error)"  // full NSError incl. domain/code, not just the message
+        Task { @MainActor in
+            self.lastError = error.localizedDescription
+            WatchBreadcrumbs.shared.drop("HK FAILED: \(detail)")
+        }
     }
 }
 

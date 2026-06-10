@@ -30,6 +30,15 @@ final class WatchBreadcrumbs {
         entries = UserDefaults.standard.stringArray(forKey: Self.key) ?? []
     }
 
+    /// Full-history log file in the app container — pullable from a Mac
+    /// with `devicectl device copy from … appDataContainer …` without
+    /// touching the watch. The UserDefaults ring is the on-wrist view;
+    /// this file is the forensic record.
+    nonisolated static let fileURL: URL = {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("watchlog.txt")
+    }()
+
     func drop(_ event: String) {
         let line = "\(formatter.string(from: .now)) \(event)"
         entries.append(line)
@@ -37,6 +46,25 @@ final class WatchBreadcrumbs {
             entries.removeFirst(entries.count - Self.capacity)
         }
         UserDefaults.standard.set(entries, forKey: Self.key)
+        appendToFile(line)
+    }
+
+    private func appendToFile(_ line: String) {
+        let data = (line + "\n").data(using: .utf8)!
+        if let handle = try? FileHandle(forWritingTo: Self.fileURL) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: Self.fileURL)
+        }
+        // Trim if it grows past ~256 KB (keep the newest half).
+        if let size = try? FileManager.default.attributesOfItem(atPath: Self.fileURL.path)[.size] as? Int,
+           size > 256_000,
+           let content = try? String(contentsOf: Self.fileURL, encoding: .utf8) {
+            let tail = String(content.suffix(128_000))
+            try? tail.data(using: .utf8)?.write(to: Self.fileURL)
+        }
     }
 
     func clear() {
