@@ -3,6 +3,10 @@ import { callElevenLabs, ElevenLabsError } from "../lib/elevenlabs";
 
 export interface Env {
     ELEVENLABS_API_KEY?: string;
+    /// Override the ElevenLabs API base (e.g. a Concessionaire gateway
+    /// https://<host>/elevenlabs/v1). Default api.elevenlabs.io. The API key above
+    /// becomes the minted cnc- key when this points at the gateway.
+    ELEVENLABS_BASE_URL?: string;
 }
 
 /// Max characters per request. Bumped to fit Jessica's longer erotic
@@ -40,6 +44,7 @@ export async function ttsHandler(request: Request, env: Env): Promise<Response> 
     try {
         audio = await callElevenLabs({
             apiKey: env.ELEVENLABS_API_KEY,
+            baseUrl: env.ELEVENLABS_BASE_URL,
             text: req.text,
             voiceId: req.voiceId,
             modelId: req.modelId,

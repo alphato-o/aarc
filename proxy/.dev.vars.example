@@ -16,3 +16,12 @@ OPENROUTER_API_KEY=sk-or-v1-REPLACE_ME
 
 # Required if you exercise /tts locally:
 ELEVENLABS_API_KEY=REPLACE_ME
+
+# OPTIONAL — route through the Concessionaire transparent-carrier gateway instead of
+# hitting OpenRouter / ElevenLabs directly (so calls egress through the fleet and the
+# real provider keys never live here). When set, the *_API_KEY values above become the
+# minted cnc- keys (Bearer for OpenRouter, sent as xi-api-key for ElevenLabs — the code
+# already puts each key in the right header). Leave unset for direct provider calls.
+# Hosts: concessionaire.chromiumos.dev or ai.dreamydreams.xyz.
+# OPENROUTER_BASE_URL=https://ai.dreamydreams.xyz/openrouter/v1
+# ELEVENLABS_BASE_URL=https://ai.dreamydreams.xyz/elevenlabs/v1

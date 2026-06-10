@@ -7,9 +7,11 @@ import { ttsHandler } from "./routes/tts";
 interface Env {
     OPENROUTER_API_KEY?: string;
     OPENROUTER_MODEL?: string;
+    OPENROUTER_BASE_URL?: string;
     ANTHROPIC_API_KEY?: string;
     ANTHROPIC_MODEL?: string;
     ELEVENLABS_API_KEY?: string;
+    ELEVENLABS_BASE_URL?: string;
 }
 
 const json = (data: unknown, init: ResponseInit = {}): Response =>

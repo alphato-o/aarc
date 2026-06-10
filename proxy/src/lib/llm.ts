@@ -24,6 +24,10 @@ import { callOpenRouter, OpenRouterError } from "./openrouter";
 
 export interface LLMEnv {
     OPENROUTER_API_KEY?: string;
+    /// Override the OpenRouter API base (e.g. a Concessionaire gateway
+    /// https://<host>/openrouter/v1). Default openrouter.ai. The API key above
+    /// becomes the minted cnc- key when this points at the gateway.
+    OPENROUTER_BASE_URL?: string;
     ANTHROPIC_API_KEY?: string;
     /// Optional per-purpose model overrides (else the Sonnet defaults).
     OPENROUTER_MODEL_SCRIPT?: string;
@@ -86,6 +90,7 @@ export async function callLLM(
         const model = override[params.purpose] ?? DEFAULT_OPENROUTER_MODELS[params.purpose];
         const text = await callOpenRouter({
             apiKey: env.OPENROUTER_API_KEY,
+            baseUrl: env.OPENROUTER_BASE_URL,
             model,
             systemPrompt: params.systemPrompt,
             userPrompt: params.userPrompt,

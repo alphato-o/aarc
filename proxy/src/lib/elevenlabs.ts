@@ -15,9 +15,14 @@
  * Voice settings tuned for Roast Coach: v3 handles emotion primarily
  * via inline tags, so the per-line `style` matters less; we keep a
  * moderate value and lean on the model emitting tags where it counts.
+ *
+ * baseUrl is configurable (ELEVENLABS_BASE_URL) so TTS can route through a
+ * Concessionaire transparent-carrier gateway (https://<host>/elevenlabs/v1) instead of
+ * api.elevenlabs.io directly — same path shape + xi-api-key auth + audio/mpeg response,
+ * the gateway swaps the key + egresses through the fleet. Default is api.elevenlabs.io.
  */
 
-const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
+const DEFAULT_ELEVENLABS_BASE = "https://api.elevenlabs.io/v1";
 
 export interface ElevenLabsParams {
     apiKey: string;
@@ -27,10 +32,13 @@ export interface ElevenLabsParams {
     stability?: number;
     similarityBoost?: number;
     style?: number;
+    /** Override the API base (e.g. a Concessionaire gateway). Default api.elevenlabs.io. */
+    baseUrl?: string;
 }
 
 export async function callElevenLabs(params: ElevenLabsParams): Promise<ArrayBuffer> {
-    const url = `${ELEVENLABS_BASE}/text-to-speech/${encodeURIComponent(params.voiceId)}`;
+    const base = (params.baseUrl || DEFAULT_ELEVENLABS_BASE).replace(/\/+$/, "");
+    const url = `${base}/text-to-speech/${encodeURIComponent(params.voiceId)}`;
     const body = {
         text: params.text,
         model_id: params.modelId ?? "eleven_v3",

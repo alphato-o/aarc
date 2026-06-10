@@ -7,9 +7,14 @@
  * which OpenRouter passes through.
  *
  * Keys are sk-or-v1-… and are sent via Authorization: Bearer.
+ *
+ * baseUrl is configurable (OPENROUTER_BASE_URL) so the call can be routed through a
+ * Concessionaire transparent-carrier gateway (https://<host>/openrouter/v1) instead of
+ * openrouter.ai directly — same OpenAI-compatible shape + Bearer auth, the gateway swaps
+ * the key + egresses through the fleet. Default is openrouter.ai (unchanged behavior).
  */
 
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
 export interface OpenRouterParams {
     apiKey: string;
@@ -22,9 +27,13 @@ export interface OpenRouterParams {
     /** Optional referer/title that show up on openrouter.ai analytics. */
     appUrl?: string;
     appName?: string;
+    /** Override the API base (e.g. a Concessionaire gateway). Default openrouter.ai. */
+    baseUrl?: string;
 }
 
 export async function callOpenRouter(params: OpenRouterParams): Promise<string> {
+    const base = (params.baseUrl || DEFAULT_OPENROUTER_BASE).replace(/\/+$/, "");
+    const endpoint = `${base}/chat/completions`;
     const headers: Record<string, string> = {
         Authorization: `Bearer ${params.apiKey}`,
         "Content-Type": "application/json",
@@ -54,7 +63,7 @@ export async function callOpenRouter(params: OpenRouterParams): Promise<string> 
         ],
     };
 
-    const response = await fetch(OPENROUTER_URL, {
+    const response = await fetch(endpoint, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
