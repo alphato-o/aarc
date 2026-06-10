@@ -63,6 +63,18 @@ final class WatchSession: NSObject {
         log.info("[watch] activate() requested")
     }
 
+    /// Re-check the last applicationContext for a pending start command.
+    /// Called on every foreground — covers the case where the activation
+    /// snapshot raced or the context landed while neither delegate fired.
+    /// Safe to call repeatedly: TTL + the handled-runId ledger make a
+    /// replay a no-op.
+    func reconsumePendingContext() {
+        guard let session, session.activationState == .activated else { return }
+        let pending = Self.extract(session.receivedApplicationContext)
+        guard pending.data != nil else { return }
+        consume(pending, via: "appContext@foreground")
+    }
+
     // MARK: - Outbound
 
     private func envelope(_ data: Data) -> [String: Any] {
@@ -264,6 +276,7 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
             guard let sentAt, Date().timeIntervalSince(sentAt) <= Self.startCommandTTL else {
                 let age = sentAt.map { "\(Int(Date().timeIntervalSince($0)))s old" } ?? "no sentAt"
                 log.error("[watch] DROPPED stale start (\(age, privacy: .public))")
+                WatchBreadcrumbs.shared.drop("start cmd stale (\(age))")
                 return
             }
         }
@@ -274,12 +287,14 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         let phase = WorkoutSessionHost.shared.phase
         guard phase == .idle || phase == .ended || phase == .error else {
             log.error("[watch] start declined — busy (phase=\(phase.rawValue, privacy: .public))")
+            WatchBreadcrumbs.shared.drop("start declined: busy \(phase.rawValue)")
             sendStateEvent(.startDeclined(runId: runId, reason: "watch is busy (\(phase.rawValue))"))
             return
         }
         handledStartRunIds.append(runId.uuidString)
         sendStateEvent(.startAck(runId: runId))
         log.info("[watch] start accepted \(runId.uuidString.prefix(8), privacy: .public)")
+        WatchBreadcrumbs.shared.drop("start cmd accepted")
 
         // No haptic here: a background launch silently drops it anyway,
         // and the host plays the proper .start haptic the moment the

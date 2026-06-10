@@ -245,6 +245,7 @@ final class WorkoutSessionHost: NSObject {
         } catch {
             self.lastError = error.localizedDescription
             self.phase = .error
+            WatchBreadcrumbs.shared.drop("start FAILED: \(error.localizedDescription)")
         }
     }
 
@@ -354,6 +355,7 @@ final class WorkoutSessionHost: NSObject {
 
         state = .running
         startTicker()
+        WatchBreadcrumbs.shared.drop("session running \(currentRunType.rawValue)")
 
         // Persist run identity so a crash-relaunch (handleActiveWorkoutRecovery)
         // can reattach with the same runId.

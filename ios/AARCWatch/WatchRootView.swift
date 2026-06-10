@@ -4,11 +4,14 @@ import AARCKit
 struct WatchRootView: View {
     @Environment(WatchSession.self) private var session
     @Environment(WorkoutSessionHost.self) private var host
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var hkAuthorized = HealthKitClient.shared.canHostWorkouts
     @State private var requestingAuth = false
     @State private var startError: String?
     @State private var mode: RunType = .treadmill
+    @State private var breadcrumbs = WatchBreadcrumbs.shared
+    @State private var showBreadcrumbs = false
 
     var body: some View {
         // State-driven root, NOT push navigation. A phone-initiated run
@@ -25,6 +28,14 @@ struct WatchRootView: View {
                 WatchActiveRunView()
             } else {
                 idleRoot
+            }
+        }
+        .onChange(of: scenePhase) { _, newPhase in
+            if newPhase == .active {
+                // Refresh stale auth state + sweep for a pending start
+                // command that may have landed while no delegate fired.
+                hkAuthorized = HealthKitClient.shared.canHostWorkouts
+                WatchSession.shared.reconsumePendingContext()
             }
         }
     }
@@ -64,6 +75,36 @@ struct WatchRootView: View {
                             }
                         }
                         .font(.footnote)
+
+                        // On-wrist flight recorder: the persisted launch/
+                        // start breadcrumb trail. After a failed phone→
+                        // watch handover, this answers "did the app even
+                        // launch? did handle() fire? did start() throw?"
+                        // without a Mac.
+                        Button(showBreadcrumbs ? "Hide launch log" : "Launch log") {
+                            showBreadcrumbs.toggle()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                        if showBreadcrumbs {
+                            VStack(alignment: .leading, spacing: 2) {
+                                if breadcrumbs.entries.isEmpty {
+                                    Text("no events yet")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                ForEach(Array(breadcrumbs.recentFirst.prefix(15).enumerated()), id: \.offset) { _, line in
+                                    Text(line)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundStyle(.secondary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                Button("Clear") { breadcrumbs.clear() }
+                                    .buttonStyle(.plain)
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
                     }
                 }
                 .padding()

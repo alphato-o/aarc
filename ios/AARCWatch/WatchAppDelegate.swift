@@ -23,6 +23,7 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
 
     func applicationDidFinishLaunching() {
         Task { @MainActor in
+            WatchBreadcrumbs.shared.drop("launch")
             WatchSession.shared.activate()
         }
         log.info("[watch] didFinishLaunching — WC activation kicked")
@@ -31,6 +32,9 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
     func handle(_ workoutConfiguration: HKWorkoutConfiguration) {
         let runType: RunType = (workoutConfiguration.locationType == .indoor) ? .treadmill : .outdoor
         log.info("[watch] startWatchApp launch received (locationType=\(workoutConfiguration.locationType.rawValue))")
+        Task { @MainActor in
+            WatchBreadcrumbs.shared.drop("handle(cfg) \(runType.rawValue)")
+        }
         Task { @MainActor in
             // Give the applicationContext start command (runId +
             // personality) a moment to land via WatchSession's activation
@@ -48,6 +52,7 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
             let phase = WorkoutSessionHost.shared.phase
             guard phase == .idle || phase == .ended || phase == .error else { return }
             self.log.info("[watch] startWatchApp: params never arrived — starting with defaults")
+            WatchBreadcrumbs.shared.drop("handle: no params → default start")
             await WorkoutSessionHost.shared.beginRun(
                 runType: runType,
                 prepareScriptOnPhone: false,
@@ -62,6 +67,7 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
     func handleActiveWorkoutRecovery() {
         log.info("[watch] handleActiveWorkoutRecovery")
         Task { @MainActor in
+            WatchBreadcrumbs.shared.drop("recovery")
             WorkoutSessionHost.shared.recoverActiveSession()
         }
     }

@@ -247,6 +247,10 @@ struct RunHomeView: View {
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.75))
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Tip: if you force-quit the watch app recently, watchOS blocks auto-launch — open AARC on the watch once, then Retry. Check both devices show the same build in their footer.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Button {
                     Task { await orchestrator.startOnPhoneInstead() }
@@ -357,11 +361,11 @@ struct RunHomeView: View {
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.yellow)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Watch app not reachable")
+                        Text(phoneSession.isPaired ? "Watch app asleep" : "Watch app not reachable")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(.yellow)
                         Text(phoneSession.isPaired
-                             ? "Open AARC on your watch — or tap to switch to Phone only."
+                             ? "That's fine — it auto-launches when you hit Start. Tap here to run phone-only instead."
                              : "No paired watch detected. Tap to switch to Phone only.")
                             .font(.caption2)
                             .foregroundStyle(.white.opacity(0.7))
@@ -479,18 +483,18 @@ struct RunHomeView: View {
 private struct SentToWatchCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "applewatch.radiowaves.left.and.right")
-                    .imageScale(.medium)
-                    .foregroundStyle(.green)
-                Text("Sent to your watch")
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Starting your watch…")
                     .font(.callout.weight(.semibold))
             }
-            Text("Open AARC on your watch to start the workout. Or switch to **Phone only** above.")
+            Text("Launching AARC on the watch automatically — no need to touch it. You'll feel a soft tick when tracking begins.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.green.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
     }
 }
