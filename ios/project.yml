@@ -19,8 +19,8 @@ settings:
     # both happen to use the same team.
     DEVELOPMENT_TEAM: GK7889VKDF
     ENABLE_HARDENED_RUNTIME: NO
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "78"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "79"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 
@@ -58,21 +58,15 @@ targets:
       - name: Stamp Build Number
         basedOnDependencyAnalysis: false
         script: |
-          # Replace the built Info.plist's CFBundleVersion with
-          # "<source-version>.<HHMMSS>" so each Xcode build is uniquely
-          # identifiable on-device. Runs before code signing seals the
-          # bundle, so the modification is signed.
+          # TestFlight-legal versioning: CFBundleShortVersionString stays
+          # the semantic MARKETING_VERSION and CFBundleVersion stays the
+          # plain bumped build number (App Store Connect requires X.Y.Z
+          # formats). The build DATETIME the founder wants visible rides
+          # a custom AARCBuildStamp key instead, displayed by AppVersion.
           set -e
-          buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"
-          plutil -replace CFBundleVersion -string "$buildStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-          # Marketing version (CFBundleShortVersionString) is the build's
-          # datetime, YYYYMMDDHHMM, so the displayed version always says
-          # when this build was cut. Build number keeps its bumped
-          # "<source-version>.<HHMMSS>" form (MARKETING_VERSION in the
-          # base settings is now just a pre-stamp placeholder).
           versionStamp="$(date +%Y%m%d%H%M)"
-          plutil -replace CFBundleShortVersionString -string "$versionStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-          echo "Stamped CFBundleVersion = $buildStamp, CFBundleShortVersionString = $versionStamp"
+          plutil -replace AARCBuildStamp -string "$versionStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          echo "Stamped AARCBuildStamp = $versionStamp"
 
   AARCLiveActivity:
     type: app-extension
@@ -98,16 +92,9 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -e
-          buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"
-          plutil -replace CFBundleVersion -string "$buildStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-          # Marketing version (CFBundleShortVersionString) is the build's
-          # datetime, YYYYMMDDHHMM, so the displayed version always says
-          # when this build was cut. Build number keeps its bumped
-          # "<source-version>.<HHMMSS>" form (MARKETING_VERSION in the
-          # base settings is now just a pre-stamp placeholder).
           versionStamp="$(date +%Y%m%d%H%M)"
-          plutil -replace CFBundleShortVersionString -string "$versionStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-          echo "Stamped CFBundleVersion = $buildStamp, CFBundleShortVersionString = $versionStamp"
+          plutil -replace AARCBuildStamp -string "$versionStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          echo "Stamped AARCBuildStamp = $versionStamp"
 
   AARCWatch:
     type: application
@@ -141,16 +128,9 @@ targets:
         basedOnDependencyAnalysis: false
         script: |
           set -e
-          buildStamp="${CURRENT_PROJECT_VERSION}.$(date +%H%M%S)"
-          plutil -replace CFBundleVersion -string "$buildStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-          # Marketing version (CFBundleShortVersionString) is the build's
-          # datetime, YYYYMMDDHHMM, so the displayed version always says
-          # when this build was cut. Build number keeps its bumped
-          # "<source-version>.<HHMMSS>" form (MARKETING_VERSION in the
-          # base settings is now just a pre-stamp placeholder).
           versionStamp="$(date +%Y%m%d%H%M)"
-          plutil -replace CFBundleShortVersionString -string "$versionStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
-          echo "Stamped CFBundleVersion = $buildStamp, CFBundleShortVersionString = $versionStamp"
+          plutil -replace AARCBuildStamp -string "$versionStamp" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+          echo "Stamped AARCBuildStamp = $versionStamp"
 
   AARCTests:
     type: bundle.unit-test

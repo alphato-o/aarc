@@ -13,8 +13,17 @@ public enum AppVersion {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
     }
 
-    /// Compact "v0.1.0 (12)" form for diagnostic UI.
+    /// Build datetime (YYYYMMDDHHMM), stamped at compile time into the
+    /// custom AARCBuildStamp key. Lives outside CFBundleShortVersionString
+    /// so the marketing version stays App Store Connect-legal (X.Y.Z)
+    /// while the founder can still see exactly when a build was cut.
+    public static var buildStamp: String {
+        Bundle.main.infoDictionary?["AARCBuildStamp"] as? String ?? "?"
+    }
+
+    /// Compact "v0.2.0 (78 · 202606110130)" form for diagnostic UI —
+    /// semantic version, bumped build number, and the cut datetime.
     public static var versionString: String {
-        "v\(marketing) (\(build))"
+        "v\(marketing) (\(build) · \(buildStamp))"
     }
 }
