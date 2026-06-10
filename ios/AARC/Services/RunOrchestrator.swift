@@ -212,7 +212,13 @@ final class RunOrchestrator {
             try? await Task.sleep(for: .seconds(10))
             guard let self, !Task.isCancelled, self.phase == .awaitingWatch else { return }
             if self.watchStartAttempts < 2 {
-                // One retry with a fresh sentAt (also re-fires startWatchApp).
+                // One retry with a FRESH runId + sentAt (also re-fires
+                // startWatchApp). Fresh id matters: the watch burns
+                // received runIds into its dedupe ledger even when the
+                // start later fails, so re-sending the same id would be
+                // swallowed as a duplicate. Adoption semantics on
+                // workoutStarted tolerate the id change.
+                self.mintFreshRunId()
                 await self.dispatchWatchStart()
             } else {
                 self.phase = .watchTimedOut
@@ -291,10 +297,18 @@ final class RunOrchestrator {
             phase = .idle
             return
         }
+        mintFreshRunId()
         watchStartAttempts = 0
         watchFailureReason = nil
         phase = .awaitingWatch
         await dispatchWatchStart()
+    }
+
+    /// Replace the pending start's runId (retries must not reuse an id
+    /// the watch may have already burned into its dedupe ledger).
+    private func mintFreshRunId() {
+        guard let p = pendingWatchStart else { return }
+        pendingWatchStart = (UUID(), p.runType, p.personalityId)
     }
 
     /// Dismiss the timeout card without starting anything.

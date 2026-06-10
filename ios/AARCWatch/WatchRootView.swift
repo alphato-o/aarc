@@ -11,6 +11,25 @@ struct WatchRootView: View {
     @State private var mode: RunType = .treadmill
 
     var body: some View {
+        // State-driven root, NOT push navigation. A phone-initiated run
+        // starts while this app is background-launched (wrist down) —
+        // programmatic navigationDestination pushes performed while the
+        // scene is inactive are the classic watchOS source of blank /
+        // stranded UI (the build-71 "wonky until force-quit" bug). With
+        // a root switch, whatever phase we're in when the user raises
+        // their wrist is simply the first frame rendered — there is no
+        // transition to lose. (Apple's multi-device workout sample uses
+        // exactly this pattern.)
+        Group {
+            if isInActiveSessionPhase {
+                WatchActiveRunView()
+            } else {
+                idleRoot
+            }
+        }
+    }
+
+    private var idleRoot: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 10) {
@@ -49,23 +68,18 @@ struct WatchRootView: View {
                 }
                 .padding()
             }
-            .navigationDestination(
-                isPresented: Binding(
-                    get: { isInActiveSessionPhase },
-                    set: { if !$0 { /* user can't manually pop */ } }
-                )
-            ) {
-                WatchActiveRunView()
-            }
         }
     }
 
-    /// True once the run is actually happening or has just ended — drive
-    /// the navigation push to the active run view from here.
+    /// True while the run is actually happening — drives the root switch
+    /// to the active run view. `.ended` is no longer in this set: the
+    /// host returns the phase to `.idle` at end-of-run, so the root
+    /// swaps back automatically (the old push binding kept `.ended` true
+    /// forever with no way out — the stranded-UI bug).
     private var isInActiveSessionPhase: Bool {
         switch host.phase {
-        case .running, .paused, .ended: return true
-        case .idle, .preparing, .countingDown, .error: return false
+        case .running, .paused: return true
+        case .idle, .preparing, .countingDown, .error, .ended: return false
         }
     }
 

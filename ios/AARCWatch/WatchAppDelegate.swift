@@ -43,14 +43,26 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
             }
             // No parameters arrived — start anyway with local defaults.
             // The phone adopts the runId we announce via workoutStarted.
+            // (beginRun's internal phase guard makes a race with a
+            // just-landed appContext start a harmless no-op.)
             let phase = WorkoutSessionHost.shared.phase
             guard phase == .idle || phase == .ended || phase == .error else { return }
             self.log.info("[watch] startWatchApp: params never arrived — starting with defaults")
-            WKInterfaceDevice.current().play(.notification)
             await WorkoutSessionHost.shared.beginRun(
                 runType: runType,
-                prepareScriptOnPhone: false
+                prepareScriptOnPhone: false,
+                skipCountdown: true
             )
+        }
+    }
+
+    /// watchOS relaunched us after a crash mid-workout. Reattach to the
+    /// still-live HK session instead of leaving a zombie that blocks
+    /// every future start.
+    func handleActiveWorkoutRecovery() {
+        log.info("[watch] handleActiveWorkoutRecovery")
+        Task { @MainActor in
+            WorkoutSessionHost.shared.recoverActiveSession()
         }
     }
 }

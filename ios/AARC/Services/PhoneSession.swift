@@ -191,6 +191,11 @@ final class PhoneSession: NSObject {
             self.lastInboundText = text
 
         case .liveMetrics(let metrics):
+            // While a mirrored session is live, metrics arrive over the
+            // HealthKit mirroring channel — skip the WC copy so each
+            // tick isn't ingested twice. WC resumes the moment the
+            // mirror drops (receiver clears itself on disconnect).
+            guard !MirroringReceiver.shared.isMirroring else { return }
             LiveMetricsConsumer.shared.ingest(metrics)
 
         case .startAck(let runId):

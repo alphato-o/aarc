@@ -3,6 +3,14 @@ import SwiftData
 
 @main
 struct AARCApp: App {
+    init() {
+        // MUST happen promptly at launch (not in a view's task): when the
+        // watch starts mirroring a workout, the system background-launches
+        // this app and calls the handler — if it isn't installed yet, the
+        // mirrored session is missed.
+        MirroringReceiver.shared.install()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootTabView()

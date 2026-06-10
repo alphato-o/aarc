@@ -1,6 +1,7 @@
 import Foundation
 import HealthKit
 import CoreLocation
+import WatchKit
 import AARCKit
 
 /// The watch-side workout owner. Hosts the `HKWorkoutSession`,
@@ -54,6 +55,10 @@ final class WorkoutSessionHost: NSObject {
     private var pendingRunId: UUID?
     private var pendingIsTestData: Bool = true
     private var pendingSkipHealthKitWrite: Bool = false
+    /// False for phone-initiated background starts: an auth sheet can't
+    /// present without an active scene, and awaiting it wedges the phase
+    /// machine. Those starts fail fast with a clear error instead.
+    private var pendingAllowAuthPrompt: Bool = true
 
     // Identity for this run — stamped into HK metadata at finalise.
     var currentRunId: UUID?
@@ -99,12 +104,35 @@ final class WorkoutSessionHost: NSObject {
         isTestData: Bool = false,
         skipHealthKitWrite: Bool = false,
         personalityId: String = "roast_coach",
-        prepareScriptOnPhone: Bool = true
+        prepareScriptOnPhone: Bool = true,
+        skipCountdown: Bool = false
     ) async {
+        // Phase guard HERE (not only at call sites): two delivery paths
+        // (appContext consumption + the startWatchApp handle() fallback)
+        // can race onto MainActor — the second caller must be a no-op,
+        // not a countdown restart that clobbers pendingRunId.
+        guard phase == .idle || phase == .ended || phase == .error else { return }
+
         self.pendingRunType = runType
         self.pendingRunId = runId
         self.pendingIsTestData = isTestData
         self.pendingSkipHealthKitWrite = skipHealthKitWrite
+
+        if skipCountdown {
+            // Phone-initiated (NRC pattern): the user expressed intent on
+            // the phone seconds ago and the watch is likely wrist-down in
+            // a background launch — a 3-2-1 nobody sees only delays
+            // workoutStarted and widens every launch race. Start NOW.
+            // No auth prompt either: a permission sheet can't present on
+            // a background launch and the await would wedge the phase
+            // machine at countingDown forever.
+            phase = .countingDown
+            countdownRemaining = 0
+            pendingAllowAuthPrompt = false
+            await startSessionFromCountdown()
+            return
+        }
+        pendingAllowAuthPrompt = true
 
         if prepareScriptOnPhone {
             self.phase = .preparing
@@ -251,7 +279,17 @@ final class WorkoutSessionHost: NSObject {
             throw WorkoutHostError.alreadyActive
         }
 
-        try await HealthKitClient.shared.requestAuthorization()
+        // Auth pre-flight. Already authorized → skip the request entirely
+        // (removes a hang surface from every run). Not authorized → only
+        // prompt when a user is actually looking (manual starts); a
+        // background phone-initiated start throws a clear error instead
+        // of wedging on a sheet that can never present.
+        if !HealthKitClient.shared.canHostWorkouts {
+            guard pendingAllowAuthPrompt else {
+                throw WorkoutHostError.healthKitNotAuthorized
+            }
+            try await HealthKitClient.shared.requestAuthorization()
+        }
 
         let config = HKWorkoutConfiguration()
         config.activityType = .running
@@ -290,6 +328,18 @@ final class WorkoutSessionHost: NSObject {
         self.lastCollectedTypeShortNames = []
         self.hkAuthSnapshot = snapshotAuthStatus(for: Self.typesToCollect)
 
+        // Mirror to the iPhone BEFORE starting the activity (Apple's
+        // multi-device pattern, watchOS 10+). The system launches the
+        // iPhone app in the background to receive the mirrored session,
+        // keeps run state in sync natively, and auto-reconnects after
+        // Bluetooth drops — the WC link stays as a redundant fallback.
+        // Best-effort: mirroring failing must never block the run.
+        do {
+            try await session.startMirroringToCompanionDevice()
+        } catch {
+            lastError = nil  // not user-facing; WC still carries the run
+        }
+
         let beginDate = Date()
         session.startActivity(with: beginDate)
         try await builder.beginCollection(at: beginDate)
@@ -305,11 +355,79 @@ final class WorkoutSessionHost: NSObject {
         state = .running
         startTicker()
 
-        // Tell the phone the workout has started so it can begin
-        // observing live metrics. Queued + guaranteed delivery.
+        // Persist run identity so a crash-relaunch (handleActiveWorkoutRecovery)
+        // can reattach with the same runId.
+        UserDefaults.standard.set(runId.uuidString, forKey: Self.persistedRunIdKey)
+        UserDefaults.standard.set(currentRunType.rawValue, forKey: Self.persistedRunTypeKey)
+
+        // Subtle "your watch is now tracking" cue — .start is the
+        // semantically correct workout haptic, and haptics are reliable
+        // here because the workout session is active.
+        WKInterfaceDevice.current().play(.start)
+
+        // Tell the phone the workout has started. Two channels:
+        // mirroring identity payload (modern) + WC event (fallback).
+        sendMirror(.identity(
+            runId: runId,
+            runType: currentRunType,
+            personalityId: "roast_coach",
+            startedAt: startedAt ?? .now
+        ))
         WatchSession.shared.sendStateEvent(
             .workoutStarted(runId: runId, startedAt: startedAt ?? .now)
         )
+    }
+
+    // MARK: - Mirroring data channel
+
+    private static let persistedRunIdKey = "aarc.run.persistedRunId"
+    private static let persistedRunTypeKey = "aarc.run.persistedRunType"
+    private let mirrorEncoder = JSONEncoder()
+
+    /// Best-effort send over the mirrored session's data channel.
+    /// Sub-KB payloads at 1 Hz — far inside HealthKit's 100 KB / 10 s cap.
+    private func sendMirror(_ payload: MirrorPayload) {
+        guard let session, let data = try? mirrorEncoder.encode(payload) else { return }
+        session.sendToRemoteWorkoutSession(data: data) { _, _ in
+            // Errors here just mean "not mirroring right now" — the WC
+            // path still carries the metrics; nothing to recover.
+        }
+    }
+
+    /// Crash recovery: watchOS relaunches us via
+    /// WatchAppDelegate.handleActiveWorkoutRecovery when the app died
+    /// mid-workout. Reattach to the live session so the run continues
+    /// instead of leaving a zombie session that blocks future starts.
+    func recoverActiveSession() {
+        healthStore.recoverActiveWorkoutSession { [weak self] session, error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if let error {
+                    self.lastError = "Recovery failed: \(error.localizedDescription)"
+                    return
+                }
+                guard let session else { return }
+                let builder = session.associatedWorkoutBuilder()
+                session.delegate = self
+                builder.delegate = self
+                self.session = session
+                self.builder = builder
+                self.startedAt = session.startDate ?? .now
+                if let stored = UserDefaults.standard.string(forKey: Self.persistedRunIdKey),
+                   let runId = UUID(uuidString: stored) {
+                    self.currentRunId = runId
+                }
+                if let storedType = UserDefaults.standard.string(forKey: Self.persistedRunTypeKey),
+                   let runType = RunType(rawValue: storedType) {
+                    self.currentRunType = runType
+                }
+                self.state = (session.state == .paused) ? .paused : .running
+                self.phase = (session.state == .paused) ? .paused : .running
+                self.startTicker()
+                // Re-establish the mirror (legal on any non-ended session).
+                Task { try? await session.startMirroringToCompanionDevice() }
+            }
+        }
     }
 
     func pause() {
@@ -350,12 +468,15 @@ final class WorkoutSessionHost: NSObject {
         ]
         try? await builder.addMetadata(metadata)
 
+        UserDefaults.standard.removeObject(forKey: Self.persistedRunIdKey)
+
         if skipHealthKitWriteForCurrentRun {
             // Do NOT call finishWorkout. Abandon the builder; nothing is written.
             self.session = nil
             self.builder = nil
             self.routeBuilder = nil
             state = .ended
+            phase = .idle
             return nil
         }
 
@@ -369,17 +490,20 @@ final class WorkoutSessionHost: NSObject {
             self.builder = nil
             self.routeBuilder = nil
             state = .ended
-            phase = .ended
+            // CRITICAL: return the phase machine to .idle, not .ended.
+            // Nothing ever transitioned out of .ended, so the run UI was
+            // permanently stranded after every run (the navigation
+            // binding's source of truth stayed true) — the "wonky UI
+            // until force-quit" field bug.
+            phase = .idle
             if let uuid = workout?.uuid {
                 WatchSession.shared.sendStateEvent(.workoutEnded(healthKitWorkoutUUID: uuid))
             }
             return workout?.uuid
         } catch {
             lastError = error.localizedDescription
-            // Leave session/builder set so we can later retry; for now
-            // also surface .ended so the UI can move on.
             state = .ended
-            phase = .ended
+            phase = .idle
             return nil
         }
     }
@@ -450,8 +574,12 @@ final class WorkoutSessionHost: NSObject {
             state: state
         )
 
-        // Push to the iPhone. Best-effort; drops are fine because the
+        // Push to the iPhone over BOTH channels. Mirroring is the modern
+        // path (in-order, system-managed, auto-reconnect); WC sendMessage
+        // is the fallback. The phone prefers mirroring and ignores the
+        // WC copy while a mirror is live. Best-effort either way; the
         // watch keeps writing to HealthKit independently.
+        sendMirror(.metrics(liveMetrics))
         WatchSession.shared.sendLiveMetrics(liveMetrics)
 
         _ = startedAt  // silence unused for now
@@ -602,11 +730,14 @@ private extension LiveMetrics {
 /// Errors thrown by the watch-side workout host's start path.
 enum WorkoutHostError: Error, LocalizedError {
     case alreadyActive
+    case healthKitNotAuthorized
 
     var errorDescription: String? {
         switch self {
         case .alreadyActive:
             return "A workout is already active."
+        case .healthKitNotAuthorized:
+            return "Health access not granted. Open AARC on the watch and tap Allow Health, then start again."
         }
     }
 }

@@ -152,7 +152,7 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
                 return
             }
             // Live path: delivery is immediate, so freshness is implied.
-            self.route(message, sentAt: nil)
+            self.route(message, sentAt: nil, isLive: true)
         }
     }
 
@@ -207,11 +207,11 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
             log.error("[watch] decode FAILED via \(channel, privacy: .public) — likely build drift")
             return
         }
-        route(message, sentAt: envelope.sentAt.map(Date.init(timeIntervalSince1970:)))
+        route(message, sentAt: envelope.sentAt.map(Date.init(timeIntervalSince1970:)), isLive: false)
     }
 
     @MainActor
-    private func route(_ message: WCMessage, sentAt: Date?) {
+    private func route(_ message: WCMessage, sentAt: Date?, isLive: Bool) {
         switch message {
         case .hello(let text):
             self.lastInboundText = text
@@ -223,9 +223,13 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
             WorkoutSessionHost.shared.onScriptFailed(reason: reason)
 
         case .startWorkout(let runId, let runType, let personalityId):
-            handleStartCommand(runId: runId, runType: runType, personalityId: personalityId, sentAt: sentAt)
+            handleStartCommand(runId: runId, runType: runType, personalityId: personalityId,
+                               sentAt: sentAt, isLive: isLive)
 
         case .cancelStart(let runId):
+            // Unburn the ledger so a later re-dispatch of this id isn't
+            // swallowed as a duplicate after an explicit cancel.
+            handledStartRunIds.removeAll { $0 == runId.uuidString }
             WorkoutSessionHost.shared.cancelRemoteStart(runId: runId)
 
         case .endWorkout:
@@ -249,10 +253,19 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
     ///    the phone falls back immediately instead of timing out.
     /// 4. Early ACK — the phone learns within ~1s that we're on it.
     @MainActor
-    private func handleStartCommand(runId: UUID, runType: RunType, personalityId: String, sentAt: Date?) {
-        if let sentAt, Date().timeIntervalSince(sentAt) > Self.startCommandTTL {
-            log.error("[watch] DROPPED stale start (sent \(Int(Date().timeIntervalSince(sentAt)))s ago)")
-            return
+    private func handleStartCommand(runId: UUID, runType: RunType, personalityId: String, sentAt: Date?, isLive: Bool) {
+        // Staleness. Store-and-forward channels (userInfo/appContext —
+        // incl. the activation snapshot, which re-delivers the last
+        // context on EVERY launch forever) must carry a fresh sentAt;
+        // a missing one means a pre-envelope phone build, and treating
+        // it as fresh would ghost-start runs on every cold launch. Only
+        // the live sendMessage path may omit it (delivery is immediate).
+        if isLive == false {
+            guard let sentAt, Date().timeIntervalSince(sentAt) <= Self.startCommandTTL else {
+                let age = sentAt.map { "\(Int(Date().timeIntervalSince($0)))s old" } ?? "no sentAt"
+                log.error("[watch] DROPPED stale start (\(age, privacy: .public))")
+                return
+            }
         }
         if handledStartRunIds.contains(runId.uuidString) {
             log.info("[watch] duplicate start \(runId.uuidString.prefix(8), privacy: .public) — already handled")
@@ -268,15 +281,27 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         sendStateEvent(.startAck(runId: runId))
         log.info("[watch] start accepted \(runId.uuidString.prefix(8), privacy: .public)")
 
-        // Strong haptic so the wrist gets nudged.
-        WKInterfaceDevice.current().play(.notification)
-        Task {
+        // No haptic here: a background launch silently drops it anyway,
+        // and the host plays the proper .start haptic the moment the
+        // session is actually running (NRC-style — no jarring buzz).
+        Task { @MainActor in
             await WorkoutSessionHost.shared.beginRun(
                 runType: runType,
                 runId: runId,
                 personalityId: personalityId,
-                prepareScriptOnPhone: false
+                prepareScriptOnPhone: false,
+                skipCountdown: true
             )
+            // If the start failed (e.g. HealthKit not authorized on a
+            // background launch), tell the phone NOW so it offers
+            // phone-only immediately instead of waiting out its timer.
+            if WorkoutSessionHost.shared.phase == .error {
+                self.handledStartRunIds.removeAll { $0 == runId.uuidString }
+                self.sendStateEvent(.startDeclined(
+                    runId: runId,
+                    reason: WorkoutSessionHost.shared.lastError ?? "start failed"
+                ))
+            }
         }
     }
 }

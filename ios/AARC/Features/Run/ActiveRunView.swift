@@ -427,9 +427,11 @@ struct ActiveRunView: View {
         Task { @MainActor in
             await PhoneWorkoutSession.shared.end()
         }
-        // Watch-driven run: send a state event so the watch can end its
-        // HKWorkoutSession. (Watch is still the authority — it will
-        // confirm via workoutEnded coming back.)
+        // Watch-driven run, two redundant channels: stop the mirrored
+        // HK session directly (modern path — works even when WC is
+        // wedged), AND send the WC state event (fallback). The watch is
+        // still the authority — it confirms via workoutEnded.
+        MirroringReceiver.shared.endFromPhone()
         PhoneSession.shared.sendStateEvent(.endWorkout)
         onDismiss()
     }
