@@ -66,13 +66,32 @@ final class WatchSession: NSObject {
     /// Re-check the last applicationContext for a pending start command.
     /// Called on every foreground — covers the case where the activation
     /// snapshot raced or the context landed while neither delegate fired.
-    /// Safe to call repeatedly: TTL + the handled-runId ledger make a
-    /// replay a no-op.
+    /// Skips fossils up-front (the slot persists forever), so repeated
+    /// sweeps don't spam stale-drop logs/breadcrumbs; TTL + the
+    /// handled-runId ledger still backstop anything that slips through.
     func reconsumePendingContext() {
         guard let session, session.activationState == .activated else { return }
         let pending = Self.extract(session.receivedApplicationContext)
         guard pending.data != nil else { return }
+        guard let sentAt = pending.sentAt,
+              Date().timeIntervalSince1970 - sentAt <= Self.startCommandTTL else { return }
         consume(pending, via: "appContext@foreground")
+    }
+
+    /// Publish a presence handshake (build + fresh timestamp) into the
+    /// watch→phone applicationContext slot at every launch, so the phone
+    /// always has CURRENT watch-build info for its drift banner.
+    private func publishPresenceContext() {
+        guard let session, session.activationState == .activated else { return }
+        do {
+            try session.updateApplicationContext([
+                Self.buildKey: AppVersion.build,
+                Self.sentAtKey: Date().timeIntervalSince1970,
+            ])
+            log.info("[watch] presence context published (build \(AppVersion.build, privacy: .public))")
+        } catch {
+            log.error("[watch] presence context failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - Outbound
@@ -143,6 +162,7 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
                 self.log.error("[watch] activation error: \(errText, privacy: .public)")
             }
             self.log.info("[watch] activated state=\(activationState.rawValue) reachable=\(isReachable)")
+            self.publishPresenceContext()
             if pending.data != nil || pending.build != nil {
                 self.consume(pending, via: "appContext@activation")
             }
@@ -200,9 +220,18 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         )
     }
 
+    /// Envelopes older than this can't update the drift detector: the
+    /// persistent applicationContext re-delivers the LAST-ever write on
+    /// every activation/foreground — yesterday's envelope from
+    /// yesterday's phone build must not masquerade as its current
+    /// version (field bug: watch showed "phone 72 ≠ watch 73" when both
+    /// were on 73, sourced from a fossil start command in the slot).
+    private static let buildInfoFreshness: TimeInterval = 120
+
     @MainActor
     private func consume(_ envelope: Envelope, via channel: String) {
-        if let build = envelope.build {
+        let isFresh = envelope.sentAt.map { Date().timeIntervalSince1970 - $0 <= Self.buildInfoFreshness } ?? false
+        if let build = envelope.build, isFresh {
             counterpartBuild = build
             // Compare only the build-number prefix: CFBundleVersion is
             // stamped "<build>.<HHMMSS>" and the HHMMSS differs between

@@ -171,6 +171,29 @@ final class PhoneSession: NSObject {
         }
     }
 
+    /// Publish a presence handshake (build + fresh timestamp, no command)
+    /// into the applicationContext slot at every launch. Two jobs:
+    /// 1. The watch always has CURRENT phone-build info — the drift
+    ///    banner can't be poisoned by a fossil envelope.
+    /// 2. Overwrites any stale start command left in the slot by a
+    ///    previous session (extra ghost-start defense; the slot is
+    ///    latest-only).
+    private func publishPresenceContext() {
+        guard let session, session.activationState == .activated else { return }
+        // Never clobber an in-flight start command (re-activation can
+        // happen mid-handover, e.g. active-watch switch).
+        guard RunOrchestrator.shared.phase != .awaitingWatch else { return }
+        do {
+            try session.updateApplicationContext([
+                Self.buildKey: AppVersion.build,
+                Self.sentAtKey: Date().timeIntervalSince1970,
+            ])
+            log.info("[phone] presence context published (build \(AppVersion.build, privacy: .public))")
+        } catch {
+            log.error("[phone] presence context failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     /// Cancel any stale queued transfers. Called once per activation —
     /// drains the historical transferUserInfo backlog so a start command
     /// queued by an old build can't replay into a fresh session.
@@ -254,9 +277,16 @@ final class PhoneSession: NSObject {
         )
     }
 
+    /// Envelopes older than this can't update the drift detector: a
+    /// persistent applicationContext re-delivers the LAST-ever write on
+    /// every activation — yesterday's envelope from yesterday's build
+    /// must not masquerade as the counterpart's current version.
+    private static let buildInfoFreshness: TimeInterval = 120
+
     /// Shared decode + envelope-metadata handling for the queued paths.
     private func consume(_ envelope: Envelope, via channel: String) {
-        if let build = envelope.build {
+        let isFresh = envelope.sentAt.map { Date().timeIntervalSince1970 - $0 <= Self.buildInfoFreshness } ?? false
+        if let build = envelope.build, isFresh {
             counterpartBuild = build
             // Compare only the build-number prefix: CFBundleVersion is
             // stamped "<build>.<HHMMSS>" and the HHMMSS differs between
@@ -296,6 +326,7 @@ extension PhoneSession: @preconcurrency WCSessionDelegate {
             }
             self.log.info("[phone] activated state=\(activationState.rawValue) paired=\(isPaired) reachable=\(isReachable) appInstalled=\(installed)")
             self.purgeStaleTransfers()
+            self.publishPresenceContext()
         }
     }
 
