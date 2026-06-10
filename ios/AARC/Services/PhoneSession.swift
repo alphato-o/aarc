@@ -96,7 +96,8 @@ final class PhoneSession: NSObject {
               session.isReachable else { return }
         let message = WCMessage.hello(text: text)
         guard let data = try? encoder.encode(message) else { return }
-        session.sendMessageData(data, replyHandler: nil) { _ in }
+        let onError: @Sendable (any Error) -> Void = { _ in }
+        session.sendMessageData(data, replyHandler: nil, errorHandler: onError)
     }
 
     // MARK: - Envelope
@@ -130,9 +131,16 @@ final class PhoneSession: NSObject {
             return
         }
         if session.isReachable {
-            session.sendMessageData(data, replyHandler: nil) { [log] error in
+            // @Sendable is load-bearing: WC invokes the error handler on
+            // its own background queue. Without it, Swift 6 infers
+            // @MainActor from the enclosing class and plants a main-queue
+            // assertion that CRASHES on the first send failure (field
+            // crash 2026-06-11: WCErrorCodeNotReachable → libdispatch
+            // assert). Logger is Sendable — logging off-main is fine.
+            let onError: @Sendable (any Error) -> Void = { [log] error in
                 log.error("[phone] sendMessageData failed: \(error.localizedDescription, privacy: .public)")
             }
+            session.sendMessageData(data, replyHandler: nil, errorHandler: onError)
         }
         session.transferUserInfo(envelope(data))
         log.info("[phone] state event sent (reachable=\(session.isReachable))")
@@ -159,9 +167,11 @@ final class PhoneSession: NSObject {
             return
         }
         if session.isReachable {
-            session.sendMessageData(data, replyHandler: nil) { [log] error in
+            // @Sendable: see sendStateEvent — WC calls this off-main.
+            let onError: @Sendable (any Error) -> Void = { [log] error in
                 log.error("[phone] start sendMessageData failed: \(error.localizedDescription, privacy: .public)")
             }
+            session.sendMessageData(data, replyHandler: nil, errorHandler: onError)
         }
         do {
             try session.updateApplicationContext(envelope(data))

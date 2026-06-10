@@ -390,10 +390,14 @@ final class WorkoutSessionHost: NSObject {
     /// Sub-KB payloads at 1 Hz — far inside HealthKit's 100 KB / 10 s cap.
     private func sendMirror(_ payload: MirrorPayload) {
         guard let session, let data = try? mirrorEncoder.encode(payload) else { return }
-        session.sendToRemoteWorkoutSession(data: data) { _, _ in
+        // @Sendable: HealthKit invokes this on a background queue; an
+        // inferred-@MainActor closure would trap there (same libdispatch
+        // assert class as the 2026-06-11 phone crash).
+        let onDone: @Sendable (Bool, (any Error)?) -> Void = { _, _ in
             // Errors here just mean "not mirroring right now" — the WC
             // path still carries the metrics; nothing to recover.
         }
+        session.sendToRemoteWorkoutSession(data: data, completion: onDone)
     }
 
     /// Crash recovery: watchOS relaunches us via
@@ -401,7 +405,8 @@ final class WorkoutSessionHost: NSObject {
     /// mid-workout. Reattach to the live session so the run continues
     /// instead of leaving a zombie session that blocks future starts.
     func recoverActiveSession() {
-        healthStore.recoverActiveWorkoutSession { [weak self] session, error in
+        // Explicitly @Sendable — HealthKit calls back on a background queue.
+        let completion: @Sendable (HKWorkoutSession?, (any Error)?) -> Void = { [weak self] session, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if let error {
@@ -430,6 +435,7 @@ final class WorkoutSessionHost: NSObject {
                 Task { try? await session.startMirroringToCompanionDevice() }
             }
         }
+        healthStore.recoverActiveWorkoutSession(completion: completion)
     }
 
     func pause() {

@@ -31,6 +31,10 @@ struct WatchRootView: View {
             }
         }
         .onChange(of: scenePhase) { _, newPhase in
+            // Breadcrumb every scene transition: tells us whether watchOS
+            // ever actually foregrounded the app after a remote start
+            // (the "app never materialized on screen" investigation).
+            WatchBreadcrumbs.shared.drop("scene \(String(describing: newPhase)) (phase \(host.phase.rawValue))")
             if newPhase == .active {
                 // Refresh stale auth state + sweep for a pending start
                 // command that may have landed while no delegate fired.

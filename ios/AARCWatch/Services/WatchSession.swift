@@ -113,9 +113,12 @@ final class WatchSession: NSObject {
               session.isReachable else { return }
         let message = WCMessage.liveMetrics(metrics)
         guard let data = try? encoder.encode(message) else { return }
-        session.sendMessageData(data, replyHandler: nil) { _ in
+        // @Sendable is load-bearing: WC fires this on its own background
+        // queue; an inferred-@MainActor closure crashes on first failure.
+        let onError: @Sendable (any Error) -> Void = { _ in
             // Silent on failure — next tick will retry; nothing to recover.
         }
+        session.sendMessageData(data, replyHandler: nil, errorHandler: onError)
     }
 
     /// Workout state events: workoutStarted / paused / resumed / ended /
@@ -134,9 +137,11 @@ final class WatchSession: NSObject {
             return
         }
         if session.isReachable {
-            session.sendMessageData(data, replyHandler: nil) { [log] error in
+            // @Sendable: WC calls this off-main; Logger is Sendable.
+            let onError: @Sendable (any Error) -> Void = { [log] error in
                 log.error("[watch] sendMessageData failed: \(error.localizedDescription, privacy: .public)")
             }
+            session.sendMessageData(data, replyHandler: nil, errorHandler: onError)
         }
         session.transferUserInfo(envelope(data))
         log.info("[watch] state event sent (reachable=\(session.isReachable))")

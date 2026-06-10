@@ -48,8 +48,15 @@ enum WatchLaunchService {
         config.activityType = .running
         config.locationType = (runType == .treadmill) ? .indoor : .outdoor
 
+        // Capture the logger locally — the @Sendable closure below can't
+        // touch this enum's MainActor-isolated statics. Logger itself is
+        // Sendable, so the captured value is safe off-main.
+        let log = Self.log
         return await withCheckedContinuation { (cont: CheckedContinuation<LaunchError?, Never>) in
-            store.startWatchApp(with: config) { success, error in
+            // @Sendable: HealthKit may deliver this completion on a
+            // background queue — an inferred-@MainActor closure would
+            // trap there. Logger + continuation are both Sendable.
+            let completion: @Sendable (Bool, (any Error)?) -> Void = { success, error in
                 if success {
                     log.info("[phone] startWatchApp launched watch app")
                     cont.resume(returning: nil)
@@ -59,6 +66,7 @@ enum WatchLaunchService {
                     cont.resume(returning: .failed(msg))
                 }
             }
+            store.startWatchApp(with: config, completion: completion)
         }
     }
 }
