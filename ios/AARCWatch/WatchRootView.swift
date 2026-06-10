@@ -40,6 +40,13 @@ struct WatchRootView: View {
                 // command that may have landed while no delegate fired.
                 hkAuthorized = HealthKitClient.shared.canHostWorkouts
                 WatchSession.shared.reconsumePendingContext()
+                // Self-heal: if the UI thinks we're idle but HealthKit
+                // has a live workout session for this app (prior process
+                // died after starting it), reattach so the run UI and
+                // End controls come back. No-op when nothing to recover.
+                if host.phase == .idle || host.phase == .error || host.phase == .ended {
+                    host.recoverActiveSession()
+                }
             }
         }
     }

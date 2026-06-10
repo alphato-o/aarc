@@ -405,15 +405,19 @@ final class WorkoutSessionHost: NSObject {
     /// mid-workout. Reattach to the live session so the run continues
     /// instead of leaving a zombie session that blocks future starts.
     func recoverActiveSession() {
+        // Already attached to a session → nothing to recover.
+        guard session == nil else { return }
         // Explicitly @Sendable — HealthKit calls back on a background queue.
         let completion: @Sendable (HKWorkoutSession?, (any Error)?) -> Void = { [weak self] session, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 if let error {
                     self.lastError = "Recovery failed: \(error.localizedDescription)"
+                    WatchBreadcrumbs.shared.drop("recovery FAILED: \(error.localizedDescription)")
                     return
                 }
                 guard let session else { return }
+                WatchBreadcrumbs.shared.drop("recovered live session (HK state \(session.state.rawValue))")
                 let builder = session.associatedWorkoutBuilder()
                 session.delegate = self
                 builder.delegate = self
@@ -646,9 +650,21 @@ extension WorkoutSessionHost: @preconcurrency HKWorkoutSessionDelegate {
             case .paused:
                 self.state = .paused
                 self.phase = .paused
-            case .ended, .stopped:
+            case .stopped:
+                // The PHONE stopped the activity (mirrored session
+                // stopActivity). Per Apple's multi-device pattern, the
+                // WATCH owns finishing: end collection, save the workout,
+                // end the session. endRun() does all of it and returns
+                // the phase machine to .idle. (Without this, a phone-side
+                // End left the session un-finalised — run lost.)
+                if self.state == .running || self.state == .paused {
+                    Task { _ = await self.endRun() }
+                }
+            case .ended:
                 self.state = .ended
-                self.phase = .ended
+                // .idle, not .ended — .ended had no exit transition and
+                // stranded the root UI switch.
+                if self.phase != .idle { self.phase = .idle }
             @unknown default: break
             }
         }
