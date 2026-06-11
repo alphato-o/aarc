@@ -57,7 +57,7 @@ actor AIClient {
     }
 
     func generateScript(plan: ScriptPlan) async throws -> GeneratedScript {
-        let url = Config.apiBaseURL.appendingPathComponent("generate-script")
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("generate-script")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -224,7 +224,7 @@ actor AIClient {
     }
 
     func generateDynamicLine(_ request: DynamicLineRequest) async throws -> DynamicLineResult {
-        let url = Config.apiBaseURL.appendingPathComponent("dynamic-line")
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("dynamic-line")
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -287,7 +287,7 @@ actor AIClient {
     /// Generate Jessica's reaction to a line Ricky just spoke. Same envelope
     /// shape as /dynamic-line; reuses DynamicLineResult.
     func reactLine(_ request: ReactLineRequest) async throws -> DynamicLineResult {
-        let url = Config.apiBaseURL.appendingPathComponent("react-line")
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("react-line")
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -357,7 +357,7 @@ actor AIClient {
     }
 
     func generateMusicComment(_ request: MusicCommentRequest) async throws -> MusicCommentResult {
-        let url = Config.apiBaseURL.appendingPathComponent("music-comment")
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("music-comment")
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")

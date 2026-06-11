@@ -18,7 +18,8 @@ actor ProxyClient {
     }
 
     func ping() async throws -> PingResponse {
-        let url = Config.apiBaseURL.appendingPathComponent("ping")
+        // Config is MainActor (dynamic endpoint selection) — hop to read.
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("ping")
         var request = URLRequest(url: url)
         request.timeoutInterval = 8
         let (data, response) = try await session.data(for: request)

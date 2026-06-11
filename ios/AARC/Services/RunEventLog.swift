@@ -274,7 +274,8 @@ final class RunEventLog {
             return
         }
 
-        var request = URLRequest(url: Config.apiBaseURL.appendingPathComponent("ingest-run"))
+        let base = await MainActor.run { Config.apiBaseURL }
+        var request = URLRequest(url: base.appendingPathComponent("ingest-run"))
         request.httpMethod = "POST"
         request.setValue(runId.uuidString, forHTTPHeaderField: "X-Run-Id")
         request.setValue(token, forHTTPHeaderField: "X-AARC-Device")
@@ -313,6 +314,7 @@ final class RunEventLog {
     nonisolated private static func uploadRunAudio(runId: UUID) async {
         guard UserDefaults.standard.bool(forKey: audioEnabledKey) else { return }
         guard let token = deviceToken, !token.isEmpty else { return }
+        let audioBase = await MainActor.run { Config.apiBaseURL }
         let fm = FileManager.default
         let dir = audioDirectory(for: runId)
         guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
@@ -320,7 +322,7 @@ final class RunEventLog {
             let key = file.deletingPathExtension().lastPathComponent
             guard let data = try? Data(contentsOf: file) else { continue }
             guard var comps = URLComponents(
-                url: Config.apiBaseURL.appendingPathComponent("ingest-audio"),
+                url: audioBase.appendingPathComponent("ingest-audio"),
                 resolvingAgainstBaseURL: false
             ) else { continue }
             comps.queryItems = [

@@ -66,6 +66,8 @@ struct AARCApp: App {
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()
+                    // Endpoint failover probe loop (CF Worker ↔ US gateway).
+                    EndpointManager.shared.startProbing()
                 }
                 // Dashboard QR sign-in: the iPhone Camera app reads the
                 // QR on the web dashboard and opens aarc://dash-auth?...,
