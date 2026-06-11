@@ -32,6 +32,43 @@ final class Conversation {
     private var inFlight: Task<Void, Never>?
     private let log = Logger(subsystem: "club.aarun.AARC", category: "Conversation")
 
+    // MARK: - Cadence + length bookkeeping
+    //
+    // Jessica used to react to EVERY Ricky line with a one-minute monologue.
+    // The founder still wants music, Ricky, and performance feedback in the
+    // mix — so she now reacts to roughly HALF of eligible lines, mostly with
+    // short quips and only occasionally with a long indulgent passage.
+
+    /// Length tiers we ask the proxy for. Raw values match the proxy's
+    /// `lengthMode` contract ("quip" | "medium" | "indulgent").
+    private enum LengthMode: String {
+        case quip
+        case medium
+        case indulgent
+    }
+
+    /// Elapsed-seconds (run clock) of the last reaction we actually fired.
+    /// Used to space her out so she isn't wall-to-wall.
+    private var lastReactionElapsed: TimeInterval?
+    /// Elapsed-seconds of the last INDULGENT passage, so two long ones can
+    /// never land back to back (and rarely even within several minutes).
+    private var lastIndulgentElapsed: TimeInterval?
+    /// Monotonic count of reactions fired this run — diagnostic bookkeeping
+    /// (the gate itself is driven by the deterministic variation hash).
+    private(set) var reactionCount: Int = 0
+
+    /// Don't react more often than this (run-clock seconds between reactions),
+    /// regardless of how chatty Ricky gets. Keeps air for music + feedback.
+    private let minGapBetweenReactions: TimeInterval = 18
+    /// An indulgent passage runs long; never run two within this window.
+    private let minGapBetweenIndulgent: TimeInterval = 240
+    /// Only allow an indulgent passage when there's at least this much clear
+    /// air before the next must-play. The passage is ~30-50s of audio plus
+    /// Ricky's line ahead of it, so we want comfortable margin.
+    private let indulgentRoomFloor: TimeInterval = 70
+    /// Above this much clear air a "medium" reply fits comfortably.
+    private let mediumRoomFloor: TimeInterval = 30
+
     init() {
         let store = UserDefaults.standard
         if store.object(forKey: Self.kEnabled) == nil {
@@ -60,6 +97,27 @@ final class Conversation {
             return
         }
 
+        // FREQUENCY GATE — she reacts to ~half of eligible lines, and never
+        // more often than `minGapBetweenReactions`. Milestone/finish lines
+        // (priority .milestone) earn a near-certain reaction; ambient banter
+        // (priority .banter — music/lyric riffs) earns the fewest.
+        let elapsed = metrics.elapsed
+        if let last = lastReactionElapsed, elapsed - last < minGapBetweenReactions {
+            log.info("Jessica skipped — within min gap")
+            RunEventLog.shared.record("jessica.skip", "too soon", data: ["to": source])
+            return
+        }
+        guard shouldReact(to: priority, elapsed: elapsed, distance: metrics.distanceMeters) else {
+            log.info("Jessica skipped — frequency gate")
+            RunEventLog.shared.record("jessica.skip", "cadence", data: ["to": source])
+            return
+        }
+
+        // LENGTH SELECTOR — default heavily toward quip; medium sometimes;
+        // indulgent only with lots of room and none recently.
+        let room = RunDirector.shared.roomSecondsForExchange
+        let mode = pickLengthMode(room: room, elapsed: elapsed, distance: metrics.distanceMeters)
+
         let plan = ScriptPreviewStore.shared.currentPlan
         let runType = LiveMetricsConsumer.shared.pendingRunType
         // Project forward too — Jessica plays after Ricky, so if she quotes
@@ -86,10 +144,23 @@ final class Conversation {
             runContext: context,
             recentDispatched: recent.isEmpty ? nil : recent,
             personalNotes: notes.isEmpty ? nil : notes,
-            likedLineExamples: liked.isEmpty ? nil : liked
+            likedLineExamples: liked.isEmpty ? nil : liked,
+            lengthMode: mode.rawValue
         )
 
-        log.info("Jessica reacting to \(source, privacy: .public)")
+        // Commit the cadence bookkeeping at decision time (not after the
+        // network round-trip) so a burst of Ricky lines can't all slip
+        // through the gate while a reaction is still generating.
+        reactionCount += 1
+        lastReactionElapsed = elapsed
+        if mode == .indulgent { lastIndulgentElapsed = elapsed }
+
+        // Quips are short and time-sensitive — a stale quip behind a split
+        // is worthless. Give them a tighter expiry; let longer passages
+        // ride the original window.
+        let expiry: TimeInterval = mode == .quip ? 35 : 75
+
+        log.info("Jessica reacting to \(source, privacy: .public) len=\(mode.rawValue, privacy: .public)")
         // Only one reaction in flight; a fresh Ricky line supersedes a
         // not-yet-spoken reaction to the previous one.
         inFlight?.cancel()
@@ -103,13 +174,14 @@ final class Conversation {
                     result.text,
                     priority: priority,
                     source: "jessica:react",
-                    expiresAfter: 75,
+                    expiresAfter: expiry,
                     voiceId: RemoteTTS.jessicaVoiceId,
                     segmentId: segmentId
                 )
                 self.lastReaction = result.text
                 self.lastError = nil
-                RunEventLog.shared.record("jessica.react", String(result.text.prefix(80)), data: ["to": source])
+                RunEventLog.shared.record("jessica.react", String(result.text.prefix(80)),
+                                          data: ["to": source, "len": mode.rawValue])
             } catch {
                 if Task.isCancelled { return }
                 self.lastError = error.localizedDescription
@@ -123,10 +195,76 @@ final class Conversation {
         }
     }
 
+    // MARK: - Cadence + length policy
+
+    /// Deterministic 0..<1 variation derived from the run state — a hash of
+    /// elapsed seconds + distance (+ a `salt` so two independent decisions
+    /// off the same run state don't correlate), NOT a nondeterministic RNG.
+    /// Same run state ⇒ same value, so behaviour is reproducible in the
+    /// Playground and in replay, while still varying smoothly across the run.
+    private func variation(elapsed: TimeInterval, distance: Double, salt: UInt64) -> Double {
+        // Fold both axes into an integer, then run a cheap integer hash
+        // (splitmix64-style) and normalise. Distance is weighted so two
+        // lines a second apart at different points still diverge. The salt
+        // gives the frequency gate and the length selector statistically
+        // independent draws from the same (elapsed, distance) point.
+        var x = UInt64(bitPattern: Int64(elapsed.rounded()))
+            &+ (UInt64(bitPattern: Int64(distance.rounded())) &* 2_654_435_761)
+            &+ salt
+        x = (x ^ (x >> 30)) &* 0xbf58_476d_1ce4_e5b9
+        x = (x ^ (x >> 27)) &* 0x94d0_49bb_1331_11eb
+        x = x ^ (x >> 31)
+        return Double(x >> 11) / Double(1 << 53)
+    }
+
+    /// Frequency gate: should she react to THIS line at all? Targets ~half
+    /// of eligible lines overall, biased by the line's importance:
+    ///   • .milestone (km split / halfway / finish) → almost always
+    ///   • .coaching  (HR / pace observations)      → ~half
+    ///   • .banter    (music / lyric riffs)         → least often
+    /// The decision is deterministic (variation hash), so it's reproducible.
+    private func shouldReact(to priority: VoicePriority, elapsed: TimeInterval, distance: Double) -> Bool {
+        let threshold: Double
+        switch priority {
+        case .milestone: threshold = 0.85   // react to ~85% of splits/finish
+        case .coaching:  threshold = 0.50   // ~half of pace/HR lines
+        case .banter:    threshold = 0.30   // occasional reply over music
+        }
+        return variation(elapsed: elapsed, distance: distance, salt: 0x9E37_79B9_7F4A_7C15) < threshold
+    }
+
+    /// Length selector. Default heavily toward `.quip`; pick `.medium`
+    /// sometimes; pick `.indulgent` only when the Director has LOTS of room
+    /// AND no indulgent has run recently. Deterministic variation breaks the
+    /// medium/quip split so it isn't fixed.
+    private func pickLengthMode(room: TimeInterval, elapsed: TimeInterval, distance: Double) -> LengthMode {
+        let v = variation(elapsed: elapsed, distance: distance, salt: 0xD1B5_4A32_D192_ED03)
+
+        // Indulgent: needs comfortable clear air AND a cool-down since the
+        // last long passage — and even then only on the rare end of the
+        // variation, so it's genuinely occasional, never back-to-back.
+        let indulgentClear = lastIndulgentElapsed.map { elapsed - $0 >= minGapBetweenIndulgent } ?? true
+        if room >= indulgentRoomFloor, indulgentClear, v >= 0.88 {
+            return .indulgent
+        }
+
+        // Medium: only with enough room, and only some of the time — most
+        // replies stay quips so music / Ricky / feedback keep the floor.
+        if room >= mediumRoomFloor, v >= 0.55 {
+            return .medium
+        }
+
+        return .quip
+    }
+
     /// Cancel any in-flight reaction. Called at run end so a late reply
-    /// can't speak after the pipeline is torn down.
+    /// can't speak after the pipeline is torn down. Also clears cadence
+    /// bookkeeping so the next run starts fresh.
     func stop() {
         inFlight?.cancel()
         inFlight = nil
+        lastReactionElapsed = nil
+        lastIndulgentElapsed = nil
+        reactionCount = 0
     }
 }

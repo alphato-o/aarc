@@ -63,6 +63,20 @@ final class LiveMetricsConsumer {
         // Snapshot into the per-100m live chart store. No-op if no
         // new bucket has been crossed.
         LiveRunChartStore.shared.ingest(metrics)
+        // Emit a "metrics" telemetry event for the cloud dashboard's
+        // performance charts. RunEventLog throttles this internally to
+        // ~one row per 100m bucket OR ~10s — NOT one per 1Hz tick. Speed
+        // is derived from pace (LiveMetrics carries no speed field):
+        // m/s = 1000 / (sec/km).
+        let speedMps: Double? = (metrics.currentPaceSecPerKm).flatMap { p in
+            p > 0 ? 1000 / p : nil
+        }
+        RunEventLog.shared.recordMetrics(
+            distanceMeters: metrics.distanceMeters,
+            paceSecPerKm: metrics.currentPaceSecPerKm,
+            hr: metrics.currentHeartRate,
+            speedMps: speedMps
+        )
         // Live Activity (lock screen + Dynamic Island). Throttled
         // internally to ~1Hz.
         LiveActivityController.shared.update(

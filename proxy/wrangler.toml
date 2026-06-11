@@ -3,12 +3,22 @@ main = "src/index.ts"
 compatibility_date = "2026-05-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Bind the Worker to api.aarun.club. Requires the aarun.club zone to be on
-# this Cloudflare account. If the route doesn't activate on first deploy,
-# the custom domain can also be added via Workers & Pages → aarc-api →
-# Settings → Domains & Routes → Add Custom Domain → api.aarun.club.
+# Bind the Worker to api.aarun.club, my.aarun.club (dashboard), and the apex
+# aarun.club (public marketing site). One Worker, multiple custom domains;
+# host-based routing in src/index.ts picks the response for "/". Requires the
+# aarun.club zone to be on this Cloudflare account. If a route doesn't
+# activate on first deploy, the custom domain can also be added via Workers &
+# Pages → aarc-api → Settings → Domains & Routes → Add Custom Domain.
+#
+# NOTE (orchestrator): the apex `aarun.club` custom_domain may fail to attach
+# if an existing apex DNS record (A/AAAA/CNAME) already occupies the root.
+# Cloudflare needs to create its own proxied record for the Worker custom
+# domain, so the pre-existing apex record must be removed (or the deploy will
+# report a conflict on aarun.club). my.aarun.club has no such conflict.
 routes = [
-  { pattern = "api.aarun.club", custom_domain = true }
+  { pattern = "api.aarun.club", custom_domain = true },
+  { pattern = "my.aarun.club", custom_domain = true },
+  { pattern = "aarun.club", custom_domain = true }
 ]
 
 # Observability — turn on Logpush-style request logging in the dashboard.

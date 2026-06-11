@@ -11,6 +11,7 @@ import {
     runAudioHandler,
 } from "./routes/ingestRun";
 import { dashHandler, dashAuthPollHandler, dashAuthApproveHandler } from "./routes/dashboard";
+import { landingHandler } from "./routes/landing";
 import { captureException } from "./lib/sentry";
 
 interface Env {
@@ -39,6 +40,23 @@ const json = (data: unknown, init: ResponseInit = {}): Response =>
     });
 
 async function dispatch(request: Request, env: Env, url: URL): Promise<Response> {
+    // --- Host-based routing for the apex marketing site + dashboard host ---
+    // One Worker is bound to multiple custom domains (api / my / apex). All
+    // /api/*, /dash/auth/*, /ingest-* routes below are host-agnostic and stay
+    // unchanged. Only the bare "/" landing differs by host:
+    //   aarun.club/        -> public marketing page (landingHandler)
+    //   my.aarun.club/     -> the dashboard (same shell as GET /dash)
+    // GET /dash keeps working on every host for back-compat.
+    if (request.method === "GET" && url.pathname === "/") {
+        const host = url.hostname;
+        if (host === "my.aarun.club" || host.startsWith("my.aarun.club")) {
+            return dashHandler(request, env);
+        }
+        if (host === "aarun.club" || host.startsWith("aarun.club")) {
+            return landingHandler(request, env);
+        }
+    }
+
     if (request.method === "GET" && url.pathname === "/ping") {
         return json({ ok: true, ts: Date.now(), service: "aarc-api" });
     }

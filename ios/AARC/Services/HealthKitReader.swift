@@ -24,6 +24,14 @@ actor HealthKitReader {
         return workouts.first as? HKWorkout
     }
 
+    /// Whether HK currently holds a workout with this UUID. Lets callers
+    /// distinguish "workout not yet propagated from the watch" (skip /
+    /// retry later) from "workout exists but has no sample series"
+    /// (proceed) without taking ownership of the non-Sendable HKWorkout.
+    func workoutExists(uuid: UUID) async -> Bool {
+        ((try? await fetchWorkout(uuid: uuid)) ?? nil) != nil
+    }
+
     /// Try repeatedly with backoff. The watch's `finishWorkout` returns
     /// the UUID before the workout is necessarily queryable from the
     /// phone over HK sync. ~5s is enough in practice.
@@ -315,6 +323,118 @@ actor HealthKitReader {
         }
 
         return (pace, hr)
+    }
+
+    /// One timestamped performance sample for the cloud-dashboard
+    /// backfill: cumulative distance at time `t` (seconds since the
+    /// workout start), with pace / speed / HR for that window when
+    /// available. Any of pace / hr / speed may be nil (HR strap
+    /// dropout, treadmill with no GPS speed, standing still, etc.).
+    struct MetricsSample: Sendable {
+        public let t: Double
+        public let distanceMeters: Double
+        public let paceSecPerKm: Double?
+        public let speedMps: Double?
+        public let hr: Double?
+    }
+
+    /// Convenience overload: look the workout up by UUID first (so the
+    /// non-Sendable `HKWorkout` never leaves this actor) and return its
+    /// metrics timeline. Returns [] when the workout isn't (yet) in HK.
+    func fetchMetricsTimeline(
+        uuid: UUID,
+        bucketSeconds: TimeInterval = 30
+    ) async throws -> [MetricsSample] {
+        guard let workout = try await fetchWorkout(uuid: uuid) else { return [] }
+        return try await fetchMetricsTimeline(workout: workout, bucketSeconds: bucketSeconds)
+    }
+
+    /// Build a coarse timestamped metrics timeline for a FINISHED
+    /// workout, suitable for backfilling the dashboard's performance
+    /// charts. Buckets the workout into `bucketSeconds` windows
+    /// (default 30s) via a cumulative-sum distance statistics query,
+    /// accumulates distance, derives per-bucket pace + speed from the
+    /// distance covered in the window, and attaches the mean HR of any
+    /// HR samples that fall inside the window.
+    ///
+    /// Resilient to sparse data: a window with no distance still emits
+    /// (carrying forward cumulative distance, pace/speed nil) as long as
+    /// it has HR; a workout with only HR and no distance still yields a
+    /// usable HR trace. Returns [] only when neither distance nor HR is
+    /// available at all.
+    func fetchMetricsTimeline(
+        workout: HKWorkout,
+        bucketSeconds: TimeInterval = 30
+    ) async throws -> [MetricsSample] {
+        let start = workout.startDate
+        let end = workout.endDate
+        let pred = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+
+        // Per-bucket distance (meters in that window) keyed by bucket start.
+        let interval = DateComponents(second: Int(bucketSeconds))
+        let distanceBuckets: [(Date, Double)] = (try? await withCheckedThrowingContinuation { continuation in
+            let q = HKStatisticsCollectionQuery(
+                quantityType: HKQuantityType(.distanceWalkingRunning),
+                quantitySamplePredicate: pred,
+                options: .cumulativeSum,
+                anchorDate: start,
+                intervalComponents: interval
+            )
+            q.initialResultsHandler = { _, results, error in
+                if let error { continuation.resume(throwing: error); return }
+                var out: [(Date, Double)] = []
+                results?.enumerateStatistics(from: start, to: end) { stats, _ in
+                    let meters = stats.sumQuantity()?.doubleValue(for: .meter()) ?? 0
+                    out.append((stats.startDate, meters))
+                }
+                continuation.resume(returning: out)
+            }
+            store.execute(q)
+        }) ?? []
+
+        let hrSamples = (try? await fetchHeartRateSeries(during: workout)) ?? []
+
+        // If we have no distance windows but DO have HR, synthesise
+        // windows from HR sample times so we still emit an HR trace.
+        var windowStarts: [Date] = distanceBuckets.map(\.0)
+        if windowStarts.isEmpty {
+            guard !hrSamples.isEmpty else { return [] }
+            var cursor = start
+            while cursor < end {
+                windowStarts.append(cursor)
+                cursor = cursor.addingTimeInterval(bucketSeconds)
+            }
+        }
+        let distanceByStart = Dictionary(distanceBuckets, uniquingKeysWith: { a, _ in a })
+
+        var out: [MetricsSample] = []
+        var cumulative: Double = 0
+        for (i, windowStart) in windowStarts.enumerated() {
+            let windowEnd = (i + 1 < windowStarts.count) ? windowStarts[i + 1] : end
+            let windowMeters = distanceByStart[windowStart] ?? 0
+            cumulative += windowMeters
+            let dt = max(1, windowEnd.timeIntervalSince(windowStart))
+
+            let pace: Double? = windowMeters > 1 ? dt * 1000 / windowMeters : nil
+            let speed: Double? = windowMeters > 1 ? windowMeters / dt : nil
+
+            let inWindow = hrSamples.filter { $0.timestamp >= windowStart && $0.timestamp < windowEnd }
+            let hr: Double? = inWindow.isEmpty
+                ? nil
+                : inWindow.map(\.value).reduce(0, +) / Double(inWindow.count)
+
+            // Skip windows that carry no signal at all.
+            if pace == nil && hr == nil && windowMeters <= 1 { continue }
+
+            out.append(MetricsSample(
+                t: windowStart.timeIntervalSince(start),
+                distanceMeters: cumulative,
+                paceSecPerKm: pace,
+                speedMps: speed,
+                hr: hr
+            ))
+        }
+        return out
     }
 
     /// All locations on the workout's route, ordered by time.

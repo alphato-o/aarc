@@ -94,6 +94,16 @@ final class RunDirector {
         return eta > exchangeRoomSeconds
     }
 
+    /// Seconds of clear air before the next must-play milestone, for callers
+    /// that map room → response length. When no milestone is predictable
+    /// (open plan / stopped) the air is effectively unbounded, so we return
+    /// a large sentinel rather than nil — there's no split about to be
+    /// stepped on, so any length fits. Reuses the same `nextMustPlayETA`
+    /// the protect / exchange gates read; does NOT recompute prediction.
+    var roomSecondsForExchange: TimeInterval {
+        nextMustPlayETA ?? .greatestFiniteMagnitude
+    }
+
     /// Project the run state forward by the measured pipeline latency, so a
     /// dynamically-generated line that QUOTES the runner's progress is
     /// accurate at the moment it's actually heard — not stale by the time

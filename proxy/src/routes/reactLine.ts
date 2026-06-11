@@ -4,11 +4,19 @@ import {
     ReactLineRequestSchema,
     ReactLineResponse,
 } from "../schemas";
-import { systemPromptFor } from "../lib/personalities";
+import { reactModeFor, systemPromptFor, JessicaLengthMode } from "../lib/personalities";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
 export type Env = LLMEnv & SentryEnv;
+
+// Token ceiling per Jessica length mode. Roughly 4 chars/token, with slack so
+// the model can finish a sentence rather than getting truncated mid-word.
+const MAX_TOKENS_BY_LENGTH: Record<JessicaLengthMode, number> = {
+    quip: 180,
+    medium: 360,
+    indulgent: 700,
+};
 
 /// Second-voice reaction. Jessica reacts to a line the primary coach (Ricky)
 /// just spoke. Additive — the primary voice's generation is untouched; this
@@ -33,7 +41,11 @@ export async function reactLineHandler(
     }
     const req = parsed.data;
 
-    const systemPrompt = systemPromptFor(req.personalityId, "react");
+    // Length drives both the system-prompt profile and the token ceiling.
+    // Absent => "medium" (the established default).
+    const lengthMode: JessicaLengthMode = req.lengthMode ?? "medium";
+
+    const systemPrompt = systemPromptFor(req.personalityId, reactModeFor(lengthMode));
     if (!systemPrompt) {
         return json(
             { ok: false, error: `unknown personality: ${req.personalityId}` },
@@ -42,6 +54,11 @@ export async function reactLineHandler(
     }
 
     const userPrompt = buildUserPrompt(req);
+
+    // Cap output by length mode so a quip can't run long and an indulgent
+    // passage has room to breathe. Char targets: quip <=140, medium ~220-380,
+    // indulgent ~450-650.
+    const maxTokens = MAX_TOKENS_BY_LENGTH[lengthMode];
 
     let raw: string;
     let provider: "openrouter" | "anthropic";
@@ -52,10 +69,9 @@ export async function reactLineHandler(
                 purpose: "reply",
                 systemPrompt,
                 userPrompt,
-                // Jessica runs long — an immersive erotic passage, not a
-                // one-liner — so she needs more room than the other reply
-                // lines.
-                maxTokens: 700,
+                // Set by lengthMode above — quip is fast and light, indulgent
+                // gets the full immersive-passage budget.
+                maxTokens,
                 cacheSystem: true,
             },
             env,

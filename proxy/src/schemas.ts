@@ -263,14 +263,20 @@ export const ReactLineRequestSchema = z.object({
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
     likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
+    /// How long Jessica's reply should run. Drives both the system-prompt
+    /// length profile and maxTokens server-side:
+    ///   "quip"      — one short sentence (<=140 chars, ~6-10s audio)
+    ///   "medium"    — 2-3 sentences (~220-380 chars)  [default when absent]
+    ///   "indulgent" — the long immersive passage (~450-650 chars), used rarely
+    lengthMode: z.enum(["quip", "medium", "indulgent"]).optional(),
 });
 
 export type ReactLineRequest = z.infer<typeof ReactLineRequestSchema>;
 
 export const ReactLineModelOutputSchema = z.object({
-    // Jessica speaks in a longer, immersive erotic passage, so allow well
-    // past the one-liner cap the other voices use.
-    text: z.string().min(1).max(1000),
+    // Jessica's longest mode (indulgent) lands ~450-650 chars; the cap is held
+    // under ~900 to leave headroom without inviting a runaway monologue.
+    text: z.string().min(1).max(900),
 });
 
 export interface ReactLineResponse {

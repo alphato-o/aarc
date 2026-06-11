@@ -66,6 +66,10 @@ struct AARCApp: App {
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()
+                    // Backfill the cloud dashboard with historical runs so
+                    // their performance charts render. Cheap when the
+                    // done-set already covers all of history.
+                    RunHistoryBackfill.backfillAll()
                     // Endpoint failover probe loop (CF Worker ↔ US gateway).
                     EndpointManager.shared.startProbing()
                 }

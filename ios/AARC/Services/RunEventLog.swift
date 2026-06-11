@@ -57,6 +57,15 @@ final class RunEventLog {
     /// AudioCache keys spoken during this run, in first-spoken order.
     private var audioManifest: [String] = []
 
+    /// Throttle state for `recordMetrics`: the last 100m bucket index and
+    /// the last wall time we emitted a "metrics" event. We emit when the
+    /// runner crosses a new 100m bucket OR ~10s have elapsed since the
+    /// last emit — whichever comes first — so the dashboard time-series
+    /// stays dense without spamming a row on every 1Hz tick.
+    private var lastMetricsBucket: Int = -1
+    private var lastMetricsEmit: Date?
+    private static let metricsMinInterval: TimeInterval = 10
+
     private let log = Logger(subsystem: "club.aarun.AARC", category: "RunEventLog")
     nonisolated private static let uploadLog = Logger(subsystem: "club.aarun.AARC", category: "RunEventLog.upload")
 
@@ -75,9 +84,11 @@ final class RunEventLog {
     nonisolated private static let retentionDays = 35.0
     nonisolated private static let pendingRunsKey = "aarc.sync.pendingRuns"
     nonisolated private static let audioEnabledKey = "aarc.sync.audioEnabled"
-    /// Initial attempt + 3 retries, spaced 30s.
-    private static let uploadAttempts = 4
-    private static let uploadRetrySpacing: Duration = .seconds(30)
+    /// Initial attempt + 3 retries, spaced 30s. Not private: they back the
+    /// default arguments of `uploadEventStream`, which `RunHistoryBackfill`
+    /// calls — default-argument expressions resolve in the caller's scope.
+    nonisolated static let uploadAttempts = 4
+    nonisolated static let uploadRetrySpacing: Duration = .seconds(30)
 
     private init() {}
 
@@ -95,6 +106,8 @@ final class RunEventLog {
         recent.removeAll()
         eventCount = 0
         audioManifest.removeAll()
+        lastMetricsBucket = -1
+        lastMetricsEmit = nil
 
         let fm = FileManager.default
         try? fm.createDirectory(at: Self.runlogsDirectory, withIntermediateDirectories: true)
@@ -155,6 +168,34 @@ final class RunEventLog {
             "voiceId": voiceId,
             "source": source,
             "cacheKey": cacheKey,
+        ])
+    }
+
+    /// Record a performance-telemetry sample as a "metrics" event.
+    /// Throttled: emits only when the runner crosses a new 100m bucket OR
+    /// at least ~10s have passed since the last metrics emit — so the
+    /// dashboard time-series stays dense without one row per 1Hz tick.
+    /// No-op outside an active run. Values map to the shared contract
+    /// data shape {"d","p","hr","v"} as strings; nil → "".
+    func recordMetrics(distanceMeters: Double, paceSecPerKm: Double?, hr: Double?, speedMps: Double?) {
+        guard activeRunId != nil else { return }
+        let bucket = Int(distanceMeters / 100)
+        let now = Date()
+        let crossedBucket = bucket > lastMetricsBucket
+        let elapsedEnough = lastMetricsEmit.map { now.timeIntervalSince($0) >= Self.metricsMinInterval } ?? true
+        guard crossedBucket || elapsedEnough else { return }
+        lastMetricsBucket = max(lastMetricsBucket, bucket)
+        lastMetricsEmit = now
+
+        func num(_ v: Double?) -> String {
+            guard let v, v.isFinite, v > 0 else { return "" }
+            return String(format: "%.1f", v)
+        }
+        record("metrics", "", data: [
+            "d": num(distanceMeters),
+            "p": num(paceSecPerKm),
+            "hr": num(hr),
+            "v": num(speedMps),
         ])
     }
 
@@ -261,6 +302,13 @@ final class RunEventLog {
         Bundle.main.object(forInfoDictionaryKey: "AARCDeviceToken") as? String
     }
 
+    /// True when a device token is configured, i.e. uploads can succeed.
+    /// Lets `RunHistoryBackfill` bail out early without poking at the
+    /// private token directly.
+    nonisolated static var backfillUploadEnabled: Bool {
+        !(deviceToken?.isEmpty ?? true)
+    }
+
     /// POST the run's JSONL to the Worker. Plain body (runs are tens of KB;
     /// the Worker also accepts Content-Encoding: gzip if we compress later).
     /// On success the run leaves the pending list; on exhaustion it stays
@@ -273,7 +321,40 @@ final class RunEventLog {
             removePending(runId)
             return
         }
+        let ok = await postRunBody(runId: runId, body: body, token: token, attempts: attempts, spacing: spacing)
+        if ok { removePending(runId) }
+    }
 
+    /// Upload an arbitrary JSONL event stream as a run to `/ingest-run`.
+    /// Reusable entry point (used by `RunHistoryBackfill` to push
+    /// synthesised historical runs without first writing a local JSONL
+    /// file). Returns true on a 2xx, false on exhaustion / hard failure.
+    /// Does NOT touch the pending-runs list — backfill tracks its own
+    /// done-set in UserDefaults.
+    nonisolated static func uploadEventStream(
+        runId: UUID,
+        jsonlLines: [String],
+        attempts: Int = uploadAttempts,
+        spacing: Duration = uploadRetrySpacing
+    ) async -> Bool {
+        guard let token = deviceToken, !token.isEmpty else { return false }
+        guard !jsonlLines.isEmpty else { return false }
+        let joined = jsonlLines.joined(separator: "\n") + "\n"
+        guard let body = joined.data(using: .utf8), !body.isEmpty else { return false }
+        return await postRunBody(runId: runId, body: body, token: token, attempts: attempts, spacing: spacing)
+    }
+
+    /// Shared POST-with-retries core behind `uploadRun` and
+    /// `uploadEventStream`. Returns true on a 2xx (caller decides what
+    /// bookkeeping that implies). 401 short-circuits (a token mismatch
+    /// won't fix itself by retrying).
+    nonisolated private static func postRunBody(
+        runId: UUID,
+        body: Data,
+        token: String,
+        attempts: Int,
+        spacing: Duration
+    ) async -> Bool {
         let base = await MainActor.run { Config.apiBaseURL }
         var request = URLRequest(url: base.appendingPathComponent("ingest-run"))
         request.httpMethod = "POST"
@@ -288,14 +369,13 @@ final class RunEventLog {
                 let (_, response) = try await URLSession.shared.data(for: request)
                 let status = (response as? HTTPURLResponse)?.statusCode ?? -1
                 if (200..<300).contains(status) {
-                    removePending(runId)
                     uploadLog.info("run \(runId.uuidString, privacy: .public) uploaded (\(body.count) bytes, attempt \(attempt))")
-                    return
+                    return true
                 }
                 if status == 401 {
                     // Token mismatch won't fix itself by retrying.
                     uploadLog.error("ingest-run 401 — device token rejected; keeping run pending")
-                    return
+                    return false
                 }
                 uploadLog.error("ingest-run HTTP \(status) (attempt \(attempt)/\(attempts))")
             } catch {
@@ -305,6 +385,7 @@ final class RunEventLog {
                 try? await Task.sleep(for: spacing)
             }
         }
+        return false
     }
 
     /// POST each pinned MP3 to /ingest-audio. Gated on the

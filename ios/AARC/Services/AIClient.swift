@@ -282,6 +282,13 @@ actor AIClient {
         var recentDispatched: [String]?
         var personalNotes: [String]?
         var likedLineExamples: [String]?
+        /// How long a reply to ask the proxy for. "quip" = one short
+        /// sweet/cutting sentence (~6-10s audio), "medium" = 2-3 sentences,
+        /// "indulgent" = the long immersive passage used RARELY. nil ⇒ the
+        /// proxy defaults to "medium". Encodes to JSON key "lengthMode".
+        /// Defaulted so the field is additive — existing call sites that
+        /// don't set it keep compiling.
+        var lengthMode: String? = nil
     }
 
     /// Generate Jessica's reaction to a line Ricky just spoke. Same envelope
