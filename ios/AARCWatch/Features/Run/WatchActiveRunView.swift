@@ -1,9 +1,11 @@
 import SwiftUI
 import AARCKit
 
-/// In-session UI on the watch. Three pages, NRC-style:
+/// In-session UI on the watch. Three pages, NRC / Apple-Workout style:
 /// - swipe left: Controls (pause / resume / end)
-/// - center (default): Live metrics
+/// - center (default): Live metrics — Apple's clean left-aligned metric
+///   stack (big colour-coded numbers, small caps unit labels), with an
+///   ACTUAL articulated running figure as the workout badge top-left.
 /// - swipe right: Diagnostics
 struct WatchActiveRunView: View {
     @Environment(WorkoutSessionHost.self) private var host
@@ -21,16 +23,6 @@ struct WatchActiveRunView: View {
             diagnosticsPage.tag(Page.diagnostics)
         }
         .tabViewStyle(.page)
-        // Pinned running-man animation across the top of every page while a
-        // session is live. safeAreaInset reserves its own strip so all the
-        // existing metrics below stay exactly where they were.
-        .safeAreaInset(edge: .top, spacing: 0) {
-            RunningManHeader(
-                isRunning: host.state == .running,
-                speedMps: speedMps(host.liveMetrics.currentPaceSecPerKm),
-                cadenceSPM: host.liveMetrics.cadenceStepsPerMinute
-            )
-        }
         .navigationBarBackButtonHidden(true)
         .alert("End run?", isPresented: $showEndConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -50,92 +42,112 @@ struct WatchActiveRunView: View {
     // MARK: - Controls (swipe left)
 
     private var controlsPage: some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                modeBadge
-                    .padding(.bottom, 4)
-
-                if host.state == .running {
-                    Button {
-                        host.pause()
-                    } label: {
-                        Label("Pause", systemImage: "pause.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.yellow)
-                    .controlSize(.small)
-                } else if host.state == .paused {
-                    Button {
-                        host.resume()
-                    } label: {
-                        Label("Resume", systemImage: "play.fill")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.green)
-                    .controlSize(.small)
-                }
-
-                Button(role: .destructive) {
-                    showEndConfirm = true
+        VStack(spacing: 12) {
+            if host.state == .running {
+                Button {
+                    host.pause()
                 } label: {
-                    Label("End", systemImage: "stop.fill")
+                    Label("Pause", systemImage: "pause.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .controlSize(.small)
-
-                if host.state == .paused {
-                    Text("PAUSED")
-                        .font(.caption.bold())
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(.yellow.opacity(0.3), in: Capsule())
+                .tint(.yellow)
+            } else if host.state == .paused {
+                Button {
+                    host.resume()
+                } label: {
+                    Label("Resume", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
             }
-            .padding()
+
+            Button(role: .destructive) {
+                showEndConfirm = true
+            } label: {
+                Label("End", systemImage: "stop.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+
+            if host.state == .paused {
+                Text("PAUSED")
+                    .font(.caption.bold())
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(.yellow.opacity(0.3), in: Capsule())
+            }
         }
+        .padding(.horizontal)
     }
 
-    // MARK: - Metrics (default centre)
+    // MARK: - Metrics (default centre) — Apple Workout layout
 
     private var metricsPage: some View {
-        ScrollView {
-            VStack(spacing: 8) {
-                modeBadge
-                    .padding(.bottom, 2)
-
-                Text(formatElapsed(host.liveMetrics.elapsed))
-                    .font(.system(.title, design: .rounded, weight: .heavy))
-                    .monospacedDigit()
-
-                Text(formatDistance(host.liveMetrics.distanceMeters))
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                HStack(spacing: 16) {
-                    metric("Pace", value: formatPace(host.liveMetrics.currentPaceSecPerKm))
-                    metric("HR", value: formatHR(host.liveMetrics.currentHeartRate))
-                }
-                .padding(.top, 4)
-
-                HStack(spacing: 16) {
-                    metric("Avg", value: formatPace(host.liveMetrics.avgPaceSecPerKm))
-                    metric("kcal", value: "\(Int(host.liveMetrics.energyKcal))")
-                }
-
+        VStack(alignment: .leading, spacing: 1) {
+            // Workout badge top-left, exactly where Apple puts the workout
+            // icon — but it's a real runner mid-stride, not a static glyph.
+            HStack(spacing: 6) {
+                RunnerBadge(
+                    isRunning: host.state == .running,
+                    speedMps: speedMps(host.liveMetrics.currentPaceSecPerKm),
+                    cadenceSPM: host.liveMetrics.cadenceStepsPerMinute,
+                    indoor: host.currentRunType == .treadmill
+                )
                 if host.state == .paused {
                     Text("PAUSED")
-                        .font(.caption.bold())
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
-                        .background(.yellow.opacity(0.3), in: Capsule())
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.yellow)
                 }
+                Spacer(minLength: 0)
             }
-            .padding()
+            .padding(.bottom, 2)
+
+            // Elapsed — the hero number, Apple-yellow.
+            Text(formatElapsed(host.liveMetrics.elapsed))
+                .font(.system(size: 40, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color(red: 0.98, green: 0.83, blue: 0.18))
+                .monospacedDigit()
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+
+            metricRow(formatHR(host.liveMetrics.currentHeartRate), "BPM",
+                      color: .white, heart: true)
+            metricRow(formatPace(host.liveMetrics.currentPaceSecPerKm), "PACE",
+                      color: Color(red: 0.36, green: 0.85, blue: 0.55))
+            metricRow(formatPace(host.liveMetrics.avgPaceSecPerKm), "AVG PACE",
+                      color: .white.opacity(0.85))
+            metricRow(formatDistanceValue(host.liveMetrics.distanceMeters),
+                      formatDistanceUnit(host.liveMetrics.distanceMeters), color: .white)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 4)
+    }
+
+    /// One Apple-style metric line: big value, small caps unit to the right,
+    /// optional heart. Baseline-aligned so the unit sits on the number's foot.
+    @ViewBuilder
+    private func metricRow(_ value: String, _ unit: String, color: Color, heart: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(value)
+                .font(.system(size: 26, weight: .medium, design: .rounded))
+                .foregroundStyle(color)
+                .monospacedDigit()
+            if heart {
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+                    .baselineOffset(1)
+            }
+            Text(unit)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
     }
 
     // MARK: - Diagnostics (swipe right)
@@ -192,32 +204,6 @@ struct WatchActiveRunView: View {
     // MARK: - Subviews
 
     @ViewBuilder
-    private var modeBadge: some View {
-        let isIndoor = host.currentRunType == .treadmill
-        Label(
-            isIndoor ? "Treadmill" : "Outdoor",
-            systemImage: isIndoor ? "figure.run.treadmill" : "figure.run"
-        )
-        .font(.caption2.bold())
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(.tint.opacity(0.25), in: Capsule())
-    }
-
-    @ViewBuilder
-    private func metric(_ label: String, value: String) -> some View {
-        VStack(spacing: 0) {
-            Text(value)
-                .font(.body.weight(.semibold))
-                .monospacedDigit()
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    @ViewBuilder
     private func diagRow(_ name: String, value: String) -> some View {
         HStack {
             Text(name).font(.caption2).foregroundStyle(.secondary)
@@ -238,17 +224,19 @@ struct WatchActiveRunView: View {
             : String(format: "%d:%02d", m, sec)
     }
 
-    private func formatDistance(_ meters: Double) -> String {
-        meters >= 1000
-            ? String(format: "%.2f km", meters / 1000)
-            : String(format: "%.0f m", meters)
+    private func formatDistanceValue(_ meters: Double) -> String {
+        meters >= 1000 ? String(format: "%.2f", meters / 1000) : String(format: "%.0f", meters)
+    }
+
+    private func formatDistanceUnit(_ meters: Double) -> String {
+        meters >= 1000 ? "KM" : "M"
     }
 
     private func formatPace(_ secPerKm: Double?) -> String {
         guard let s = secPerKm, s.isFinite, s > 0 else { return "—" }
         let m = Int(s) / 60
         let r = Int(s) % 60
-        return String(format: "%d:%02d", m, r)
+        return String(format: "%d'%02d\"", m, r)
     }
 
     private func formatHR(_ bpm: Double?) -> String {
@@ -256,154 +244,158 @@ struct WatchActiveRunView: View {
         return "\(Int(bpm))"
     }
 
-    /// Forward speed in m/s from pace, for the running-man animation. 0 when
-    /// there's no usable pace reading (the runner then idles gently).
+    /// Forward speed in m/s from pace, for the running figure. 0 when there's
+    /// no usable pace reading (the runner then idles gently).
     private func speedMps(_ secPerKm: Double?) -> Double {
         guard let s = secPerKm, s.isFinite, s > 0 else { return 0 }
         return 1000.0 / s
     }
 }
 
-// MARK: - Running man
+// MARK: - Runner badge
 
-/// A little runner who jogs in place at the top of the screen while a
-/// session is live. The bob is DYNAMIC: the figure bobs once per real
-/// footfall (driven by the watch's live cadence, falling back to a
-/// pace-derived proxy), and the ground rushes past beneath it at a rate
-/// set by the runner's actual speed. Fly and the legs spin up + the ground
-/// blurs by; plod and it slackens. Freezes and dims when paused.
-///
-/// The phase is INTEGRATED frame-to-frame (`bobPhase += 2π·f·dt`) rather
-/// than computed as `sin(absoluteTime × frequency)` — the latter would
-/// scramble the phase the instant the cadence changed. Inputs are eased so
-/// pace/cadence jitter doesn't make the runner twitch. Updates only while
-/// running AND the screen is active, so there's no cost when the wrist
-/// drops or it isn't on screen.
-private struct RunningManHeader: View {
+/// The workout indicator, top-left, Apple-style — but instead of a static
+/// `figure.run` glyph it's a SECOND-BY-SECOND ARTICULATED runner: head,
+/// leaning torso, two pumping arms and two striding legs that cycle through
+/// a real run gait. The stride rate tracks the watch's live cadence (falling
+/// back to a pace-derived proxy) and the lean/bounce grow with speed, so it
+/// reads as actual running, not a bobbing pictogram. Freezes + dims when
+/// paused; only animates while running AND on-screen, so it costs nothing
+/// wrist-down.
+private struct RunnerBadge: View {
     let isRunning: Bool
-    /// Forward speed in m/s (drives the ground rush + the pace fallback).
     let speedMps: Double
-    /// Live cadence in steps/min from HealthKit, if available.
     let cadenceSPM: Double?
+    let indoor: Bool
 
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Brighter than the brand's dark green so the runner pops on the black
-    /// watch background.
-    private let runnerColor = Color(red: 0.36, green: 0.82, blue: 0.46)
-    private let stripHeight: CGFloat = 30
-    private let dashGap: CGFloat = 15
+    private let runnerColor = Color(red: 0.36, green: 0.85, blue: 0.50)
+    private let diameter: CGFloat = 34
 
-    // Integrated animation state (kept small via wrap). Seeded to a lively
-    // mid-run value so the runner starts moving immediately, then eases to
-    // the real numbers.
-    @State private var bobPhase: Double = 0
-    @State private var groundPhase: Double = 0
+    // Integrated gait state. Seeded mid-stride + lively so it's already
+    // running the instant it appears, then eases to the real numbers.
+    @State private var phase: Double = 0
     @State private var smoothedSpeed: Double = 2.6
-    @State private var smoothedCadence: Double = 168
+    @State private var smoothedCadence: Double = 170
     @State private var lastTick: Date?
-
     @State private var tick = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        ZStack {
-            speedLines
-            runner
+        Canvas { ctx, size in
+            drawRunner(in: &ctx, size: size)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: stripHeight)
-        .background(Color.black)        // opaque so scrolling content can't peek behind
-        .opacity(isRunning ? 1 : 0.45)  // dim when paused — the runner has stopped
+        .frame(width: diameter, height: diameter)
+        .background(runnerColor.opacity(0.18), in: Circle())
+        .overlay(Circle().strokeBorder(runnerColor.opacity(0.30), lineWidth: 1))
+        .opacity(isRunning ? 1 : 0.5)
         .accessibilityHidden(true)
         .onReceive(tick) { advance(to: $0) }
     }
 
-    private var runner: some View {
-        // A touch more bounce the faster you move — reads as effort.
-        let amp = 2.0 + min(2.2, smoothedSpeed * 0.35)
-        let bob = CGFloat(sin(bobPhase)) * CGFloat(amp)
-        return Image(systemName: "figure.run")
-            .font(.system(size: 24, weight: .bold))
-            .foregroundStyle(runnerColor)
-            .shadow(color: runnerColor.opacity(0.55), radius: 4)
-            .offset(y: bob)
-    }
+    // MARK: Gait drawing
 
-    private var speedLines: some View {
-        Canvas { ctx, size in
-            let len: CGFloat = 9
-            let y = size.height * 0.62      // near the runner's feet
-            let shift = CGFloat(groundPhase)
-            var x = size.width - shift
-            while x > -dashGap {
-                let rect = CGRect(x: x - len, y: y, width: len, height: 2)
-                ctx.fill(Path(roundedRect: rect, cornerRadius: 1),
-                         with: .color(runnerColor.opacity(0.45)))
-                x -= dashGap
-            }
+    private func drawRunner(in ctx: inout GraphicsContext, size: CGSize) {
+        let s = size.width / 34.0            // scale to the design's 34pt box
+        let p = phase
+
+        // Bounce: two footfalls per stride, so the body rises/dips at 2×.
+        let bounce = -CGFloat(abs(sin(p))) * 2.0 * s
+        // Forward lean grows a touch with speed — effort reads in the torso.
+        let lean = 0.30 + min(0.14, smoothedSpeed * 0.02)
+
+        // Hip anchor, centred, sat low so the legs have room beneath.
+        let hip = CGPoint(x: size.width * 0.46, y: size.height * 0.56 + bounce)
+
+        // Limb lengths.
+        let torsoLen = 9.5 * s, thigh = 7.2 * s, shin = 6.8 * s
+        let upperArm = 5.2 * s, foreArm = 5.0 * s, headR = 3.0 * s
+        let limbW = 3.1 * s
+
+        // angle 0 = straight down (+y); positive = forward (+x).
+        func pt(_ o: CGPoint, _ len: CGFloat, _ a: Double) -> CGPoint {
+            CGPoint(x: o.x + len * CGFloat(sin(a)), y: o.y + len * CGFloat(cos(a)))
         }
-        .opacity(isRunning ? 1 : 0)
-        // Soft fade at both edges so dashes appear / vanish gently.
-        .mask(
-            LinearGradient(
-                colors: [.clear, .white, .white, .clear],
-                startPoint: .leading, endPoint: .trailing
-            )
-        )
+        func limb(_ a: CGPoint, _ b: CGPoint, _ color: GraphicsContext.Shading) {
+            var path = Path(); path.move(to: a); path.addLine(to: b)
+            ctx.stroke(path, with: color, style: StrokeStyle(lineWidth: limbW, lineCap: .round))
+        }
+
+        let near = GraphicsContext.Shading.color(runnerColor)
+        let far = GraphicsContext.Shading.color(runnerColor.opacity(0.5))
+
+        // Torso + head, leaning forward.
+        let shoulder = CGPoint(x: hip.x + CGFloat(sin(lean)) * torsoLen,
+                               y: hip.y - CGFloat(cos(lean)) * torsoLen)
+        let head = CGPoint(x: shoulder.x + CGFloat(sin(lean)) * (headR + 1.5 * s),
+                           y: shoulder.y - CGFloat(cos(lean)) * (headR + 1.5 * s))
+
+        // One leg: thigh swings ±stride; the knee flexes to lift the foot on
+        // the back-swing / recovery and extends to reach on the front-swing.
+        func leg(_ legPhase: Double, _ shade: GraphicsContext.Shading) {
+            let stride = 0.95
+            let thighA = lean * 0.35 + stride * sin(legPhase)
+            let knee = pt(hip, thigh, thighA)
+            let flex = 0.22 + 1.05 * max(0, -sin(legPhase)) + 0.35 * max(0, -cos(legPhase))
+            let foot = pt(knee, shin, thighA - flex)
+            limb(hip, knee, shade)
+            limb(knee, foot, shade)
+        }
+
+        // One arm: shoulder swings opposite the same-side leg; elbow stays
+        // bent ~90°+ as a runner's does.
+        func arm(_ armPhase: Double, _ shade: GraphicsContext.Shading) {
+            let swing = 0.72
+            let shoulderA = lean * 0.5 + swing * sin(armPhase)
+            let elbow = pt(shoulder, upperArm, shoulderA)
+            let hand = pt(elbow, foreArm, shoulderA + 1.25 + 0.25 * sin(armPhase))
+            limb(shoulder, elbow, shade)
+            limb(elbow, hand, shade)
+        }
+
+        // Depth order: far limbs first (dimmer), then body, then near limbs.
+        leg(p + .pi, far)
+        arm(p, far)
+
+        limb(hip, shoulder, near)                       // torso
+        ctx.fill(Path(ellipseIn: CGRect(x: head.x - headR, y: head.y - headR,
+                                        width: headR * 2, height: headR * 2)),
+                 with: near)                            // head
+
+        leg(p, near)
+        arm(p + .pi, near)
     }
 
-    /// One animation step: ease the inputs, then integrate the bob + ground
-    /// phases by the elapsed time.
+    // MARK: Animation step
+
     private func advance(to now: Date) {
-        guard isRunning, scenePhase == .active else {
-            lastTick = nil          // resume cleanly next time
-            return
-        }
+        guard isRunning, scenePhase == .active else { lastTick = nil; return }
         let dt = lastTick.map { now.timeIntervalSince($0) } ?? 0
         lastTick = now
-        guard dt > 0, dt < 0.5 else { return }   // skip the first tick + any long gap
+        guard dt > 0, dt < 0.5 else { return }
 
-        let ease = min(1.0, dt / 0.7)            // ~0.7s time constant
+        let ease = min(1.0, dt / 0.7)
         smoothedSpeed += (speedMps - smoothedSpeed) * ease
-        let targetCadence = (cadenceSPM.map { $0 > 30 ? $0 : paceCadence } ?? paceCadence)
+        let targetCadence = cadenceSPM.map { $0 > 30 ? $0 : paceCadence } ?? paceCadence
         smoothedCadence += (targetCadence - smoothedCadence) * ease
 
-        bobPhase = (bobPhase + 2 * .pi * bobHz * dt)
-            .truncatingRemainder(dividingBy: 2 * .pi)
-        groundPhase = (groundPhase + groundPointsPerSecond * dt)
-            .truncatingRemainder(dividingBy: Double(dashGap))
+        // One full gait cycle = two footfalls, so stride frequency = cadence/2.
+        let strideHz = min(1.9, max(0.8, smoothedCadence / 120.0))
+        phase = (phase + 2 * .pi * strideHz * dt).truncatingRemainder(dividingBy: 2 * .pi)
     }
 
-    /// Bob frequency in Hz — one body bob per footfall.
-    private var bobHz: Double {
-        min(3.4, max(1.2, smoothedCadence / 60.0))
-    }
-
-    /// Pace-derived cadence proxy (steps/min) when HK cadence isn't there:
-    /// ~150 shuffling up to ~190 flying.
-    private var paceCadence: Double {
-        min(195, max(145, 150 + smoothedSpeed * 12))
-    }
-
-    /// Ground scroll speed in points/sec — proportional to real speed, so
-    /// faster running visibly blurs the ground past. Floored so it still
-    /// drifts at a crawl.
-    private var groundPointsPerSecond: Double {
-        min(150, max(8, smoothedSpeed * 28))
-    }
+    /// Pace-derived cadence proxy (steps/min) when HK cadence isn't there.
+    private var paceCadence: Double { min(195, max(150, 152 + smoothedSpeed * 12)) }
 }
 
 #Preview("Running fast") {
-    RunningManHeader(isRunning: true, speedMps: 4.2, cadenceSPM: 182)
+    RunnerBadge(isRunning: true, speedMps: 4.2, cadenceSPM: 182, indoor: true)
+        .padding()
         .background(Color.black)
 }
 
 #Preview("Jogging") {
-    RunningManHeader(isRunning: true, speedMps: 2.4, cadenceSPM: 158)
-        .background(Color.black)
-}
-
-#Preview("Paused") {
-    RunningManHeader(isRunning: false, speedMps: 0, cadenceSPM: nil)
+    RunnerBadge(isRunning: true, speedMps: 2.4, cadenceSPM: 158, indoor: false)
+        .padding()
         .background(Color.black)
 }

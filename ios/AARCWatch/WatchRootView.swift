@@ -54,18 +54,22 @@ struct WatchRootView: View {
     private var idleRoot: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 10) {
-                    Image(systemName: "figure.run")
-                        .font(.system(size: 32))
-                        .foregroundStyle(.tint)
-
-                    Text("AARC")
-                        .font(.title3.bold())
-
-                    Text(AppVersion.versionString)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
+                VStack(spacing: 8) {
+                    // Compact brand header so the START BUTTONS land above
+                    // the fold — no scroll needed to begin a run. The
+                    // diagnostics below are secondary and may scroll.
+                    HStack(spacing: 5) {
+                        Image(systemName: "figure.run")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.tint)
+                        Text("AARC")
+                            .font(.headline)
+                        Spacer()
+                        Text(AppVersion.build)
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.top, 2)
 
                     contentForCurrentPhase
 
