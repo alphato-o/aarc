@@ -1,0 +1,22 @@
+# systemd unit for the AARC standalone Node proxy.
+# Installed by deploy.sh to /etc/systemd/system/aarc-proxy.service.
+[Unit]
+Description=AARC API proxy (standalone Node port of the Cloudflare Worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/aarc-proxy/server
+ExecStart=/usr/bin/env node server.mjs
+Restart=always
+RestartSec=2
+Environment=NODE_ENV=production
+# server.mjs loads /opt/aarc-proxy/server/.env itself; uncomment to let
+# systemd inject extra env instead:
+# EnvironmentFile=-/opt/aarc-proxy/server/.env
+NoNewPrivileges=true
+# Recommended: run as a dedicated unprivileged user once one exists:
+# User=aarc
+
+[Install]
+WantedBy=multi-user.target

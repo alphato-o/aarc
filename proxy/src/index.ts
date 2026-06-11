@@ -3,6 +3,15 @@ import { dynamicLineHandler } from "./routes/dynamicLine";
 import { reactLineHandler } from "./routes/reactLine";
 import { musicCommentHandler } from "./routes/musicComment";
 import { ttsHandler } from "./routes/tts";
+import {
+    ingestRunHandler,
+    ingestAudioHandler,
+    listRunsHandler,
+    runEventsHandler,
+    runAudioHandler,
+} from "./routes/ingestRun";
+import { dashHandler, dashAuthPollHandler, dashAuthApproveHandler } from "./routes/dashboard";
+import { captureException } from "./lib/sentry";
 
 interface Env {
     OPENROUTER_API_KEY?: string;
@@ -12,6 +21,15 @@ interface Env {
     ANTHROPIC_MODEL?: string;
     ELEVENLABS_API_KEY?: string;
     ELEVENLABS_BASE_URL?: string;
+    /// Sentry DSN for the aarc-proxy project. Optional — error reporting
+    /// is a no-op until `wrangler secret put SENTRY_DSN`.
+    SENTRY_DSN?: string;
+    /// D1 (aarc-runs): per-run event log for post-run replay.
+    DB: D1Database;
+    /// R2 for pinned run audio — optional until R2 is enabled (wrangler.toml).
+    VOICES?: R2Bucket;
+    /// Shared secret for ingest writes + replay reads (wrangler secret).
+    DEVICE_TOKEN?: string;
 }
 
 const json = (data: unknown, init: ResponseInit = {}): Response =>
@@ -20,37 +38,89 @@ const json = (data: unknown, init: ResponseInit = {}): Response =>
         headers: { "content-type": "application/json", ...(init.headers ?? {}) },
     });
 
+async function dispatch(request: Request, env: Env, url: URL): Promise<Response> {
+    if (request.method === "GET" && url.pathname === "/ping") {
+        return json({ ok: true, ts: Date.now(), service: "aarc-api" });
+    }
+
+    if (request.method === "POST" && url.pathname === "/generate-script") {
+        return generateScriptHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/dynamic-line") {
+        return dynamicLineHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/react-line") {
+        return reactLineHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/music-comment") {
+        return musicCommentHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/tts") {
+        return ttsHandler(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/dash") {
+        return dashHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/dash/auth/poll") {
+        return dashAuthPollHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/dash/auth/approve") {
+        return dashAuthApproveHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/ingest-run") {
+        return ingestRunHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/ingest-audio") {
+        return ingestAudioHandler(request, env);
+    }
+
+    if (request.method === "GET") {
+        if (url.pathname === "/api/runs") {
+            return listRunsHandler(request, env);
+        }
+        const eventsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
+        if (eventsMatch?.[1]) {
+            return runEventsHandler(request, env, eventsMatch[1]);
+        }
+        const audioMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/audio\/([^/]+)$/);
+        if (audioMatch?.[1] && audioMatch[2]) {
+            return runAudioHandler(request, env, audioMatch[1], audioMatch[2]);
+        }
+    }
+
+    return json(
+        { ok: false, error: "not_found", path: url.pathname },
+        { status: 404 },
+    );
+}
+
 export default {
-    async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const url = new URL(request.url);
-
-        if (request.method === "GET" && url.pathname === "/ping") {
-            return json({ ok: true, ts: Date.now(), service: "aarc-api" });
+        try {
+            return await dispatch(request, env, url);
+        } catch (e) {
+            // Last-resort guard: route handlers catch their own upstream
+            // failures, so anything landing here is an unexpected bug.
+            ctx.waitUntil(
+                captureException(env, e, {
+                    route: url.pathname,
+                    method: request.method,
+                }),
+            );
+            return json(
+                { ok: false, error: "internal", detail: e instanceof Error ? e.message : String(e) },
+                { status: 500 },
+            );
         }
-
-        if (request.method === "POST" && url.pathname === "/generate-script") {
-            return generateScriptHandler(request, env);
-        }
-
-        if (request.method === "POST" && url.pathname === "/dynamic-line") {
-            return dynamicLineHandler(request, env);
-        }
-
-        if (request.method === "POST" && url.pathname === "/react-line") {
-            return reactLineHandler(request, env);
-        }
-
-        if (request.method === "POST" && url.pathname === "/music-comment") {
-            return musicCommentHandler(request, env);
-        }
-
-        if (request.method === "POST" && url.pathname === "/tts") {
-            return ttsHandler(request, env);
-        }
-
-        return json(
-            { ok: false, error: "not_found", path: url.pathname },
-            { status: 404 },
-        );
     },
 } satisfies ExportedHandler<Env>;

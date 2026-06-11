@@ -1,0 +1,15 @@
+{
+  "name": "aarc-proxy-server",
+  "version": "0.0.1",
+  "description": "AARC API proxy — standalone Node host (US VPS / China-friendly endpoint). Runs the same handlers as the Cloudflare Worker.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node server.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.0"
+  }
+}

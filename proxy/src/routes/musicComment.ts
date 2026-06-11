@@ -6,8 +6,9 @@ import {
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { captureMessage, SentryEnv } from "../lib/sentry";
 
-export type Env = LLMEnv;
+export type Env = LLMEnv & SentryEnv;
 
 export async function musicCommentHandler(
     request: Request,
@@ -58,6 +59,12 @@ export async function musicCommentHandler(
         model = result.model;
     } catch (e) {
         const desc = describeUpstreamError(e);
+        if (desc.httpStatus >= 500) {
+            await captureMessage(env, `upstream LLM failure: ${desc.message}`, "error", {
+                route: "/music-comment",
+                status: desc.httpStatus,
+            });
+        }
         return json(
             { ok: false, error: "upstream", detail: desc.message },
             { status: desc.httpStatus },

@@ -18,3 +18,27 @@ enabled = true
 # Secrets are NOT committed. Use:
 #   npx wrangler secret put ANTHROPIC_API_KEY
 # (Phase 1 onward.)
+#
+# Run-log ingest additionally needs the shared device secret:
+#   npx wrangler secret put DEVICE_TOKEN
+# (same value goes into the iOS Info.plist key AARCDeviceToken).
+
+# D1: per-run event log for post-run replay. Apply schema with:
+#   npx wrangler d1 migrations apply aarc-runs --remote
+[[d1_databases]]
+binding = "DB"
+database_name = "aarc-runs"
+database_id = "e2b41e5f-d6a1-42ad-982e-c02967bb527f"
+
+# R2: pinned per-run voice audio (runId/key.mp3). COMMENTED OUT — R2 is not
+# enabled on this Cloudflare account yet. To turn it on:
+#   1. Dashboard → R2 → enable R2 on the account (needs a billing method;
+#      free tier is fine at this volume).
+#   2. npx wrangler r2 bucket create aarc-voices
+#   3. Uncomment the block below and `npm run deploy`.
+#   4. On the phone, flip the UserDefaults bool "aarc.sync.audioEnabled" to
+#      true — until then the app skips audio upload and the Worker returns
+#      503 "R2 not enabled" from /ingest-audio and /api/runs/:id/audio/:key.
+[[r2_buckets]]
+binding = "VOICES"
+bucket_name = "aarc-voices"

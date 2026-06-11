@@ -6,8 +6,9 @@ import {
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { captureMessage, SentryEnv } from "../lib/sentry";
 
-export type Env = LLMEnv;
+export type Env = LLMEnv & SentryEnv;
 
 /// Second-voice reaction. Jessica reacts to a line the primary coach (Ricky)
 /// just spoke. Additive — the primary voice's generation is untouched; this
@@ -64,6 +65,12 @@ export async function reactLineHandler(
         model = result.model;
     } catch (e) {
         const desc = describeUpstreamError(e);
+        if (desc.httpStatus >= 500) {
+            await captureMessage(env, `upstream LLM failure: ${desc.message}`, "error", {
+                route: "/react-line",
+                status: desc.httpStatus,
+            });
+        }
         return json(
             { ok: false, error: "upstream", detail: desc.message },
             { status: desc.httpStatus },

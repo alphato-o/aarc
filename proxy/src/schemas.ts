@@ -24,7 +24,7 @@ export const GenerateScriptRequestSchema = z
         /// Heart-liked lines from past runs. Sent as VIBE-ONLY
         /// calibration; the prompt is strict about never copying any
         /// of them verbatim. Capped to ~12 most-recent on the client.
-        likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
+        likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
     })
     .superRefine((data, ctx) => {
         if (data.planKind === "distance" && data.distanceKm === undefined) {
@@ -172,7 +172,7 @@ export const DynamicLineRequestSchema = z.object({
     /// Heart-liked lines from past runs — vibe-only calibration. The
     /// prompt forbids verbatim copy of any of these; they're texture
     /// references, not material.
-    likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
+    likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
 });
 
 export type DynamicLineRequest = z.infer<typeof DynamicLineRequestSchema>;
@@ -224,7 +224,7 @@ export const MusicCommentRequestSchema = z.object({
     }),
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
-    likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
+    likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
 });
 
 export type MusicCommentRequest = z.infer<typeof MusicCommentRequestSchema>;
@@ -262,7 +262,7 @@ export const ReactLineRequestSchema = z.object({
     /// Recent exchange (both voices) so she doesn't repeat and can build on it.
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
-    likedLineExamples: z.array(z.string().min(1).max(500)).max(20).optional(),
+    likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
 });
 
 export type ReactLineRequest = z.infer<typeof ReactLineRequestSchema>;
