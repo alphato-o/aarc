@@ -9,6 +9,11 @@ struct AARCApp: App {
         // this app and calls the handler — if it isn't installed yet, the
         // mirrored session is missed.
         MirroringReceiver.shared.install()
+        // Voice-archive cloud sync defaults ON now that R2 is enabled
+        // (user-controllable later; the uploader stops on 503 anyway).
+        if UserDefaults.standard.object(forKey: "aarc.sync.audioEnabled") == nil {
+            UserDefaults.standard.set(true, forKey: "aarc.sync.audioEnabled")
+        }
         // Bridge handled-error reports into the run event log so they
         // show up in the Control Room tail + post-run replay.
         CrashReporter.setEventSink { kind, message in
