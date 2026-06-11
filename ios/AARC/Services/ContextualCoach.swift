@@ -192,6 +192,11 @@ final class ContextualCoach {
         }
 
         guard !inFlight else { return }
+        // Don't over-produce: if an unplayed ambient line is already waiting
+        // in the queue, hold this tick. Generating more just stacks lines
+        // that expire behind the music gap (the stale-drop waste). Scripted
+        // milestones are .milestone and never gated by this.
+        guard VoiceFeedbackQueue.shared.ambientChamberFree else { return }
 
         // Stationary is checked before the warmup gate — it doesn't
         // depend on rolling averages, and a runner who hits Start and

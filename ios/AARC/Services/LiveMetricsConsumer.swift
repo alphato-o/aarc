@@ -60,6 +60,10 @@ final class LiveMetricsConsumer {
         // (HR spike, pace drop/surge, quiet stretch). It shares
         // ScriptEngine's cooldown via tryInject, so no double-talk.
         ContextualCoach.shared.processTick(metrics)
+        // Jessica runs as a background producer: this pump keeps one line
+        // pre-generated + pre-rendered and releases it into a quiet gap.
+        // Decoupled from Ricky's cadence so she never races him.
+        Conversation.shared.tick(metrics)
         // Snapshot into the per-100m live chart store. No-op if no
         // new bucket has been crossed.
         LiveRunChartStore.shared.ingest(metrics)

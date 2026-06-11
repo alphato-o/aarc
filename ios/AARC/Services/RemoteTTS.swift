@@ -124,28 +124,24 @@ final class RemoteTTS: NSObject {
             activity = .synthesizing(chars: text.count)
             synthStartedAt = Date()
             let started = Date()
-            do {
-                let data = try await fetchAudioWithOneRetry(text: text, voiceId: voiceId)
+            // Coalesced synth — shares any in-flight prewarm for this line.
+            await ensureCached(text: text, voiceId: voiceId, key: key)
+            // CRITICAL: if the run was stopped mid-fetch, bail before
+            // playing — never speak via Apple AFTER the pipeline was killed
+            // (the treadmill End-tap bug).
+            if Task.isCancelled { return }
+            if let cached = await AudioCache.shared.url(forKey: key) {
+                url = cached
                 lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
-                bytesFetchedThisSession += data.count
-                url = try await AudioCache.shared.store(data: data, forKey: key)
                 lastWasCacheHit = false
                 lastError = nil
-            } catch {
-                // CRITICAL: if the run was stopped mid-fetch, URLSession
-                // throws a cancellation error here. Falling through to
-                // LocalTTS would speak the line via Apple's voice AFTER
-                // the user explicitly killed the voice pipeline — which
-                // is exactly the bug we saw on the treadmill End tap.
-                if Task.isCancelled { return }
-                // Most common non-cancel case: an ElevenLabs v3 synth that
-                // ran past the timeout (long lines take ~25s). Surface it
-                // and fall back to Apple so the runner is never silent.
-                lastError = error.localizedDescription
+            } else {
+                // Synth failed (e.g. an ElevenLabs v3 long-line timeout).
+                // Fall back to Apple so the runner is never silent.
                 lastBackend = "Apple (fallback)"
                 activity = .playing(remote: false)
                 RunEventLog.shared.record("tts.fallback", String(text.prefix(80)),
-                                          data: ["reason": error.localizedDescription, "backend": "local"])
+                                          data: ["reason": lastError ?? "synth failed", "backend": "local"])
                 await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
                 return
             }
@@ -282,22 +278,46 @@ final class RemoteTTS: NSObject {
 
     // MARK: - Prefetch
 
-    /// Download + cache the audio for a line WITHOUT playing it. Used by
-    /// RunOrchestrator to warm the cache during the prepare phase so the
-    /// warmup at t=0 plays instantly. Best-effort; on failure the live
-    /// `play(text:)` path will retry or fall back.
+    /// In-flight synths keyed by cache key, so concurrent callers
+    /// (background prewarm + the dequeue's pre-duck prefetch + a direct
+    /// play) for the SAME line share ONE ElevenLabs request instead of each
+    /// firing a full synth. Without this, a line that dequeues before its
+    /// prewarm finishes paid for the same audio twice.
+    private var inFlightSynths: [String: Task<Void, Never>] = [:]
+
+    /// Ensure (voiceId, text) is in the cache, coalescing concurrent
+    /// requests. Returns once cached, or once the shared synth attempt has
+    /// finished (callers re-check the cache to distinguish success). Never
+    /// throws; uses the one-retry fetch so a cellular blip doesn't drop it.
+    private func ensureCached(text: String, voiceId: String, key: String) async {
+        if await AudioCache.shared.url(forKey: key) != nil { return }
+        if let existing = inFlightSynths[key] {
+            await existing.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.inFlightSynths[key] = nil }
+            do {
+                let data = try await self.fetchAudioWithOneRetry(text: text, voiceId: voiceId)
+                self.bytesFetchedThisSession += data.count
+                _ = try await AudioCache.shared.store(data: data, forKey: key)
+                self.lastError = nil
+            } catch {
+                if !Task.isCancelled { self.lastError = error.localizedDescription }
+            }
+        }
+        inFlightSynths[key] = task
+        await task.value
+    }
+
+    /// Download + cache the audio for a line WITHOUT playing it. Used to warm
+    /// the cache ahead of a line's slot so it plays instantly. Best-effort;
+    /// coalesced with any concurrent synth for the same line.
     func prefetch(_ text: String, voiceId: String = RemoteTTS.voiceId) async {
         guard !text.isEmpty else { return }
         let key = AudioCache.key(voiceId: voiceId, text: text)
-        if await AudioCache.shared.url(forKey: key) != nil { return }
-        do {
-            let data = try await fetchAudio(text: text, voiceId: voiceId)
-            bytesFetchedThisSession += data.count
-            _ = try await AudioCache.shared.store(data: data, forKey: key)
-            lastError = nil
-        } catch {
-            lastError = error.localizedDescription
-        }
+        await ensureCached(text: text, voiceId: voiceId, key: key)
     }
 
     /// Like `prefetch`, but returns the measured latency and whether the

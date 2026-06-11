@@ -203,14 +203,49 @@ final class VoiceFeedbackQueue {
         // breathing-room pacing intact even when the queue was idle.
         insertSorted(item)
         log.debug("VoiceQueue enqueue src=\(item.source, privacy: .public) pri=\(item.priority.rawValue) pending=\(self.pending.count)")
+        // Keep the ElevenLabs pipeline BUSY: start rendering this line's
+        // audio in the background NOW, while the music plays, so it's
+        // cache-warm by the time its slot opens. Without this the synth
+        // happened at dequeue — a 10-12s lead per line with the pipeline
+        // idle through every music gap.
+        prewarm(item)
         if currentlyPlaying == nil { kickNext() }
     }
 
-    /// Drop any pending (not-yet-playing) items whose source begins with
-    /// `prefix`. Used so a fresh Jessica reaction replaces a stale one still
-    /// waiting in the queue — newest comment wins.
-    func dropPending(sourcePrefix prefix: String) {
-        pending.removeAll { $0.source.hasPrefix(prefix) }
+    /// True if a line whose source begins with `prefix` is currently playing
+    /// or waiting in the queue. Lets the Jessica producer keep at most one of
+    /// hers in flight without a separate slot.
+    func hasPending(sourcePrefix prefix: String) -> Bool {
+        if let cur = currentlyPlaying, cur.source.hasPrefix(prefix) { return true }
+        return pending.contains { $0.source.hasPrefix(prefix) }
+    }
+
+    /// Pending RICKY ambient lines (coach lines, lyric riffs) below milestone
+    /// priority — EXCLUDING Jessica, so the two voices stay decoupled: her
+    /// queued line must never throttle his coaching.
+    var pendingRickyAmbientCount: Int {
+        pending.reduce(0) {
+            $0 + (($1.priority < .milestone && !$1.source.hasPrefix("jessica")) ? 1 : 0)
+        }
+    }
+
+    /// True when there's room to GENERATE another Ricky ambient line without
+    /// backing his side up. One in the chamber is enough — generating more
+    /// just makes lines expire unplayed behind the music gap (the stale-drop
+    /// waste). Milestones and Jessica are never counted here.
+    var ambientChamberFree: Bool { pendingRickyAmbientCount == 0 }
+
+    /// Pre-render an item's audio in the background. Idempotent — a cache
+    /// hit is an instant no-op, so calling it for already-warm lines is free.
+    private func prewarm(_ item: VoiceItem) {
+        guard !AudioPlaybackManager.shared.isMuted else { return }
+        guard item.voiceId != nil || Speaker.shared.preferRemoteVoice else { return }
+        let voice = item.voiceId ?? RemoteTTS.voiceId
+        let text = item.text
+        Task { @MainActor in
+            guard !AudioPlaybackManager.shared.isMuted else { return }
+            await RemoteTTS.shared.prefetch(text, voiceId: voice)
+        }
     }
 
     /// Stop everything immediately: cancel current playback, clear the queue,
