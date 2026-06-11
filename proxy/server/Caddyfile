@@ -1,3 +1,6 @@
-gateway.aarun.club {
+# TLS on :8443 because Xray (3x-ui) owns :443 on this box. Caddy still
+# binds :80 for the ACME HTTP-01 challenge (free on this host), so certs
+# renew automatically. The app's US endpoint is gateway.aarun.club:8443.
+gateway.aarun.club:8443 {
 	reverse_proxy aarc-proxy:8787
 }
