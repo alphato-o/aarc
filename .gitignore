@@ -121,3 +121,6 @@ PLAN.html
 .secret
 .secrets
 .gstack/
+
+# Private: Jessica persona — kept local + deployed, never tracked
+proxy/src/lib/personalities.ts
