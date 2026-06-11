@@ -138,7 +138,7 @@ function buildUserPrompt(req: ReactLineRequest): string {
         lines.push(`(moment: ${req.partnerSource})`);
     }
     lines.push("");
-    lines.push("React to that — build on it, then make it yours.");
+    lines.push("Pick ONE hook from that line — a word, an image, his claim, his punchline, or the topic — and react to THAT: agree and pile on, undercut him, or twist it to your angle. Don't restate his sentence and don't speak in isolation. Then make it yours.");
     lines.push("");
     lines.push("RUN STATE:");
     lines.push(`- elapsed: ${formatSeconds(c.elapsedSeconds)} (${Math.round(c.elapsedSeconds)}s)`);
@@ -177,7 +177,7 @@ function buildUserPrompt(req: ReactLineRequest): string {
     }
 
     lines.push("");
-    lines.push("Now give your ONE line reacting to Ricky. JSON only.");
+    lines.push("Now give your ONE line — a reply that latches onto your chosen hook from Ricky's line. JSON only.");
     return lines.join("\n");
 }
 

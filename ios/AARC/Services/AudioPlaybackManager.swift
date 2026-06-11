@@ -43,24 +43,38 @@ final class AudioPlaybackManager {
 
     /// One-time category configuration. Idempotent.
     ///
+    /// BASELINE IS NON-DUCKING. Ducking is now purely transient — applied
+    /// the instant a voice line starts and removed the instant it ends (see
+    /// begin/endTransientDuck), in EVERY mode. The old baseline `.duckOthers`
+    /// kept the music suppressed for as long as the session stayed active —
+    /// which on a watch-mirrored run is the whole inter-line gap, so the
+    /// runner heard ~35s of squashed music between two ~10s voice lines. Now
+    /// the music sits at full volume except for the few seconds a voice is
+    /// actually speaking over it.
+    ///
     /// Note: `mode: .default` is deliberate — NOT `.spokenAudio`. The
     /// .spokenAudio mode runs the audio through Apple's
-    /// "speech-intelligibility" signal chain, which is essentially a
-    /// soft compressor + EQ. That compressor squashes peaks, so on hot
-    /// ElevenLabs renders (which are already mastered loud) the coach
-    /// voice perceptibly drops in level. Switching to .default leaves
-    /// the audio alone and the runner hears the file as it was
-    /// rendered — which is what we want when we're competing with
-    /// ducked-but-still-present background music + ambient noise.
+    /// "speech-intelligibility" signal chain (a soft compressor + EQ) that
+    /// squashes peaks, so hot ElevenLabs renders perceptibly drop in level.
+    /// .default leaves the audio alone.
     private func configureCategory() {
-        applyCategory(duck: true)
+        applyCategory(duck: false)
     }
 
+    /// Last duck state we actually applied — skips a redundant setCategory
+    /// when nothing changed. begin/endTransientDuck fire once per line; with
+    /// the keepalive engine running, re-setting the same category options on
+    /// a live session every line is needless churn (and a possible audible
+    /// blip). nil = not yet applied.
+    private var appliedDuck: Bool?
+
     private func applyCategory(duck: Bool) {
+        guard appliedDuck != duck else { return }
         do {
             var opts: AVAudioSession.CategoryOptions = [.mixWithOthers]
             if duck { opts.insert(.duckOthers) }
             try session.setCategory(.playback, mode: .default, options: opts)
+            appliedDuck = duck
         } catch {
             // Category set fails very rarely; log via os_log later if it
             // becomes an actual concern.
@@ -90,17 +104,22 @@ final class AudioPlaybackManager {
         guard sustainedActive else { return }
         os_log("[audio] endSustained", log: OSLog(subsystem: "club.aarun.AARC", category: "Audio"), type: .info)
         sustainedActive = false
-        applyCategory(duck: true)
+        applyCategory(duck: false)   // baseline is non-ducking
         deactivate()
     }
 
+    /// Duck the music NOW — called the instant a voice line is about to be
+    /// audible. Applies in every mode (not just sustained): the baseline is
+    /// non-ducking, so this is the ONLY thing that lowers the music, and it's
+    /// removed the moment the line ends.
     func beginTransientDuck() {
-        guard sustainedActive else { return }
         applyCategory(duck: true)
     }
 
+    /// Restore the music to full volume — called the instant a voice line
+    /// finishes, so the runner hears the song again immediately rather than
+    /// through the rest of the inter-line gap.
     func endTransientDuck() {
-        guard sustainedActive else { return }
         applyCategory(duck: false)
     }
 

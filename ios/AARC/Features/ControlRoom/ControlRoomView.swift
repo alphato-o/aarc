@@ -7,20 +7,23 @@ import AARCKit
 /// `@Observable` singleton, plus one active probe (a 10s `/ping` loop
 /// against the Worker proxy that runs only while the view is visible).
 ///
-/// Sections: NETWORK / WATCH LINK / DIRECTOR / VOICE QUEUE / VOICES /
-/// MUSIC / EVENT TAIL. A `TimelineView` ticks the whole body at 1 Hz so
-/// relative ages (queue item age, ETA countdowns) stay live even when no
-/// observable state changes.
+/// Sections: RUN PROGRESS / NETWORK INSPECTOR / WATCH LINK / DIRECTOR /
+/// VOICE QUEUE / VOICES / MUSIC / EVENT TAIL. A `TimelineView` ticks the
+/// whole body at 1 Hz so relative ages (queue item age, ETA countdowns)
+/// stay live even when no observable state changes. The NETWORK INSPECTOR
+/// rows that are in-flight tick faster (4 Hz) via their own nested
+/// `TimelineView` so a synth's "awaiting the network" ms ticks smoothly.
 struct ControlRoomView: View {
     @State private var consumer = LiveMetricsConsumer.shared
     @State private var phoneSession = PhoneSession.shared
     @State private var mirror = MirroringReceiver.shared
     @State private var director = RunDirector.shared
     @State private var queue = VoiceFeedbackQueue.shared
-    @State private var remoteTTS = RemoteTTS.shared
     @State private var conversation = Conversation.shared
     @State private var nowPlaying = NowPlayingStore.shared
     @State private var eventLog = RunEventLog.shared
+    @State private var netMonitor = NetworkActivityMonitor.shared
+    @State private var planStore = ScriptPreviewStore.shared
 
     // MARK: - Ping probe state
 
@@ -42,7 +45,8 @@ struct ControlRoomView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     header(now: timeline.date)
-                    networkSection
+                    runProgressSection(now: timeline.date)
+                    networkInspectorSection(now: timeline.date)
                     watchLinkSection
                     directorSection(now: timeline.date)
                     voiceQueueSection(now: timeline.date)
@@ -90,38 +94,309 @@ struct ControlRoomView: View {
         }
     }
 
-    // MARK: - NETWORK
+    // MARK: - RUN PROGRESS
 
-    private var networkSection: some View {
-        section("NETWORK", accent: .cyan) {
-            row("Endpoint", Config.apiBaseURL.host ?? Config.apiBaseURL.absoluteString)
-            HStack(spacing: 6) {
-                Text("Ping")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
-                Spacer(minLength: 4)
+    /// Web-dashboard-style timeline: a thin dark track with a bright
+    /// position dot. Distance plans render against totalMeters, time plans
+    /// against totalSeconds, open plans just count up with no fixed end.
+    /// Small ticks mark where voice lines have played this run.
+    @ViewBuilder
+    private func runProgressSection(now: Date) -> some View {
+        let metrics = consumer.latest
+        let plan = planStore.currentPlan
+        section("RUN PROGRESS", accent: .teal) {
+            switch plan.kind {
+            case .distance:
+                distanceProgress(plan: plan, metrics: metrics)
+            case .time:
+                timeProgress(plan: plan, metrics: metrics)
+            case .open:
+                openProgress(metrics: metrics)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func distanceProgress(plan: RunPlan, metrics: LiveMetrics?) -> some View {
+        let total = plan.totalMeters ?? 0
+        let current = metrics?.distanceMeters ?? 0
+        let frac = total > 0 ? min(1, max(0, current / total)) : 0
+        HStack(alignment: .firstTextBaseline) {
+            Text(String(format: "%.2f", current / 1000))
+                .font(.system(.callout, design: .monospaced).weight(.bold))
+                .foregroundStyle(.white)
+            Text("/ \(formatKm(total)) km")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+            Spacer(minLength: 4)
+            Text("\(Int((frac * 100).rounded()))%")
+                .font(.system(.caption, design: .monospaced).weight(.bold))
+                .foregroundStyle(.teal)
+        }
+        progressTrack(frac: frac, accent: .teal, markerFracs: voiceMarkerFracs(axis: .distance, total: total))
+        row("Distance left", total > current ? String(format: "%.2f km", (total - current) / 1000) : "0.00 km")
+    }
+
+    @ViewBuilder
+    private func timeProgress(plan: RunPlan, metrics: LiveMetrics?) -> some View {
+        let total = plan.totalSeconds ?? 0
+        let current = metrics?.elapsed ?? 0
+        let frac = total > 0 ? min(1, max(0, current / total)) : 0
+        HStack(alignment: .firstTextBaseline) {
+            Text(formatElapsed(current))
+                .font(.system(.callout, design: .monospaced).weight(.bold))
+                .foregroundStyle(.white)
+            Text("/ \(formatElapsed(total))")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+            Spacer(minLength: 4)
+            Text("\(Int((frac * 100).rounded()))%")
+                .font(.system(.caption, design: .monospaced).weight(.bold))
+                .foregroundStyle(.teal)
+        }
+        progressTrack(frac: frac, accent: .teal, markerFracs: voiceMarkerFracs(axis: .time, total: total))
+        row("Time left", total > current ? formatElapsed(total - current) : "0:00")
+        if let m = metrics { row("Distance", String(format: "%.2f km", m.distanceMeters / 1000)) }
+    }
+
+    @ViewBuilder
+    private func openProgress(metrics: LiveMetrics?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(formatElapsed(metrics?.elapsed ?? 0))
+                    .font(.system(.callout, design: .monospaced).weight(.bold))
+                    .foregroundStyle(.white)
+                Text("elapsed")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.4))
+            }
+            Spacer(minLength: 4)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(String(format: "%.2f km", (metrics?.distanceMeters ?? 0) / 1000))
+                    .font(.system(.callout, design: .monospaced).weight(.bold))
+                    .foregroundStyle(.white)
+                Text("distance")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.4))
+            }
+        }
+        // No fixed end — an indeterminate teal track that just states "open".
+        progressTrack(frac: nil, accent: .teal, markerFracs: [])
+        row("Plan", "open run · no target")
+    }
+
+    private enum ProgressAxis { case distance, time }
+
+    /// Fractions along the track where "speech" events fired this run, so
+    /// the founder can see when the coach actually spoke. Cheap: reads the
+    /// last 80 events from the ring and maps t (sec) / distance to 0..1.
+    private func voiceMarkerFracs(axis: ProgressAxis, total: Double) -> [Double] {
+        guard total > 0 else { return [] }
+        let speech = eventLog.recent.suffix(80).filter { $0.type.lowercased() == "speech" }
+        switch axis {
+        case .time:
+            return speech.compactMap { $0.t >= 0 ? min(1, max(0, $0.t / total)) : nil }
+        case .distance:
+            return speech.compactMap { e in
+                guard let d = e.data["d"], let meters = Double(d) else { return nil }
+                return min(1, max(0, meters / total))
+            }
+        }
+    }
+
+    /// A thin dark track with a bright position dot, web-dashboard style.
+    /// `frac == nil` renders an indeterminate (no-end) track.
+    @ViewBuilder
+    private func progressTrack(frac: Double?, accent: Color, markerFracs: [Double]) -> some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let dotX = (frac ?? 0) * w
+            ZStack(alignment: .leading) {
+                // Track.
+                Capsule()
+                    .fill(.white.opacity(0.08))
+                    .frame(height: 4)
+                if let frac {
+                    // Filled portion.
+                    Capsule()
+                        .fill(accent.opacity(0.55))
+                        .frame(width: max(0, dotX), height: 4)
+                    // Voice-line markers.
+                    ForEach(markerFracs.indices, id: \.self) { i in
+                        Rectangle()
+                            .fill(.white.opacity(0.55))
+                            .frame(width: 1.5, height: 9)
+                            .offset(x: markerFracs[i] * w - 0.75)
+                    }
+                    // Position dot.
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 11, height: 11)
+                        .shadow(color: accent.opacity(0.9), radius: 4)
+                        .offset(x: min(max(0, dotX - 5.5), w - 11))
+                } else {
+                    // Indeterminate: a soft accent wash + a label dot at the head.
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [accent.opacity(0.30), accent.opacity(0.05)],
+                                startPoint: .leading, endPoint: .trailing
+                            )
+                        )
+                        .frame(height: 4)
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 9, height: 9)
+                        .shadow(color: accent.opacity(0.8), radius: 3)
+                }
+            }
+            .frame(maxHeight: .infinity, alignment: .center)
+        }
+        .frame(height: 14)
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - NETWORK INSPECTOR
+
+    /// Verbose 11Labs / LLM request inspector. Header carries live
+    /// in-flight counts per service; the body is a newest-first list of
+    /// recent requests with a phase chip (awaiting PULSES so an in-flight
+    /// synth waiting on the network is unmistakable) and live ms.
+    @ViewBuilder
+    private func networkInspectorSection(now: Date) -> some View {
+        section("NETWORK INSPECTOR", accent: .cyan) {
+            // Endpoint + ping + in-flight header.
+            HStack(spacing: 8) {
+                Text(Config.apiBaseURL.host ?? "proxy")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
                 statusDot(pingColor)
                 Text(pingLabel)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(pingColor)
                     .lineLimit(1)
-            }
-            row("TTS activity", describeActivity(remoteTTS.activity))
-            row("TTS backend", remoteTTS.lastBackend ?? "—")
-            row("TTS latency", remoteTTS.lastLatencyMs.map { "\($0) ms" } ?? "—")
-            HStack(spacing: 6) {
-                Text("TTS cache")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
                 Spacer(minLength: 4)
-                statusDot(remoteTTS.lastWasCacheHit ? .green : .gray)
-                Text(remoteTTS.lastWasCacheHit ? "HIT" : "MISS")
+                inFlightBadge(service: "11Labs", color: .orange)
+                inFlightBadge(service: "LLM", color: .cyan)
+            }
+            .padding(.bottom, 2)
+
+            let entries = Array(netMonitor.entries.prefix(12))
+            if entries.isEmpty {
+                row("Requests", "none yet")
+            } else {
+                ForEach(entries) { entry in
+                    inspectorRow(entry, now: now)
+                }
+            }
+        }
+    }
+
+    /// Live per-service in-flight pill, e.g. "11Labs ●2". Dimmed at zero.
+    @ViewBuilder
+    private func inFlightBadge(service: String, color: Color) -> some View {
+        let count = netMonitor.inFlight[service] ?? 0
+        HStack(spacing: 3) {
+            Text(service)
+                .font(.system(.caption2, design: .monospaced).weight(.bold))
+            Circle()
+                .fill(count > 0 ? color : .white.opacity(0.25))
+                .frame(width: 6, height: 6)
+            Text("\(count)")
+                .font(.system(.caption2, design: .monospaced).weight(.bold))
+        }
+        .foregroundStyle(count > 0 ? color : .white.opacity(0.3))
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background((count > 0 ? color : .white).opacity(0.10), in: Capsule())
+    }
+
+    /// One request row. Open requests tick their elapsed ms at 4 Hz via a
+    /// nested TimelineView so the synth-wait counter visibly climbs; closed
+    /// requests are static at their final ms.
+    @ViewBuilder
+    private func inspectorRow(_ entry: NetworkActivityMonitor.Entry, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(entry.service == "11Labs" ? "11L" : "LLM")
+                    .font(.system(.caption2, design: .monospaced).weight(.heavy))
+                    .foregroundStyle(entry.service == "11Labs" ? .orange : .cyan)
+                    .frame(width: 28, alignment: .leading)
+                phaseChip(entry.phase)
+                Text(prefix(entry.label, 34))
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(remoteTTS.lastWasCacheHit ? .green : .white.opacity(0.6))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                elapsedReadout(entry, now: now)
             }
-            if let err = remoteTTS.lastError {
-                errorRow("TTS error", err)
+            // Meta line: chars + bytes when present.
+            if entry.chars != nil || entry.bytes != nil {
+                HStack(spacing: 8) {
+                    if let c = entry.chars {
+                        Text("\(c) ch")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    if let b = entry.bytes {
+                        Text(formatBytes(b))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.leading, 34)
             }
+            // Error detail in red on failure.
+            if entry.phase == .failed, let detail = entry.detail {
+                Text(prefix(detail, 90))
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+                    .padding(.leading, 34)
+            }
+        }
+        .padding(.vertical, 1)
+    }
+
+    /// Live-ticking elapsed ms. Open requests get a 4 Hz nested timeline so
+    /// the counter climbs in real time; closed requests show the final ms.
+    @ViewBuilder
+    private func elapsedReadout(_ entry: NetworkActivityMonitor.Entry, now: Date) -> some View {
+        if entry.isOpen {
+            TimelineView(.periodic(from: .now, by: 0.25)) { tl in
+                Text("\(entry.elapsedMs(now: tl.date)) ms")
+                    .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(.yellow)
+                    .contentTransition(.numericText())
+            }
+        } else {
+            Text("\(entry.elapsedMs(now: now)) ms")
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    /// Phase chip. `awaiting` pulses (opacity animation) so an in-flight
+    /// synth that is waiting on the network is visually unmistakable.
+    @ViewBuilder
+    private func phaseChip(_ phase: NetworkActivityMonitor.Phase) -> some View {
+        let (label, color): (String, Color) = {
+            switch phase {
+            case .sending:  return ("SEND", .gray)
+            case .awaiting: return ("WAIT", .yellow)
+            case .received: return ("RECV", .green)
+            case .failed:   return ("FAIL", .red)
+            case .cached:   return ("CACHE", .blue)
+            }
+        }()
+        if phase == .awaiting {
+            PulsingChip(label: label, color: color)
+        } else {
+            Text(label)
+                .font(.system(.caption2, design: .monospaced).weight(.bold))
+                .foregroundStyle(color)
+                .padding(.horizontal, 5).padding(.vertical, 1)
+                .background(color.opacity(0.18), in: Capsule())
+                .frame(width: 52, alignment: .leading)
         }
     }
 
@@ -435,30 +710,31 @@ struct ControlRoomView: View {
 
     // MARK: - Formatting
 
-    private func describeActivity(_ activity: RemoteTTS.Activity) -> String {
-        switch activity {
-        case .idle:
-            return "idle"
-        case .synthesizing(let chars):
-            if let started = remoteTTS.synthStartedAt {
-                return "synth \(chars)ch · \(Int(Date().timeIntervalSince(started)))s"
-            }
-            return "synth \(chars)ch"
-        case .playing(let remote):
-            return remote ? "playing (ElevenLabs)" : "playing (Apple)"
-        }
-    }
-
     private func prefix(_ text: String, _ n: Int) -> String {
         text.count > n ? String(text.prefix(n)) + "…" : text
     }
 
     private func formatElapsed(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
+        let s = Int(max(0, seconds))
         let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
         return h > 0
             ? String(format: "%d:%02d:%02d", h, m, sec)
             : String(format: "%d:%02d", m, sec)
+    }
+
+    /// km from meters, trimming a trailing ".0" for whole-km targets.
+    private func formatKm(_ meters: Double) -> String {
+        let km = meters / 1000
+        return km.truncatingRemainder(dividingBy: 1) == 0
+            ? String(format: "%.0f", km)
+            : String(format: "%.1f", km)
+    }
+
+    private func formatBytes(_ bytes: Int) -> String {
+        if bytes < 1024 { return "\(bytes) B" }
+        let kb = Double(bytes) / 1024
+        if kb < 1024 { return String(format: "%.1f KB", kb) }
+        return String(format: "%.1f MB", kb / 1024)
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -466,6 +742,31 @@ struct ControlRoomView: View {
         f.dateFormat = "HH:mm:ss"
         return f
     }()
+}
+
+/// A "WAIT" phase chip that pulses its background so an in-flight request
+/// blocked on the network is unmistakable at a glance. Self-animating via a
+/// repeating `withAnimation` driven by `onAppear` — no parent timeline
+/// needed and the animation stops when the row scrolls off / re-resolves.
+private struct PulsingChip: View {
+    let label: String
+    let color: Color
+    @State private var on = false
+
+    var body: some View {
+        Text(label)
+            .font(.system(.caption2, design: .monospaced).weight(.bold))
+            .foregroundStyle(color)
+            .padding(.horizontal, 5).padding(.vertical, 1)
+            .background(color.opacity(on ? 0.45 : 0.12), in: Capsule())
+            .overlay(Capsule().stroke(color.opacity(on ? 0.9 : 0.3), lineWidth: 1))
+            .frame(width: 52, alignment: .leading)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                    on = true
+                }
+            }
+    }
 }
 
 #Preview {

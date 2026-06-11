@@ -116,13 +116,14 @@ final class VoiceFeedbackQueue {
 
     // MARK: - Radio pacing
 
-    /// Minimum music time between the END of one non-milestone line and the
-    /// START of the next, so the runner gets to enjoy the music before
-    /// someone talks again. km splits / finish (.milestone) are exempt —
-    /// they must land on the marker. ~35s ≈ a verse-and-chorus of music
-    /// before the next voice — the founder wants to actually enjoy the song.
-    /// Tunable: raise for more music, lower for a chattier mix.
-    let minMusicGapSeconds: TimeInterval = 35
+    /// A SHORT breath of music between voice lines — NOT a rigid wait. The
+    /// runner wants to hear the song return for a few seconds between
+    /// segments, but a real-world event deserving feedback should land
+    /// promptly, not sit behind a 35s timer (that long gap, combined with
+    /// the old always-on duck, was what suppressed the music for half a
+    /// minute). km splits / finish (.milestone) are exempt entirely — they
+    /// preempt. ~6s ≈ a couple of bars. Tunable.
+    let minMusicGapSeconds: TimeInterval = 6
 
     /// Seconds of music since the last line ended. Large when nothing has
     /// played yet (so the opener never waits). Read by ContextualCoach /
@@ -413,7 +414,12 @@ final class VoiceFeedbackQueue {
     private func scheduleSessionDeactivate() {
         deactivateTask?.cancel()
         deactivateTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(800))
+            // Hold the session open well past the inter-line music gap (6s)
+            // so we don't tear down + re-activate every gap — that churns
+            // other apps' audio focus and, on a backgrounded watch-mirrored
+            // phone, risks the OS not re-granting the session and dropping
+            // the next line. Only release after a genuinely long silence.
+            try? await Task.sleep(for: .seconds(12))
             guard let self, !Task.isCancelled else { return }
             // Only deactivate if still idle. Another enqueue may have arrived.
             guard self.currentlyPlaying == nil, self.pending.isEmpty else { return }

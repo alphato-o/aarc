@@ -67,7 +67,17 @@ actor AIClient {
         request.timeoutInterval = 90
         request.httpBody = try encoder.encode(plan)
 
-        let (data, response) = try await session.data(for: request)
+        let net = await NetworkActivityMonitor.shared.begin(service: "LLM", label: "generate-script")
+        await NetworkActivityMonitor.shared.awaiting(net)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            await NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            throw error
+        }
+        await NetworkActivityMonitor.shared.finish(net, bytes: data.count)
         guard let http = response as? HTTPURLResponse else {
             throw AIError.transport("non-HTTP response")
         }
@@ -234,9 +244,19 @@ actor AIClient {
         urlRequest.timeoutInterval = 15
         urlRequest.httpBody = try encoder.encode(request)
 
-        let (data, response) = try await withOneRetry { [session, urlRequest] in
-            try await session.data(for: urlRequest)
+        let net = await NetworkActivityMonitor.shared.begin(service: "LLM", label: "dynamic-line")
+        await NetworkActivityMonitor.shared.awaiting(net)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await withOneRetry { [session, urlRequest] in
+                try await session.data(for: urlRequest)
+            }
+        } catch {
+            await NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            throw error
         }
+        await NetworkActivityMonitor.shared.finish(net, bytes: data.count)
         guard let http = response as? HTTPURLResponse else {
             throw AIError.transport("non-HTTP response")
         }
@@ -301,9 +321,19 @@ actor AIClient {
         urlRequest.timeoutInterval = 15
         urlRequest.httpBody = try encoder.encode(request)
 
-        let (data, response) = try await withOneRetry { [session, urlRequest] in
-            try await session.data(for: urlRequest)
+        let net = await NetworkActivityMonitor.shared.begin(service: "LLM", label: "react-line")
+        await NetworkActivityMonitor.shared.awaiting(net)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await withOneRetry { [session, urlRequest] in
+                try await session.data(for: urlRequest)
+            }
+        } catch {
+            await NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            throw error
         }
+        await NetworkActivityMonitor.shared.finish(net, bytes: data.count)
         guard let http = response as? HTTPURLResponse else {
             throw AIError.transport("non-HTTP response")
         }
@@ -371,9 +401,19 @@ actor AIClient {
         urlRequest.timeoutInterval = 15
         urlRequest.httpBody = try encoder.encode(request)
 
-        let (data, response) = try await withOneRetry { [session, urlRequest] in
-            try await session.data(for: urlRequest)
+        let net = await NetworkActivityMonitor.shared.begin(service: "LLM", label: "music-comment")
+        await NetworkActivityMonitor.shared.awaiting(net)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await withOneRetry { [session, urlRequest] in
+                try await session.data(for: urlRequest)
+            }
+        } catch {
+            await NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            throw error
         }
+        await NetworkActivityMonitor.shared.finish(net, bytes: data.count)
         guard let http = response as? HTTPURLResponse else {
             throw AIError.transport("non-HTTP response")
         }

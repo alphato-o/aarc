@@ -54,6 +54,13 @@ final class LocalTTS: NSObject {
         // Activate the audio session BEFORE constructing the utterance,
         // matching the pre-queue order — see RemoteTTS.play for why.
         AudioPlaybackManager.shared.activate()
+        // Duck the music around the Apple voice too. Since the audio-session
+        // baseline is now NON-ducking, this backend must duck itself or it
+        // plays over full-volume music — including the case where an
+        // ElevenLabs synth fails and falls back here. defer guarantees the
+        // music returns on every exit (normal end, stopAll, cancellation).
+        AudioPlaybackManager.shared.beginTransientDuck()
+        defer { AudioPlaybackManager.shared.endTransientDuck() }
 
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = preferredVoice

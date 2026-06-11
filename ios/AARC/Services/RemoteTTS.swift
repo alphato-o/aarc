@@ -386,15 +386,29 @@ final class RemoteTTS: NSObject {
         let body: [String: Any] = ["text": text, "voiceId": voiceId]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw RemoteTTSError.transport("non-HTTP response")
+        // Network inspector: surface the full 11Labs request lifecycle.
+        let net = NetworkActivityMonitor.shared.begin(
+            service: "11Labs", label: text, chars: text.count)
+        NetworkActivityMonitor.shared.awaiting(net)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                NetworkActivityMonitor.shared.fail(net, "non-HTTP response")
+                throw RemoteTTSError.transport("non-HTTP response")
+            }
+            guard (200...299).contains(http.statusCode) else {
+                let bodyText = String(data: data, encoding: .utf8) ?? "<binary>"
+                NetworkActivityMonitor.shared.fail(net, "HTTP \(http.statusCode)")
+                throw RemoteTTSError.httpStatus(http.statusCode, body: bodyText.prefix(300).description)
+            }
+            NetworkActivityMonitor.shared.finish(net, bytes: data.count, detail: "HTTP \(http.statusCode)")
+            return data
+        } catch {
+            // URLSession transport error (timeout, connection lost) — record
+            // it if not already recorded by the guards above.
+            NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            throw error
         }
-        guard (200...299).contains(http.statusCode) else {
-            let bodyText = String(data: data, encoding: .utf8) ?? "<binary>"
-            throw RemoteTTSError.httpStatus(http.statusCode, body: bodyText.prefix(300).description)
-        }
-        return data
     }
 }
 

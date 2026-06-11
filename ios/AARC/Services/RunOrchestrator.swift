@@ -501,18 +501,26 @@ final class RunOrchestrator {
 
         fullScriptSwapTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            do {
-                // Generate the full Sonnet script now, with the TRUE run
-                // type the user just chose. Completes in ~30-50s and
-                // swaps in before km 1 at any real pace; the opener
-                // covers t=0 in the meantime.
-                let full = try await self.generateFull(
-                    plan: plan,
-                    runType: runType,
-                    personalityId: personalityId,
-                    skipOpener: true
-                )
-                guard !Task.isCancelled else { return }
+            // The full script is a BONUS layer of pre-written milestone
+            // lines. The run is fully covered without it — the opener plays
+            // t=0, ContextualCoach reacts live, the director fires + prewarms
+            // km splits, and Jessica produces in the background. So a flaky
+            // network must NEVER surface a yellow "couldn't generate the
+            // full script" error at run end. Retry quietly in the
+            // background; if it never lands, the run still sounds complete.
+            let maxAttempts = 3
+            for attempt in 1...maxAttempts {
+                if Task.isCancelled { return }
+                do {
+                    // Generate the full Sonnet script with the TRUE run type.
+                    // ~30-50s; swaps in before km 1 at any real pace.
+                    let full = try await self.generateFull(
+                        plan: plan,
+                        runType: runType,
+                        personalityId: personalityId,
+                        skipOpener: true
+                    )
+                    guard !Task.isCancelled else { return }
                 // The full script was generated with skipOpener=true so
                 // it doesn't include a t=0 line. Re-introduce the
                 // opener that's already in the current stub so the
@@ -541,12 +549,22 @@ final class RunOrchestrator {
                 // (the fast_start_opener will be pre-marked too if its
                 // t=0 trigger already fired).
                 let metrics = LiveMetricsConsumer.shared.latest ?? .zero
-                ScriptEngine.shared.replaceScript(merged, currentMetrics: metrics)
-                ScriptPreviewStore.shared.latest = merged
-                self.prefetchEarlyLines(script: merged)
-            } catch {
-                if Task.isCancelled { return }
-                self.lastError = "full-script gen failed: \(error.localizedDescription)"
+                    ScriptEngine.shared.replaceScript(merged, currentMetrics: metrics)
+                    ScriptPreviewStore.shared.latest = merged
+                    self.prefetchEarlyLines(script: merged)
+                    return  // landed — done
+                } catch {
+                    if Task.isCancelled { return }
+                    // Non-fatal: log to the run timeline (NOT lastError, so
+                    // no yellow banner), back off, and try again. The run
+                    // sounds complete on the other content layers meanwhile.
+                    RunEventLog.shared.record(
+                        "script.swapRetry",
+                        "attempt \(attempt)/\(maxAttempts): \(error.localizedDescription)")
+                    if attempt < maxAttempts {
+                        try? await Task.sleep(for: .seconds(Double(attempt) * 8))
+                    }
+                }
             }
         }
     }
