@@ -133,12 +133,20 @@ function buildUserPrompt(req: ReactLineRequest): string {
     const c = req.runContext;
     const lines: string[] = [];
 
-    lines.push(`RICKY JUST SAID: "${req.partnerLine.trim()}"`);
-    if (req.partnerSource) {
+    const isMilestone = !!req.partnerSource && req.partnerSource.startsWith("milestone:");
+    if (isMilestone) {
+        lines.push(`MILESTONE: ${req.partnerLine.trim()}`);
         lines.push(`(moment: ${req.partnerSource})`);
+        lines.push("");
+        lines.push("THIS KILOMETRE IS YOURS — Ricky's sitting it out, you mark it. Reward him for crossing it: make him feel it in his body, vivid and immersive, the fuel that drags him to the next marker. Don't just restate the number — react to the ACHIEVEMENT and exactly what it earns him.");
+    } else {
+        lines.push(`RICKY JUST SAID: "${req.partnerLine.trim()}"`);
+        if (req.partnerSource) {
+            lines.push(`(moment: ${req.partnerSource})`);
+        }
+        lines.push("");
+        lines.push("Pick ONE hook from that line — a word, an image, his claim, his punchline, or the topic — and react to THAT: agree and pile on, undercut him, or twist it to your angle. Don't restate his sentence and don't speak in isolation. Then make it yours.");
     }
-    lines.push("");
-    lines.push("Pick ONE hook from that line — a word, an image, his claim, his punchline, or the topic — and react to THAT: agree and pile on, undercut him, or twist it to your angle. Don't restate his sentence and don't speak in isolation. Then make it yours.");
     lines.push("");
     lines.push("RUN STATE:");
     lines.push(`- elapsed: ${formatSeconds(c.elapsedSeconds)} (${Math.round(c.elapsedSeconds)}s)`);
@@ -170,14 +178,16 @@ function buildUserPrompt(req: ReactLineRequest): string {
 
     if (req.recentDispatched && req.recentDispatched.length > 0) {
         lines.push("");
-        lines.push("RECENTLY SPOKEN LINES (both voices — do NOT repeat ideas or phrasing):");
+        lines.push("ALREADY SAID THIS RUN (both voices, your own lines included — these JUST played). Do NOT echo them: change your OPENER, your central IMAGE, your KEY WORDS, and your sentence shape. If a recent line leaned on a word, act or idea, deliberately reach for a DIFFERENT one. Saying the same thing the same way twice reads mechanical and bored — variety is the whole job:");
         for (const r of req.recentDispatched) {
             lines.push(`- ${r}`);
         }
     }
 
     lines.push("");
-    lines.push("Now give your ONE line — a reply that latches onto your chosen hook from Ricky's line. JSON only.");
+    lines.push(isMilestone
+        ? "Now give your ONE milestone line — mark his kilometre, fresh and vivid, nothing like the lines above. JSON only."
+        : "Now give your ONE line — a reply that latches onto your chosen hook from Ricky's line, fresh and nothing like the lines above. JSON only.");
     return lines.join("\n");
 }
 

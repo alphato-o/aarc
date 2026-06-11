@@ -59,18 +59,44 @@ final class Conversation {
     /// something to riff on without reacting to one exact line.
     private var recentRicky: [String] = []
     private var lastRickySource: String = "the run"
+    /// Her OWN recent lines — fed back into the generator so she stops
+    /// repeating the same keyword / manner a few lines running (which read
+    /// mechanical and boring). The pre-generated/pending line lives here too
+    /// (it's appended at generation time), so the NEXT line sees it.
+    private var recentJessica: [String] = []
 
     // MARK: - Tunables
 
-    /// Min run-clock seconds between STARTING two generations — caps LLM/TTS
-    /// spend so she produces at roughly the rate she can be heard. The QUEUE
-    /// (its 35s music gap) is the single pacing authority for WHEN a line
-    /// actually plays; this just throttles how often we generate one.
-    private let produceCooldown: TimeInterval = 42
+    /// BACK-LOADED cadence: seconds between generations, long early (sparse —
+    /// music + a few Ricky jokes carry the pumped opening) shrinking late
+    /// (frequent — Jessica's vivid fuel for the painful back half). Picked by
+    /// `currentCooldown()` off RunDirector.progressFraction.
+    private let earlyCooldown: TimeInterval = 85
+    private let lateCooldown: TimeInterval = 26
     /// Length gates (reuse the proxy's lengthMode contract).
     private let indulgentRoomFloor: TimeInterval = 70
-    private let minGapBetweenIndulgent: TimeInterval = 300
+    private let minGapBetweenIndulgent: TimeInterval = 240
     private let mediumRoomFloor: TimeInterval = 30
+
+    /// Generation cadence for THIS moment — long early, short late.
+    private func currentCooldown() -> TimeInterval {
+        let p = RunDirector.shared.progressFraction
+        return earlyCooldown + (lateCooldown - earlyCooldown) * p
+    }
+
+    /// Merge Ricky's recent lines + her own recent lines into one anti-repeat
+    /// context (capped), so the generator can avoid reusing either voice's
+    /// ideas, phrasing, or openers.
+    private func antiRepeatContext() -> [String] {
+        var recent = ScriptEngine.shared.recentDispatchedLines
+        recent.append(contentsOf: recentJessica)
+        return Array(recent.suffix(14))
+    }
+
+    private func rememberJessica(_ line: String) {
+        recentJessica.append(line)
+        if recentJessica.count > 6 { recentJessica.removeFirst(recentJessica.count - 6) }
+    }
 
     init() {
         let store = UserDefaults.standard
@@ -116,7 +142,10 @@ final class Conversation {
         // before the next must-play split so she can't be guillotined.
         guard !isProducing,
               !VoiceFeedbackQueue.shared.hasPending(sourcePrefix: "jessica"),
-              (lastProducedElapsed.map { elapsed - $0 >= produceCooldown } ?? true),
+              // Cadence from the LAST production, or from t=0 for the first —
+              // so her opening entrance also waits out the long early cooldown
+              // (the start stays Ricky + music while the founder's pumped).
+              (elapsed - (lastProducedElapsed ?? 0) >= currentCooldown()),
               (!recentRicky.isEmpty || elapsed > 60),
               RunDirector.shared.hasRoomForExchange
         else { return }
@@ -124,15 +153,32 @@ final class Conversation {
         startProducing(metrics)
     }
 
-    private func startProducing(_ metrics: LiveMetrics) {
+    /// Jessica TAKES a per-km milestone (intertwined with Ricky, her share
+    /// rising late). Called by ScriptEngine when the Director assigns this km
+    /// to her: it skips Ricky's scripted riff and Jessica delivers instead.
+    func deliverMilestone(km: Int, metrics: LiveMetrics) {
+        guard enabled, RunDirector.shared.isActive else { return }
+        // One of hers at a time; don't stack on a pending line.
+        guard !isProducing, !VoiceFeedbackQueue.shared.hasPending(sourcePrefix: "jessica") else { return }
+        startProducing(metrics, milestoneKm: km)
+    }
+
+    private func startProducing(_ metrics: LiveMetrics, milestoneKm: Int? = nil) {
         isProducing = true
         lastProducedElapsed = metrics.elapsed
 
-        let mode = pickLengthMode(
-            room: RunDirector.shared.roomSecondsForExchange,
-            elapsed: metrics.elapsed,
-            distance: metrics.distanceMeters
-        )
+        // Milestone moments are her REWARD — vivid by design (indulgent late,
+        // medium earlier). Ambient lines use the room/progress-curved pick.
+        let mode: LengthMode
+        if let km = milestoneKm {
+            mode = RunDirector.shared.progressFraction >= 0.55 ? .indulgent : .medium
+            _ = km
+        } else {
+            mode = pickLengthMode(
+                room: RunDirector.shared.roomSecondsForExchange,
+                elapsed: metrics.elapsed,
+                distance: metrics.distanceMeters)
+        }
 
         // Project the numbers forward by the pipeline lead so anything she
         // quotes is roughly right by the time she's heard.
@@ -148,14 +194,24 @@ final class Conversation {
             planKind: plan.kind.rawValue,
             runType: runType.rawValue
         )
-        let partner = recentRicky.last ?? "the run so far"
-        let recent = ScriptEngine.shared.recentDispatchedLines
+        // On a milestone she riffs off the marker itself; otherwise off
+        // Ricky's recent line.
+        let partner: String
+        let partnerSource: String
+        if let km = milestoneKm {
+            partner = "He's just crossed \(km) kilometres."
+            partnerSource = "milestone:km:\(km)"
+        } else {
+            partner = recentRicky.last ?? "the run so far"
+            partnerSource = lastRickySource
+        }
+        let recent = antiRepeatContext()
         let notes = PersonalContextStore.shared.bullets
         let liked = LikedLinesStore.shared.vibeExemplars(personalityId: "jessica")
         let request = AIClient.ReactLineRequest(
             personalityId: "jessica",
             partnerLine: partner,
-            partnerSource: lastRickySource,
+            partnerSource: partnerSource,
             runContext: context,
             recentDispatched: recent.isEmpty ? nil : recent,
             personalNotes: notes.isEmpty ? nil : notes,
@@ -173,24 +229,32 @@ final class Conversation {
                 // ducked synth stall.
                 await RemoteTTS.shared.prefetch(result.text, voiceId: RemoteTTS.jessicaVoiceId)
                 guard !Task.isCancelled, self.enabled, RunDirector.shared.isActive else { return }
-                // Commit the indulgent cool-down only now that a long line
-                // actually exists — a failed/cancelled produce mustn't burn
-                // the 5-minute window.
                 if mode == .indulgent { self.lastIndulgentElapsed = metrics.elapsed }
-                // ENQUEUE straight away. The queue's 35s music gap is the
-                // single authority on WHEN she plays — she lands in the next
-                // quiet stretch, pre-rendered, no double-gating.
-                Speaker.shared.speak(
-                    result.text,
-                    priority: .coaching,
-                    source: "jessica:react",
-                    expiresAfter: 90,
-                    voiceId: RemoteTTS.jessicaVoiceId
-                )
+                // Remember it so the NEXT line doesn't echo it.
+                self.rememberJessica(result.text)
+                // A milestone lands prominently (.milestone, can preempt) and
+                // expires sooner if it's too late; an ambient line rides the
+                // queue's music gap at .coaching.
+                if let km = milestoneKm {
+                    Speaker.shared.speak(
+                        result.text,
+                        priority: .milestone,
+                        source: "jessica:milestone:\(km)",
+                        expiresAfter: 45,
+                        voiceId: RemoteTTS.jessicaVoiceId)
+                } else {
+                    Speaker.shared.speak(
+                        result.text,
+                        priority: .coaching,
+                        source: "jessica:react",
+                        expiresAfter: 90,
+                        voiceId: RemoteTTS.jessicaVoiceId)
+                }
                 self.lastReaction = result.text
                 self.lastError = nil
                 RunEventLog.shared.record("jessica.ready", String(result.text.prefix(70)),
-                                          data: ["len": mode.rawValue])
+                                          data: ["len": mode.rawValue,
+                                                 "km": milestoneKm.map(String.init) ?? ""])
             } catch {
                 if Task.isCancelled { return }
                 self.lastError = error.localizedDescription
@@ -223,8 +287,14 @@ final class Conversation {
     private func pickLengthMode(room: TimeInterval, elapsed: TimeInterval, distance: Double) -> LengthMode {
         let v = variation(elapsed: elapsed, distance: distance, salt: 0xD1B5_4A32_D192_ED03)
         let indulgentClear = lastIndulgentElapsed.map { elapsed - $0 >= minGapBetweenIndulgent } ?? true
-        if room >= indulgentRoomFloor, indulgentClear, v >= 0.90 { return .indulgent }
-        if room >= mediumRoomFloor, v >= 0.58 { return .medium }
+        // Vivid fuel is back-loaded: late in the run she goes long far more
+        // often (the founder wants her detailed actions as fuel after the
+        // halfway pain). Lower thresholds = more medium/indulgent.
+        let p = RunDirector.shared.progressFraction
+        let indulgentThresh = max(0.76, 0.93 - 0.22 * p)
+        let mediumThresh = max(0.38, 0.60 - 0.26 * p)
+        if room >= indulgentRoomFloor, indulgentClear, v >= indulgentThresh { return .indulgent }
+        if room >= mediumRoomFloor, v >= mediumThresh { return .medium }
         return .quip
     }
 
@@ -239,5 +309,6 @@ final class Conversation {
         lastProducedElapsed = nil
         lastIndulgentElapsed = nil
         recentRicky.removeAll()
+        recentJessica.removeAll()
     }
 }

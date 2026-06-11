@@ -315,6 +315,20 @@ final class ScriptEngine {
             )
         }
 
+        // INTERTWINE the voices on per-km splits. The Director may assign
+        // this km to Jessica (her share rising through the run — Ricky sets
+        // the dark early tone, she's the vivid reward late). On her km, keep
+        // the factual announcement above but skip Ricky's scripted riff and
+        // let Jessica deliver the moment instead.
+        if message.triggerSpec.type == .distance, RunDirector.shared.isActive {
+            let km = max(1, Int((metrics.distanceMeters / 1000).rounded()))
+            if RunDirector.shared.milestoneOwnerIsJessica(km: km) {
+                RunEventLog.shared.record("milestone.owner", "jessica", data: ["km": String(km)])
+                Conversation.shared.deliverMilestone(km: km, metrics: metrics)
+                return
+            }
+        }
+
         let text = nextVariantText(for: message)
         RunEventLog.shared.record("script.dispatch", String(text.prefix(80)),
                                   data: ["trigger": message.triggerSpec.humanDescription])

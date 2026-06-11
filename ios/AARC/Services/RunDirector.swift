@@ -71,6 +71,13 @@ final class RunDirector {
     /// imminent because speed is unusable).
     private(set) var nextMustPlayETA: TimeInterval?
 
+    /// How far through the run we are, 0..<1. Drives the back-loaded cadence:
+    /// the founder wants music + a few Ricky jokes early (he's pumped), then
+    /// MORE Jessica + vivid fuel as the pain sets in late. Distance plans use
+    /// distance/total, time plans elapsed/total, open plans a gentle 40-min
+    /// ramp. Never reaches 1 so "the end" still has headroom.
+    private(set) var progressFraction: Double = 0
+
     /// Measured time from "we snapshot the run state to generate a line"
     /// to "the runner hears it" — LLM + TTS + download + queue wait. Fed
     /// by freshly-generated coach lines (see `recordPipelineLatency`).
@@ -141,6 +148,7 @@ final class RunDirector {
         isActive = true
         smoothedSpeedMps = 0
         nextMustPlayETA = nil
+        progressFraction = 0
         lastDistance = 0
         lastTickAt = nil
         prewarmed.removeAll()
@@ -159,6 +167,7 @@ final class RunDirector {
     func processTick(_ metrics: LiveMetrics) {
         guard isActive else { return }
         updateSpeed(metrics)
+        updateProgress(metrics)
         let candidates = upcomingMilestones(metrics: metrics)
         let wasProtected = isProtectedWindow
         nextMustPlayETA = candidates.map(\.eta).filter { $0 >= 0 }.min()
@@ -167,6 +176,37 @@ final class RunDirector {
                                       data: ["eta": String(Int(nextMustPlayETA ?? -1))])
         }
         prewarmImminent(candidates)
+    }
+
+    // MARK: - Progress
+
+    private func updateProgress(_ metrics: LiveMetrics) {
+        let frac: Double
+        if let total = plan.totalMeters, total > 0 {
+            frac = metrics.distanceMeters / total
+        } else if let total = plan.totalSeconds, total > 0 {
+            frac = metrics.elapsed / total
+        } else {
+            // Open plan — no fixed end; ramp gently over 40 minutes so the
+            // back-loaded cadence still has somewhere to go.
+            frac = metrics.elapsed / 2400
+        }
+        progressFraction = min(0.999, max(0, frac))
+    }
+
+    /// Who delivers the per-km milestone at km `km`. The two voices
+    /// intertwine, and Jessica's share rises through the run — Ricky's dark
+    /// jokes set the early tone, Jessica's vivid reward carries the painful
+    /// back half. Deterministic per km (reproducible), well-mixed so it
+    /// alternates rather than clumps.
+    func milestoneOwnerIsJessica(km: Int) -> Bool {
+        guard Conversation.shared.enabled else { return false }
+        let share = min(0.92, max(0.40, 0.40 + 0.55 * progressFraction))
+        var x = UInt64(bitPattern: Int64(km)) &* 2_654_435_761 &+ 0x9E37_79B9_7F4A_7C15
+        x = (x ^ (x >> 30)) &* 0xbf58_476d_1ce4_e5b9
+        x = (x ^ (x >> 27)) &* 0x94d0_49bb_1331_11eb
+        x = x ^ (x >> 31)
+        return Double(x >> 11) / Double(1 << 53) < share
     }
 
     // MARK: - Speed
