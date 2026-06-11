@@ -69,19 +69,35 @@ final class NetworkActivityMonitor {
     /// Response arrived OK.
     func finish(_ id: UUID, bytes: Int? = nil, detail: String? = nil) {
         update(id) { $0.phase = .received; $0.endedAt = Date(); $0.bytes = bytes; $0.detail = detail }
+        persist(id)
         decFlight(id)
     }
 
     /// Served from cache — zero network.
     func cached(_ id: UUID) {
         update(id) { $0.phase = .cached; $0.endedAt = Date() }
+        persist(id)
         decFlight(id)
     }
 
     /// Request failed.
     func fail(_ id: UUID, _ error: String) {
         update(id) { $0.phase = .failed; $0.endedAt = Date(); $0.detail = String(error.prefix(120)) }
+        persist(id)
         decFlight(id)
+    }
+
+    /// Mirror a completed request into the run event log so the network
+    /// inspector can be REPLAYED for a past run (on device + on the
+    /// dashboard), not just watched live. No-op outside an active run.
+    private func persist(_ id: UUID) {
+        guard let e = entries.first(where: { $0.id == id }) else { return }
+        var data: [String: String] = ["svc": e.service, "phase": e.phase.rawValue]
+        data["ms"] = String(e.elapsedMs(now: Date()))
+        if let b = e.bytes { data["bytes"] = String(b) }
+        if let c = e.chars { data["chars"] = String(c) }
+        if let d = e.detail { data["info"] = String(d.prefix(80)) }
+        RunEventLog.shared.record("net.req", e.label, data: data)
     }
 
     func reset() { entries.removeAll(); inFlight.removeAll() }

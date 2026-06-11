@@ -267,6 +267,63 @@ final class RunEventLog {
     nonisolated static func logFileURL(for runId: UUID) -> URL {
         runlogsDirectory.appendingPathComponent("\(runId.uuidString).jsonl")
     }
+
+    // MARK: - Archive readers (historical Control Room replay)
+
+    /// A past run that has an on-device diagnostics log, for the history list.
+    struct ArchivedRun: Identifiable, Sendable {
+        let runId: UUID
+        let startedAt: Date          // wall time of the first event
+        let endedAt: Date?           // wall time of run.end, if present
+        let eventCount: Int
+        var id: UUID { runId }
+        var duration: TimeInterval? { endedAt.map { $0.timeIntervalSince(startedAt) } }
+    }
+
+    /// List every run with an on-device JSONL log, newest first. Cheap: reads
+    /// only the first + last line of each file for the time span + a quick
+    /// line count. Off-main safe.
+    nonisolated static func archivedRuns() -> [ArchivedRun] {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: runlogsDirectory, includingPropertiesForKeys: nil) else { return [] }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var out: [ArchivedRun] = []
+        for url in files where url.pathExtension == "jsonl" {
+            guard let runId = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
+                  let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let lines = content.split(separator: "\n", omittingEmptySubsequences: true)
+            guard !lines.isEmpty else { continue }
+            func wall(_ line: Substring) -> Date? {
+                guard let d = line.data(using: .utf8),
+                      let ev = try? JSONDecoder().decode(RunLogEvent.self, from: d) else { return nil }
+                return iso.date(from: ev.wall)
+            }
+            let start = wall(lines.first!) ?? Date(timeIntervalSince1970: 0)
+            // run.end is normally the last meaningful line.
+            let end = lines.reversed().lazy.compactMap { line -> Date? in
+                guard let d = line.data(using: .utf8),
+                      let ev = try? JSONDecoder().decode(RunLogEvent.self, from: d),
+                      ev.type == "run.end" || ev.type == "run" else { return nil }
+                return iso.date(from: ev.wall)
+            }.first ?? wall(lines.last!)
+            out.append(ArchivedRun(runId: runId, startedAt: start, endedAt: end, eventCount: lines.count))
+        }
+        return out.sorted { $0.startedAt > $1.startedAt }
+    }
+
+    /// Load the full ordered event stream for a past run (for the replayed
+    /// Control Room). Off-main safe.
+    nonisolated static func loadEvents(runId: UUID) -> [RunLogEvent] {
+        let url = logFileURL(for: runId)
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        return content.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let d = line.data(using: .utf8) else { return nil }
+            return try? decoder.decode(RunLogEvent.self, from: d)
+        }
+    }
     nonisolated static func audioDirectory(for runId: UUID) -> URL {
         runaudioDirectory.appendingPathComponent(runId.uuidString, isDirectory: true)
     }

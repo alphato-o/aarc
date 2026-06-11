@@ -221,6 +221,8 @@ export const APP_HTML = `<!doctype html>
         <span><i style="background:var(--hr)"></i>HR (bpm)</span>
         <span><i style="background:var(--ricky)"></i>ricky</span>
         <span><i style="background:var(--jessica)"></i>jessica</span>
+        <span><i style="background:#d29922"></i>net 11Labs</span>
+        <span><i style="background:#39c5cf"></i>net LLM</span>
       </div>
       <div id="chartempty">Select a run</div>
     </div>
@@ -274,19 +276,22 @@ var C = {
   prewarm: "#a371f7", coach: "#388bfd", drop: "#f85149", preempt: "#d29922",
   fallback: "#d29922", gen: "#1f6feb", endpoint: "#2ea043",
   bound: "#8b949e", error: "#f85149",
+  // network lane (net.req): 11Labs amber, LLM cyan, failed red, cached dim blue
+  net11Labs: "#d29922", netLLM: "#39c5cf", netFail: "#f85149", netCached: "#4a6b8a",
   axis: "#21262d", grid: "#1b212a", axisText: "#8b949e", select: "#58a6ff"
 };
 
 // chart geometry
 var PAD_L = 46, PAD_R = 46, PAD_T = 14;
 var PLOT_H = 170;          // performance plot
-var MARK_H = 56;           // event-marker strip directly under the plot
+var MARK_ROWS = 5;         // speech, gen, network, director, control
+var MARK_H = 70;           // event-marker strip directly under the plot
 var AXIS_H = 22;           // x-axis labels
 var CHART_H = PAD_T + PLOT_H + MARK_H + AXIS_H;
 
 // marker rows inside the strip (each a thin lane)
-var ROW = { speech: 0, gen: 1, director: 2, control: 3 };
-var ROW_H = MARK_H / 4;
+var ROW = { speech: 0, gen: 1, network: 2, director: 3, control: 4 };
+var ROW_H = MARK_H / MARK_ROWS;
 
 var state = {
   runs: [], runId: null, events: [], metrics: [],
@@ -482,17 +487,36 @@ function computeSummary(meta) {
   function avg(a) { if (!a.length) return NaN; var s = 0; a.forEach(function (x) { s += x; }); return s / a.length; }
   function max(a) { return a.length ? Math.max.apply(null, a) : NaN; }
   var speechCt = 0, errCt = 0;
+  // network rollup: count, failures, and 11Labs latency percentiles.
+  var netCt = 0, netFailCt = 0, elevenMs = [];
   state.events.forEach(function (ev) {
     if (ev.type === "speech") speechCt++;
     if (ev.type === "error" || ev.type === "tts.fallback" || ev.type === "gen.error") errCt++;
+    if (ev.type === "net.req") {
+      netCt++;
+      var nd = ev.data || {};
+      if (String(nd.phase) === "failed") netFailCt++;
+      if (String(nd.svc) === "11Labs" && String(nd.phase) !== "cached") {
+        var nms = num(nd.ms);
+        if (isFinite(nms) && nms >= 0) elevenMs.push(nms);
+      }
+    }
   });
+  function pct(a, p) {
+    if (!a.length) return NaN;
+    var s = a.slice().sort(function (x, y) { return x - y; });
+    var i = Math.min(s.length - 1, Math.max(0, Math.round((p / 100) * (s.length - 1))));
+    return s[i];
+  }
   var dist = state.maxDist > 0 ? state.maxDist
     : (has(meta.distance_m) ? num(meta.distance_m) : NaN);
   var avgPace = (isFinite(dist) && dist > 0 && state.dur > 0) ? state.dur / (dist / 1000) : NaN;
   state.summary = {
     duration: state.dur, distance: dist, avgPace: avgPace,
     avgHr: avg(hrs), maxHr: max(hrs), avgKmh: avg(kmhs), maxKmh: max(kmhs),
-    metricsCt: m.length, speechCt: speechCt, errCt: errCt
+    metricsCt: m.length, speechCt: speechCt, errCt: errCt,
+    netCt: netCt, netFailCt: netFailCt,
+    elevenP50: pct(elevenMs, 50), elevenP95: pct(elevenMs, 95)
   };
   renderSummary();
 }
@@ -513,6 +537,11 @@ function renderSummary() {
   html += row("Metrics pts", String(s.metricsCt));
   html += row("Speech lines", String(s.speechCt));
   if (s.errCt) html += row("Errors", String(s.errCt));
+  if (s.netCt) {
+    html += row("Net requests", String(s.netCt) + (s.netFailCt ? " (" + s.netFailCt + " failed)" : ""));
+    if (isFinite(s.elevenP50)) html += row("11Labs p50", Math.round(s.elevenP50) + " ms");
+    if (isFinite(s.elevenP95)) html += row("11Labs p95", Math.round(s.elevenP95) + " ms");
+  }
   box.innerHTML = html || '<div class="row"><span>No data</span><span></span></div>';
 }
 
@@ -688,7 +717,7 @@ function render() {
   });
 
   // ---- marker strip backgrounds -------------------------------------
-  for (var ri = 0; ri < 4; ri++) {
+  for (var ri = 0; ri < MARK_ROWS; ri++) {
     var ry = markTop + ri * ROW_H;
     if (ri > 0) chart.appendChild(el("line", { x1: PAD_L, y1: ry, x2: PAD_L + plotW, y2: ry,
       stroke: C.grid, "stroke-opacity": 0.4 }));
@@ -760,6 +789,48 @@ function render() {
       withTitle(jc, type + " @ " + fmtClock(ev.t) + (ev.detail ? ": " + ev.detail : ""));
       clickable(jc, idx);
       chart.appendChild(jc);
+      return;
+    }
+
+    // NETWORK lane (net.req): one request per marker.
+    //   color  = svc (11Labs amber / LLM cyan)
+    //   red    = phase "failed"
+    //   dim    = phase "cached"
+    //   height = latency (data.ms) -> taller bar = slower request
+    if (type === "net.req") {
+      var ny = markTop + ROW.network * ROW_H;
+      var svc = String(data.svc || "");
+      var phase = String(data.phase || "");
+      var nms = has(data.ms) ? num(data.ms) : NaN;
+      var failed = phase === "failed";
+      var cached = phase === "cached";
+      var ncolor = failed ? C.netFail
+        : cached ? C.netCached
+        : svc === "LLM" ? C.netLLM
+        : svc === "11Labs" ? C.net11Labs
+        : C.bound;
+      // bar height ~ ms (1px per 40ms), clamped to the lane; cached/no-ms = stub.
+      var nh = (isFinite(nms) && nms > 0) ? Math.min(Math.max(nms / 40, 4), ROW_H - 4) : 5;
+      var nbar = el("rect", { x: px - 1.5, y: ny + ROW_H - 1 - nh, width: 3, height: nh,
+        rx: 1, fill: ncolor, "fill-opacity": cached ? 0.7 : 1,
+        stroke: sel ? C.select : "none", "stroke-width": 1.5 });
+      var nbits = [(svc || "net") + " net.req", "@ " + fmtClock(ev.t)];
+      if (ev.detail) nbits.push(String(ev.detail));
+      if (isFinite(nms)) nbits.push(nms + "ms");
+      if (phase) nbits.push(phase);
+      if (has(data.bytes)) nbits.push(data.bytes + "B");
+      if (has(data.info)) nbits.push(String(data.info));
+      withTitle(nbar, nbits.join(" \\u00b7 "));
+      clickable(nbar, idx);
+      chart.appendChild(nbar);
+      // failed requests also get an X tick above the bar so they pop.
+      if (failed) {
+        var fx = px, fy = ny + 3;
+        var xm = el("path", { d: "M" + (fx - 3) + " " + fy + "L" + (fx + 3) + " " + (fy + 6) +
+          "M" + (fx + 3) + " " + fy + "L" + (fx - 3) + " " + (fy + 6),
+          stroke: C.netFail, "stroke-width": 1.5, "pointer-events": "none" });
+        chart.appendChild(xm);
+      }
       return;
     }
 

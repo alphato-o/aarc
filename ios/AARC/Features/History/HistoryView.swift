@@ -10,6 +10,16 @@ struct HistoryView: View {
     @State private var deletingId: PersistentIdentifier?
     @State private var deleteError: String?
 
+    /// Archived diagnostics logs on device, newest first. Loaded off-main.
+    /// Used to surface a per-row "Control Room" replay affordance when a
+    /// history run lines up with a recorded diagnostics log.
+    @State private var archivedRuns: [RunEventLog.ArchivedRun] = []
+
+    /// A history run matches a diagnostics log when their start times are
+    /// within this window. The diagnostics `runId` is the mirroring/run id,
+    /// which need not equal `RunRecord.id`, so we can't match by id.
+    private static let matchWindow: TimeInterval = 120
+
     var body: some View {
         NavigationStack {
             Group {
@@ -34,6 +44,16 @@ struct HistoryView: View {
                                     Label("Delete", systemImage: "trash")
                                 }
                             }
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                if let archived = diagnostics(for: run) {
+                                    NavigationLink {
+                                        ControlRoomView(replay: archived)
+                                    } label: {
+                                        Label("Control Room", systemImage: "waveform.path.ecg")
+                                    }
+                                    .tint(.purple)
+                                }
+                            }
                             .opacity(deletingId == run.persistentModelID ? 0.4 : 1)
                         }
                     }
@@ -41,6 +61,21 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("History")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        RunDiagnosticsListView()
+                    } label: {
+                        Label("Run Diagnostics", systemImage: "waveform.path.ecg")
+                    }
+                }
+            }
+            .task {
+                let archived = await Task.detached(priority: .utility) {
+                    RunEventLog.archivedRuns()
+                }.value
+                archivedRuns = archived
+            }
             .alert(
                 "Delete this run from AARC and Apple Health?",
                 isPresented: Binding(
@@ -69,6 +104,18 @@ struct HistoryView: View {
                 Text(detail)
             }
         }
+    }
+
+    /// The archived diagnostics log for a history run, if one exists, matched
+    /// by start time within `matchWindow` (their ids differ). Picks the
+    /// closest-in-time log when several fall inside the window.
+    private func diagnostics(for run: RunRecord) -> RunEventLog.ArchivedRun? {
+        archivedRuns
+            .filter { abs($0.startedAt.timeIntervalSince(run.startedAt)) <= Self.matchWindow }
+            .min { a, b in
+                abs(a.startedAt.timeIntervalSince(run.startedAt))
+                    < abs(b.startedAt.timeIntervalSince(run.startedAt))
+            }
     }
 
     private func delete(_ run: RunRecord) async {

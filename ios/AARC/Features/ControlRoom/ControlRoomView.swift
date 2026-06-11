@@ -14,6 +14,16 @@ import AARCKit
 /// rows that are in-flight tick faster (4 Hz) via their own nested
 /// `TimelineView` so a synth's "awaiting the network" ms ticks smoothly.
 struct ControlRoomView: View {
+    /// When non-nil, the view is a REPLAY of a past run reconstructed from
+    /// its recorded JSONL events instead of a live mirror of the singletons.
+    /// nil = the original LIVE behavior, byte-for-byte unchanged.
+    let replay: RunEventLog.ArchivedRun?
+
+    /// Recorded events for the replayed run (loaded once, off-main). Empty
+    /// in live mode and until the background load finishes in replay mode.
+    @State private var replayEvents: [RunLogEvent] = []
+    @State private var replayLoaded = false
+
     @State private var consumer = LiveMetricsConsumer.shared
     @State private var phoneSession = PhoneSession.shared
     @State private var mirror = MirroringReceiver.shared
@@ -24,6 +34,14 @@ struct ControlRoomView: View {
     @State private var eventLog = RunEventLog.shared
     @State private var netMonitor = NetworkActivityMonitor.shared
     @State private var planStore = ScriptPreviewStore.shared
+
+    /// Default initializer keeps the LIVE call sites (`ControlRoomView()`)
+    /// unchanged; pass a `replay:` to reconstruct a historical run.
+    init(replay: RunEventLog.ArchivedRun? = nil) {
+        self.replay = replay
+    }
+
+    private var isReplay: Bool { replay != nil }
 
     // MARK: - Ping probe state
 
@@ -44,15 +62,11 @@ struct ControlRoomView: View {
         TimelineView(.periodic(from: .now, by: 1)) { timeline in
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    header(now: timeline.date)
-                    runProgressSection(now: timeline.date)
-                    networkInspectorSection(now: timeline.date)
-                    watchLinkSection
-                    directorSection(now: timeline.date)
-                    voiceQueueSection(now: timeline.date)
-                    voicesSection
-                    musicSection
-                    eventTailSection
+                    if isReplay {
+                        replayBody(now: timeline.date)
+                    } else {
+                        liveBody(now: timeline.date)
+                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
@@ -60,8 +74,67 @@ struct ControlRoomView: View {
         }
         .background(Color(red: 0.03, green: 0.03, blue: 0.05).ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .onAppear { startProbe() }
+        .onAppear {
+            // Never start the live /ping probe in replay mode.
+            if isReplay { loadReplayIfNeeded() } else { startProbe() }
+        }
         .onDisappear { stopProbe() }
+    }
+
+    /// The original LIVE layout — every section a mirror of an @Observable
+    /// singleton, plus the active probe. Unchanged from before replay mode.
+    @ViewBuilder
+    private func liveBody(now: Date) -> some View {
+        header(now: now)
+        runProgressSection(now: now)
+        networkInspectorSection(now: now)
+        watchLinkSection
+        directorSection(now: now)
+        voiceQueueSection(now: now)
+        voicesSection
+        musicSection
+        eventTailSection
+    }
+
+    /// The REPLAY layout — the SAME sections reconstructed from recorded
+    /// events. Purely-live gauges (watch link, director, voice queue,
+    /// voices, music, ping probe) are replaced by a derived RUN SUMMARY.
+    @ViewBuilder
+    private func replayBody(now: Date) -> some View {
+        replayHeader()
+        if !replayLoaded {
+            replayLoadingHint()
+        } else {
+            replayRunProgressSection()
+            replayNetworkInspectorSection(now: now)
+            replayRunSummarySection()
+            replayEventTailSection()
+        }
+    }
+
+    /// Load the replayed run's events once, off the main actor.
+    private func loadReplayIfNeeded() {
+        guard isReplay, !replayLoaded else { return }
+        guard let runId = replay?.runId else { return }
+        Task {
+            let events = await Task.detached(priority: .userInitiated) {
+                RunEventLog.loadEvents(runId: runId)
+            }.value
+            replayEvents = events
+            replayLoaded = true
+        }
+    }
+
+    @ViewBuilder
+    private func replayLoadingHint() -> some View {
+        section("LOADING", accent: .teal) {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small).tint(.teal)
+                Text("Reconstructing run from on-device log…")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+        }
     }
 
     // MARK: - Header
@@ -91,6 +164,278 @@ struct ControlRoomView: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.35))
             }
+        }
+    }
+
+    // MARK: - REPLAY: header
+
+    /// Replay header: run date + duration + a clear REPLAY badge, instead of
+    /// the live elapsed clock.
+    @ViewBuilder
+    private func replayHeader() -> some View {
+        HStack(spacing: 10) {
+            Text("CONTROL ROOM")
+                .font(.caption.weight(.heavy))
+                .tracking(2.0)
+                .foregroundStyle(.white.opacity(0.9))
+            Text("REPLAY")
+                .font(.caption2.weight(.heavy))
+                .tracking(1.5)
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .background(Color.purple.opacity(0.28), in: Capsule())
+                .foregroundStyle(.purple)
+                .overlay(Capsule().stroke(.purple.opacity(0.6), lineWidth: 1))
+            Spacer(minLength: 0)
+            if let run = replay {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(run.startedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
+                        .font(.system(.caption, design: .monospaced).weight(.bold))
+                        .foregroundStyle(.white)
+                    Text(run.duration.map { formatElapsed($0) } ?? "—")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+        }
+    }
+
+    // MARK: - REPLAY: run progress
+
+    /// Replay progress: derived purely from recorded `metrics` events. The
+    /// end value is the last metrics d/t, so the track shows the run's full
+    /// extent (filled to 100%) with voice markers overlaid by elapsed time.
+    @ViewBuilder
+    private func replayRunProgressSection() -> some View {
+        let metrics = replayMetricsEvents()
+        let lastDistance = metrics.compactMap { Double($0.data["d"] ?? "") }.last
+        let lastElapsed = metrics.last.map { max(0, $0.t) }
+            ?? replay?.duration
+        section("RUN PROGRESS", accent: .teal) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(formatElapsed(lastElapsed ?? 0))
+                        .font(.system(.callout, design: .monospaced).weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("elapsed")
+                        .font(.caption2).foregroundStyle(.white.opacity(0.4))
+                }
+                Spacer(minLength: 4)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(lastDistance.map { String(format: "%.2f km", $0 / 1000) } ?? "—")
+                        .font(.system(.callout, design: .monospaced).weight(.bold))
+                        .foregroundStyle(.white)
+                    Text("distance")
+                        .font(.caption2).foregroundStyle(.white.opacity(0.4))
+                }
+            }
+            // Completed run: a fully-filled teal track with voice markers
+            // placed by their elapsed-time fraction over the run span.
+            progressTrack(
+                frac: lastElapsed != nil ? 1 : nil,
+                accent: .teal,
+                markerFracs: replayVoiceMarkerFracs(totalElapsed: lastElapsed)
+            )
+            row("Metrics samples", "\(metrics.count)")
+        }
+    }
+
+    /// Fractions (0..1) along the replay track where voice lines played,
+    /// from `speech` / `voice.play` events mapped by elapsed-time over the
+    /// run span. Robust for any plan kind (recorded speech carries `t` but
+    /// not distance).
+    private func replayVoiceMarkerFracs(totalElapsed: Double?) -> [Double] {
+        guard let total = totalElapsed, total > 0 else { return [] }
+        return replayEvents.filter {
+            let l = $0.type.lowercased()
+            return l == "speech" || l == "voice.play"
+        }.compactMap { $0.t >= 0 ? min(1, max(0, $0.t / total)) : nil }
+    }
+
+    // MARK: - REPLAY: network inspector
+
+    /// Replay network inspector: reconstruct rows from recorded `net.req`
+    /// events. All historical → all rendered as completed rows (no pulsing,
+    /// no in-flight), newest first, plus a per-service / latency summary.
+    @ViewBuilder
+    private func replayNetworkInspectorSection(now: Date) -> some View {
+        let entries = replayNetEntries()
+        section("NETWORK INSPECTOR", accent: .cyan) {
+            replayNetSummary(entries)
+                .padding(.bottom, 2)
+            if entries.isEmpty {
+                row("Requests", "none recorded")
+            } else {
+                ForEach(entries) { entry in
+                    inspectorRow(entry, now: now)
+                }
+            }
+        }
+    }
+
+    /// Summary line: counts per service, # failed, avg/median ms.
+    @ViewBuilder
+    private func replayNetSummary(_ entries: [NetworkActivityMonitor.Entry]) -> some View {
+        let elevenlabs = entries.filter { $0.service == "11Labs" }.count
+        let llm = entries.filter { $0.service == "LLM" }.count
+        let failed = entries.filter { $0.phase == .failed }.count
+        let mss = entries.map { $0.elapsedMs(now: $0.endedAt ?? $0.startedAt) }.sorted()
+        let avg = mss.isEmpty ? 0 : mss.reduce(0, +) / mss.count
+        let median = mss.isEmpty ? 0 : mss[mss.count / 2]
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                inspectorSummaryPill("11L", count: elevenlabs, color: .orange)
+                inspectorSummaryPill("LLM", count: llm, color: .cyan)
+                inspectorSummaryPill("FAIL", count: failed, color: failed > 0 ? .red : .white.opacity(0.3))
+                Spacer(minLength: 0)
+            }
+            if !mss.isEmpty {
+                Text("avg \(avg) ms · median \(median) ms")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func inspectorSummaryPill(_ label: String, count: Int, color: Color) -> some View {
+        HStack(spacing: 3) {
+            Text(label).font(.system(.caption2, design: .monospaced).weight(.bold))
+            Text("\(count)").font(.system(.caption2, design: .monospaced).weight(.bold))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 6).padding(.vertical, 2)
+        .background(color.opacity(0.12), in: Capsule())
+    }
+
+    /// Rebuild `NetworkActivityMonitor.Entry` rows from recorded `net.req`
+    /// events so we can reuse `inspectorRow` / `phaseChip` verbatim. Newest
+    /// first. Phase comes from `data["phase"]`; ms back-dates `startedAt`
+    /// from a synthetic `endedAt` so `elapsedMs` reports the recorded ms.
+    private func replayNetEntries() -> [NetworkActivityMonitor.Entry] {
+        let reqs = replayEvents.filter { $0.type.lowercased() == "net.req" }
+        let rows: [NetworkActivityMonitor.Entry] = reqs.map { e in
+            let svc = e.data["svc"] ?? "LLM"
+            let ms = Int(e.data["ms"] ?? "") ?? 0
+            let end = Date()
+            let start = end.addingTimeInterval(-Double(ms) / 1000)
+            var entry = NetworkActivityMonitor.Entry(
+                service: svc,
+                label: e.detail,
+                chars: e.data["chars"].flatMap { Int($0) },
+                phase: replayPhase(e.data["phase"]),
+                startedAt: start
+            )
+            entry.endedAt = end
+            entry.bytes = e.data["bytes"].flatMap { Int($0) }
+            entry.detail = e.data["info"]
+            return entry
+        }
+        // Recorded oldest-first; the inspector wants newest-first.
+        return rows.reversed()
+    }
+
+    /// Map a recorded `data["phase"]` string to a monitor Phase. Historical
+    /// rows are always terminal, so an unknown/missing phase is treated as
+    /// `received` (a completed, non-error row).
+    private func replayPhase(_ raw: String?) -> NetworkActivityMonitor.Phase {
+        switch raw {
+        case "failed":   return .failed
+        case "cached":   return .cached
+        case "received": return .received
+        default:         return .received
+        }
+    }
+
+    // MARK: - REPLAY: run summary (replaces the live-only gauges)
+
+    /// A derived overview shown in place of the purely-live gauges (watch
+    /// link, director, voice queue, voices, music). Everything is counted
+    /// straight off the recorded event stream.
+    @ViewBuilder
+    private func replayRunSummarySection() -> some View {
+        let types = replayTypeCounts()
+        let netEntries = replayNetEntries()
+        let synthMs = netEntries
+            .filter { $0.service == "11Labs" && $0.phase != .cached }
+            .map { $0.elapsedMs(now: $0.endedAt ?? $0.startedAt) }
+        let avgSynth = synthMs.isEmpty ? nil : synthMs.reduce(0, +) / synthMs.count
+        let netFails = netEntries.filter { $0.phase == .failed }.count
+        section("RUN SUMMARY", accent: .purple) {
+            row("Voice lines", "\(types["speech", default: 0] + types["voice.play", default: 0])")
+            row("Jessica ready", "\(types["jessica.ready", default: 0])")
+            row("Coach triggers", "\(types["coach.trigger", default: 0])")
+            row("Script dispatches", "\(types["script.dispatch", default: 0])")
+            row("TTS fallbacks", "\(types["tts.fallback", default: 0])")
+            row("Stale / preempt drops",
+                "\(types["voice.dropStale", default: 0]) / \(types["voice.preempt", default: 0])")
+            row("Endpoint switches", "\(types["endpoint.switch", default: 0])")
+            if let avgSynth {
+                row("Avg synth", "\(avgSynth) ms")
+            }
+            if netFails > 0 {
+                errorRow("Network failures", "\(netFails) request(s) failed")
+            } else {
+                row("Network failures", "0")
+            }
+            row("Total events", "\(replayEvents.count)")
+        }
+    }
+
+    // MARK: - REPLAY: event tail (full stream)
+
+    /// In replay the tail shows the FULL recorded stream (scrollable),
+    /// newest first, not just the last 30.
+    @ViewBuilder
+    private func replayEventTailSection() -> some View {
+        section("EVENT TAIL", accent: .gray) {
+            let rows = replayEventRows()
+            if rows.isEmpty {
+                row("Events", "none")
+            } else {
+                ForEach(rows.indices, id: \.self) { i in
+                    let r = rows[i]
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text(r.time)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.35))
+                        Text(r.type)
+                            .font(.system(.caption2, design: .monospaced).weight(.semibold))
+                            .foregroundStyle(r.isError ? .red : .white.opacity(0.6))
+                        Text(r.message)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(r.isError ? .red : .white.opacity(0.85))
+                            .lineLimit(2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    // MARK: - REPLAY: event-stream helpers
+
+    private func replayMetricsEvents() -> [RunLogEvent] {
+        replayEvents.filter { $0.type.lowercased() == "metrics" }
+    }
+
+    /// Count of each event `type` across the whole replayed stream.
+    private func replayTypeCounts() -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for e in replayEvents { counts[e.type, default: 0] += 1 }
+        return counts
+    }
+
+    /// Full stream, newest-first, mapped to the tail's row model. Mirrors
+    /// the live `eventRows()` formatting but without the 30-event cap.
+    private func replayEventRows() -> [EventRowModel] {
+        replayEvents.reversed().map { e in
+            let lowered = e.type.lowercased()
+            return EventRowModel(
+                time: e.t >= 0 ? String(format: "%5.0fs", e.t) : "  pre",
+                type: e.type,
+                message: e.detail,
+                isError: lowered.contains("error") || lowered.contains("fallback") || lowered.contains("drop")
+            )
         }
     }
 
