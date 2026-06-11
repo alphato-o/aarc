@@ -14,6 +14,14 @@ struct AARCApp: App {
         if UserDefaults.standard.object(forKey: "aarc.sync.audioEnabled") == nil {
             UserDefaults.standard.set(true, forKey: "aarc.sync.audioEnabled")
         }
+        // Sentry (aarc-ios project) — default DSN so handled-error
+        // reporting works out of the box; the Settings field overrides.
+        if UserDefaults.standard.string(forKey: CrashReporter.dsnDefaultsKey)?.isEmpty != false {
+            UserDefaults.standard.set(
+                "https://76f5937f7ff8e394a4d9a24d1601b5e8@o4511545890701312.ingest.us.sentry.io/4511545896337408",
+                forKey: CrashReporter.dsnDefaultsKey
+            )
+        }
         // Bridge handled-error reports into the run event log so they
         // show up in the Control Room tail + post-run replay.
         CrashReporter.setEventSink { kind, message in

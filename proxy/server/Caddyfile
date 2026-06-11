@@ -1,0 +1,3 @@
+gateway.aarun.club {
+	reverse_proxy aarc-proxy:8787
+}

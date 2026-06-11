@@ -1,0 +1,32 @@
+# AARC US gateway — platform-agnostic deployment (any box with Docker).
+# Bring-up:   docker compose up -d --build
+# Migrate:    rsync the proxy/ tree to the new box, copy .env, same command.
+#
+# Caddy terminates TLS for gateway.aarun.club (auto Let's Encrypt; DNS must
+# be a DIRECT grey-cloud A record to this box). If the host already runs
+# something on 80/443, comment the caddy service out and point the existing
+# reverse proxy at 127.0.0.1:8787 instead.
+services:
+  aarc-proxy:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
