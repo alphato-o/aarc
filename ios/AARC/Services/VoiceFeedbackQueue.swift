@@ -109,11 +109,38 @@ final class VoiceFeedbackQueue {
     private(set) var droppedDuplicate: Int = 0
     /// Items interrupted by a higher-priority enqueue.
     private(set) var preempted: Int = 0
+    /// When the last spoken line FINISHED (audio done). Drives the music
+    /// breathing-room gap so voices don't pile up wall-to-wall — the floor
+    /// returns to music between speakers, like a radio show. nil = none yet.
+    private(set) var lastVoiceEndedAt: Date?
+
+    // MARK: - Radio pacing
+
+    /// Minimum music time between the END of one non-milestone line and the
+    /// START of the next, so the runner gets to enjoy the music before
+    /// someone talks again. km splits / finish (.milestone) are exempt —
+    /// they must land on the marker. ~35s ≈ a verse-and-chorus of music
+    /// before the next voice — the founder wants to actually enjoy the song.
+    /// Tunable: raise for more music, lower for a chattier mix.
+    let minMusicGapSeconds: TimeInterval = 35
+
+    /// Seconds of music since the last line ended. Large when nothing has
+    /// played yet (so the opener never waits). Read by ContextualCoach /
+    /// Conversation to decide whether there's been enough music.
+    var secondsSinceLastVoice: TimeInterval {
+        guard let end = lastVoiceEndedAt else { return .greatestFiniteMagnitude }
+        return Date().timeIntervalSince(end)
+    }
+
+    /// Nothing playing and nothing queued — a true quiet stretch.
+    var isIdle: Bool { currentlyPlaying == nil && pending.isEmpty }
 
     // MARK: - Internal
 
     private let log = Logger(subsystem: "club.aarun.AARC", category: "VoiceQueue")
     private var playbackTask: Task<Void, Never>?
+    /// Fires when a gap-deferred non-milestone line is due to start.
+    private var gapTask: Task<Void, Never>?
 
     private init() {}
 
@@ -140,14 +167,13 @@ final class VoiceFeedbackQueue {
             }
         }
 
-        // Preemption: if nothing is playing, start now. If something lower-
-        // priority is playing and this is higher, cut it off and start now.
-        if currentlyPlaying == nil {
-            startPlaying(item)
-            return
-        }
-        if let cur = currentlyPlaying, item.priority > cur.priority {
-            log.info("VoiceQueue preempt cur=\(cur.source, privacy: .public)(\(cur.priority.rawValue)) by new=\(item.source, privacy: .public)(\(item.priority.rawValue))")
+        // Preemption is now RESERVED FOR km-split milestones. Coach lines
+        // and lyric riffs no longer cut off a line that's already speaking —
+        // that's what was guillotining Jessica mid-sentence ("a coach line
+        // preempted her"). Only a .milestone (split/halfway/finish) may
+        // interrupt, because it has to land on the marker.
+        if let cur = currentlyPlaying, item.priority == .milestone, cur.priority < .milestone {
+            log.info("VoiceQueue preempt cur=\(cur.source, privacy: .public)(\(cur.priority.rawValue)) by milestone=\(item.source, privacy: .public)")
             preempted += 1
             RunEventLog.shared.record("voice.preempt", String(item.text.prefix(80)),
                                       data: ["cut": cur.source, "by": item.source])
@@ -164,15 +190,27 @@ final class VoiceFeedbackQueue {
                 pending.removeAll { $0.segmentId == seg }
             }
             currentlyPlaying = nil
-            // Push the new item to the front of the queue, then drain.
+            // Push the milestone to the front of the queue, then drain.
             pending.insert(item, at: 0)
+            gapTask?.cancel()
             kickNext()
             return
         }
 
         // Otherwise queue it, sorted by priority desc, FIFO within priority.
+        // If nothing is playing, drain — kickNext() honours the music gap, so
+        // we route through it (NOT startPlaying directly) to keep the
+        // breathing-room pacing intact even when the queue was idle.
         insertSorted(item)
         log.debug("VoiceQueue enqueue src=\(item.source, privacy: .public) pri=\(item.priority.rawValue) pending=\(self.pending.count)")
+        if currentlyPlaying == nil { kickNext() }
+    }
+
+    /// Drop any pending (not-yet-playing) items whose source begins with
+    /// `prefix`. Used so a fresh Jessica reaction replaces a stale one still
+    /// waiting in the queue — newest comment wins.
+    func dropPending(sourcePrefix prefix: String) {
+        pending.removeAll { $0.source.hasPrefix(prefix) }
     }
 
     /// Stop everything immediately: cancel current playback, clear the queue,
@@ -181,6 +219,8 @@ final class VoiceFeedbackQueue {
     func stopAll() {
         playbackTask?.cancel()
         playbackTask = nil
+        gapTask?.cancel()
+        gapTask = nil
         currentlyPlaying = nil
         pending.removeAll()
         Speaker.shared.stopActiveBackend()
@@ -196,6 +236,9 @@ final class VoiceFeedbackQueue {
         droppedStale = 0
         droppedDuplicate = 0
         preempted = 0
+        // Fresh run: no prior voice, so the opener plays without waiting on
+        // the music gap.
+        lastVoiceEndedAt = nil
     }
 
     // MARK: - Internal playback loop
@@ -215,7 +258,36 @@ final class VoiceFeedbackQueue {
             scheduleSessionDeactivate()
             return
         }
+        // RADIO PACING: non-milestone lines wait until enough music has
+        // played since the last line ended. Milestones (km splits / finish)
+        // bypass — they have to land on the marker. This is what gives the
+        // run its "DJ speaks, then music breathes, then the next voice"
+        // rhythm instead of voices stacking back-to-back.
+        if next.priority < .milestone {
+            let waited = secondsSinceLastVoice
+            let remaining = minMusicGapSeconds - waited
+            if remaining > 0.3 {
+                // Put it back at the front and try again after the gap.
+                pending.insert(next, at: 0)
+                RunEventLog.shared.record("voice.deferGap", String(next.text.prefix(60)),
+                                          data: ["source": next.source,
+                                                 "wait": String(format: "%.0f", remaining)])
+                scheduleGapKick(after: remaining)
+                return
+            }
+        }
         startPlaying(next)
+    }
+
+    /// Re-attempt the queue after `seconds` of music breathing room.
+    private func scheduleGapKick(after seconds: TimeInterval) {
+        gapTask?.cancel()
+        gapTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(max(0.3, seconds)))
+            guard let self, !Task.isCancelled else { return }
+            guard self.currentlyPlaying == nil else { return }
+            self.kickNext()
+        }
     }
 
     private func popNextNonStale() -> VoiceItem? {
@@ -259,6 +331,17 @@ final class VoiceFeedbackQueue {
         // fetch window).
 
         playbackTask = Task { @MainActor [weak self] in
+            // PREFETCH BEFORE DUCK: render the audio to cache with the music
+            // still at full volume. The old path ducked the music the instant
+            // the line was dequeued and then sat in 10-15s of near-silence
+            // while ElevenLabs synthesised (every `tts.play` was cached:false).
+            // Warming first means playSync below is a cache HIT, so the duck
+            // and the first syllable are back-to-back — no dead air.
+            if item.voiceId != nil || Speaker.shared.preferRemoteVoice {
+                await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId)
+            }
+            if Task.isCancelled { return }
+
             await Speaker.shared.playSync(
                 text: item.text,
                 voiceId: item.voiceId,
@@ -282,6 +365,8 @@ final class VoiceFeedbackQueue {
             LiveSubtitleStore.shared.finishedPlaying(item)
             self.dispatched += 1
             self.currentlyPlaying = nil
+            // Mark the start of the music breathing-room gap.
+            self.lastVoiceEndedAt = .now
             self.kickNext()
         }
     }

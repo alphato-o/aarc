@@ -155,10 +155,11 @@ final class Conversation {
         lastReactionElapsed = elapsed
         if mode == .indulgent { lastIndulgentElapsed = elapsed }
 
-        // Quips are short and time-sensitive — a stale quip behind a split
-        // is worthless. Give them a tighter expiry; let longer passages
-        // ride the original window.
-        let expiry: TimeInterval = mode == .quip ? 35 : 75
+        // Expiry must outlast the queue's music-gap wait (~28s) plus synth,
+        // or she'd expire before her turn. Quips still expire sooner than
+        // long passages (a stale quip behind a split is worthless), just not
+        // so soon they never play.
+        let expiry: TimeInterval = mode == .quip ? 55 : 95
 
         log.info("Jessica reacting to \(source, privacy: .public) len=\(mode.rawValue, privacy: .public)")
         // Only one reaction in flight; a fresh Ricky line supersedes a
@@ -170,13 +171,26 @@ final class Conversation {
             do {
                 let result = try await AIClient.shared.reactLine(request)
                 guard !Task.isCancelled, ScriptEngine.shared.isActive else { return }
+                // Pre-render her audio NOW, while she waits her turn — so when
+                // the queue releases her into the music gap there's no
+                // synth-stall ducking the music. (This is also why we don't
+                // glue her to Ricky's tail any more.)
+                await RemoteTTS.shared.prefetch(result.text, voiceId: RemoteTTS.jessicaVoiceId)
+                guard !Task.isCancelled, ScriptEngine.shared.isActive else { return }
+                // Newest comment wins: drop any earlier Jessica line still
+                // waiting in the queue so she doesn't stack up — she reacts to
+                // the most recent thing Ricky said, a beat later, in the gap.
+                VoiceFeedbackQueue.shared.dropPending(sourcePrefix: "jessica")
+                // Enqueue STANDALONE at .coaching (no shared segmentId, no
+                // atomic-pair gluing). The queue's music-gap pacing decides
+                // WHEN she lands; .coaching means a coach line can't preempt
+                // her mid-sentence (only a km split can now).
                 Speaker.shared.speak(
                     result.text,
-                    priority: priority,
+                    priority: .coaching,
                     source: "jessica:react",
                     expiresAfter: expiry,
-                    voiceId: RemoteTTS.jessicaVoiceId,
-                    segmentId: segmentId
+                    voiceId: RemoteTTS.jessicaVoiceId
                 )
                 self.lastReaction = result.text
                 self.lastError = nil
@@ -224,11 +238,16 @@ final class Conversation {
     ///   • .banter    (music / lyric riffs)         → least often
     /// The decision is deterministic (variation hash), so it's reproducible.
     private func shouldReact(to priority: VoicePriority, elapsed: TimeInterval, distance: Double) -> Bool {
+        // Raised across the board (only 1 of her reactions was actually
+        // HEARD last run — she was over-gated AND getting preempted). The
+        // queue's music-gap pacing + newest-wins now space her safely, so
+        // we can let her react far more often and trust playback timing to
+        // keep the floor breathing.
         let threshold: Double
         switch priority {
-        case .milestone: threshold = 0.85   // react to ~85% of splits/finish
-        case .coaching:  threshold = 0.50   // ~half of pace/HR lines
-        case .banter:    threshold = 0.30   // occasional reply over music
+        case .milestone: threshold = 0.95   // nearly every split/finish
+        case .coaching:  threshold = 0.78   // most pace/HR lines
+        case .banter:    threshold = 0.50   // half of music/lyric riffs
         }
         return variation(elapsed: elapsed, distance: distance, salt: 0x9E37_79B9_7F4A_7C15) < threshold
     }

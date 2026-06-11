@@ -137,7 +137,15 @@ export const APP_HTML = `<!doctype html>
   .chip.on { background: #1c2632; color: var(--textHi); border-color: #2f3b49; }
   .chip.err { color: #ffb4ae; }
   #logscroll { flex: 1; overflow-y: auto; }
-  table.log { width: 100%; border-collapse: collapse; font-size: 12px; }
+  /* table-layout: fixed so the DETAIL column (the spoken transcript — the
+     thing the founder actually wants to read) gets the width, instead of
+     the auto algorithm handing it to the JSON data column and crushing the
+     words to one-per-line. Widths come from the colgroup below. */
+  table.log { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+  table.log col.col-t { width: 52px; }
+  table.log col.col-type { width: 116px; }
+  table.log col.col-data { width: 188px; }
+  /* col-detail takes the remaining width (the majority). */
   table.log th {
     position: sticky; top: 0; background: var(--panel); color: var(--textFaint);
     font-weight: 600; text-align: left; padding: 5px 10px; border-bottom: 1px solid var(--line);
@@ -149,12 +157,16 @@ export const APP_HTML = `<!doctype html>
   table.log tr.sel { background: #1c2632; }
   table.log tr.err td { color: #ffb4ae; }
   table.log tr.err td.c-type { color: #ff7b72; font-weight: 600; }
-  td.c-t { color: var(--textDim); font-variant-numeric: tabular-nums; white-space: nowrap; width: 56px; }
-  td.c-type { color: #adbac7; white-space: nowrap; width: 130px; font-weight: 500; }
-  td.c-detail { color: var(--text); word-break: break-word; }
+  td.c-t { color: var(--textDim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.c-type { color: #adbac7; white-space: nowrap; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+  /* Wrap the transcript at spaces (normal word wrap), only breaking inside a
+     word as a last resort — never the per-syllable shredding from before. */
+  td.c-detail { color: var(--text); white-space: normal; overflow-wrap: anywhere; word-break: normal; line-height: 1.5; }
+  /* Inline data is a one-line peek; the full JSON is one click away in the
+     expand row + the right panel, so truncate rather than steal width. */
   td.c-data { color: var(--textDim); }
   td.c-data code { font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    color: #a5d6ff; }
+    color: #a5d6ff; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .jsonrow td { background: var(--panel2); }
   .jsonrow pre { font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     color: #a5d6ff; white-space: pre-wrap; word-break: break-word; padding: 6px 10px;
@@ -224,6 +236,7 @@ export const APP_HTML = `<!doctype html>
       <div id="logbar"><span class="lbl">Events</span></div>
       <div id="logscroll">
         <table class="log">
+          <colgroup><col class="col-t"><col class="col-type"><col class="col-detail"><col class="col-data"></colgroup>
           <thead><tr><th>t</th><th>type</th><th>detail</th><th>data</th></tr></thead>
           <tbody id="logbody"></tbody>
         </table>
