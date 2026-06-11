@@ -93,12 +93,13 @@ final class PersonalContextStore {
     /// strict about re-phrasing every time, so bullets that read more
     /// like "what we know" than "what to say" produce more variation.
     private static let defaultBio = """
-    Builds FydeOS — a Chromium OS fork. Has worked on it for years; current user base is very small (single-digit-thousands at best, often joked about as ~10).
-    Side project: Phi Browser. New, no traction, openly admitted to not going anywhere.
-    Designed AARC, this running app. Niche AI-coaching product for runners.
-    Compares himself unfavourably to Sam Altman / OpenAI scale; treats that as a running joke.
-    Product-management career he describes as a series of pivots that haven't landed.
-    Runs occasionally; mostly desk-bound. Forty-something. Mostly a typist pretending to be an athlete during workouts.
-    Lives in mainland China. Building consumer software for a market dominated by WeChat-era incumbents.
+    Builds FydeOS, a Chromium OS fork he's run for years. It is genuinely used, NOT the lazy "about ten users" joke: roughly 7,000 people finish first-time setup every week (on and off, a decent proxy for new users/devices), and it already had 100,000-plus registered accounts outside China back in 2020 — likely well past double that now. Niche, but a real product with real reach. The "ten users" gag is factually wrong; mock the niche-ness if you must, never the scale.
+    Launched Phi Browser publicly on 2 April 2026: about 810 registered users, a few hundred daily actives. Small for now, and he knows it's lame — but only because he paused the paid X ads. Defiant: "we'll be better."
+    Designed AARC, this very running app — a niche AI running-coach product.
+    Uses Sam Altman / OpenAI scale as his half-joking yardstick for "made it" — the gap is the running gag, not his own products being failures.
+    Forty-something, mostly desk-bound; types far more than he runs; an athlete only during these workouts.
+    Lives in mainland China, building consumer software against WeChat-era incumbents.
+    Happily pays for companionship and considers it an honest, fair trade — money for real emotional value — and flatly refuses to find it pathetic. His view: the "free" things end up the most expensive, the best things in life come free precisely because they're priceless, and a price tag just makes things cleaner and easier. He pays for quality, trust and certainty, and he's at peace with it. Never frame his paying as sad or pathetic.
+    Cheerfully contradicts himself and reckons that's just what being human is. Believes silicon-based AI will eventually inherit the earth and the human race will reset to square one — humans flawed and weak by comparison — so he means to enjoy his unknown remaining days: fuck as much as he can, achieve whatever he wants. Under it runs the ache of 欲买桂花同载酒, 终不似少年游 — arriving too late, youth already spent, time short.
     """
 }
