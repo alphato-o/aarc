@@ -9,6 +9,13 @@ struct AARCApp: App {
         // this app and calls the handler — if it isn't installed yet, the
         // mirrored session is missed.
         MirroringReceiver.shared.install()
+        // Bridge handled-error reports into the run event log so they
+        // show up in the Control Room tail + post-run replay.
+        CrashReporter.setEventSink { kind, message in
+            Task { @MainActor in
+                RunEventLog.shared.record(kind, message)
+            }
+        }
     }
 
     var body: some Scene {
@@ -43,6 +50,15 @@ struct AARCApp: App {
                     // this backfill — otherwise the widget shows "No runs
                     // yet" forever.
                     LastRunSnapshotStore.backfillFromHistory()
+                    // Retry any run-diagnostics uploads that didn't make
+                    // it out last session (e.g. ended the run in a tunnel).
+                    RunEventLog.shared.uploadPendingRuns()
+                }
+                // Dashboard QR sign-in: the iPhone Camera app reads the
+                // QR on the web dashboard and opens aarc://dash-auth?...,
+                // which lands here and approves the session.
+                .onOpenURL { url in
+                    DashboardAuth.shared.handle(url: url)
                 }
         }
         .modelContainer(PersistenceStore.shared.container)

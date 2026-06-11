@@ -56,6 +56,7 @@ final class Conversation {
         guard !source.hasPrefix("jessica") else { return }
         guard RunDirector.shared.hasRoomForExchange else {
             log.info("Jessica skipped — no room before next must-play")
+            RunEventLog.shared.record("jessica.skip", "no room", data: ["to": source])
             return
         }
 
@@ -108,10 +109,16 @@ final class Conversation {
                 )
                 self.lastReaction = result.text
                 self.lastError = nil
+                RunEventLog.shared.record("jessica.react", String(result.text.prefix(80)), data: ["to": source])
             } catch {
                 if Task.isCancelled { return }
                 self.lastError = error.localizedDescription
                 self.log.error("Jessica reactLine error: \(error.localizedDescription, privacy: .public)")
+                // Surface the final failure (post-retry) so a repeating
+                // mid-run failure mode — like the 400-for-an-hour
+                // over-long-exemplar bug — is visible after the run, not
+                // just in a live Console session.
+                CrashReporter.captureMessage("Jessica reactLine failed: \(error.localizedDescription)")
             }
         }
     }

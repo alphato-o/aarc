@@ -24,13 +24,16 @@ struct ActiveRunView: View {
     var onDismiss: () -> Void = {}
 
     var body: some View {
-        ZStack {
-            // Background bleeds under the status bar; content respects
-            // the safe area so the TIME / DIST hero numbers don't sit
-            // under the Dynamic Island or the iOS clock.
-            background.ignoresSafeArea()
-            content
+        // Page-style pager: the run cockpit, plus a left-swipe to the
+        // Control Room (live network/director/queue/TTS state) so a
+        // mid-run failure can be diagnosed on the spot. Lifecycle side
+        // effects (idle timer, music polling) live on the PAGER, not the
+        // page — swiping between pages must not stop them.
+        TabView {
+            runPage.tag(0)
+            ControlRoomView().tag(1)
         }
+        .tabViewStyle(.page(indexDisplayMode: .never))
         .preferredColorScheme(.dark)
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
@@ -45,6 +48,17 @@ struct ActiveRunView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Ends tracking on the phone or sends End to the watch.")
+        }
+    }
+
+    /// The original run cockpit page (page 1 of the in-run pager).
+    private var runPage: some View {
+        ZStack {
+            // Background bleeds under the status bar; content respects
+            // the safe area so the TIME / DIST hero numbers don't sit
+            // under the Dynamic Island or the iOS clock.
+            background.ignoresSafeArea()
+            content
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: subtitleStore.currentLine?.id)
     }

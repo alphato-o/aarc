@@ -316,6 +316,8 @@ final class ScriptEngine {
         }
 
         let text = nextVariantText(for: message)
+        RunEventLog.shared.record("script.dispatch", String(text.prefix(80)),
+                                  data: ["trigger": message.triggerSpec.humanDescription])
         // Tag with a segment id so Jessica's reaction (if she reacts) is
         // bound to this line as an atomic pair in the queue.
         let segment = UUID()

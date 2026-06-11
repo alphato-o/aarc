@@ -149,6 +149,8 @@ final class VoiceFeedbackQueue {
         if let cur = currentlyPlaying, item.priority > cur.priority {
             log.info("VoiceQueue preempt cur=\(cur.source, privacy: .public)(\(cur.priority.rawValue)) by new=\(item.source, privacy: .public)(\(item.priority.rawValue))")
             preempted += 1
+            RunEventLog.shared.record("voice.preempt", String(item.text.prefix(80)),
+                                      data: ["cut": cur.source, "by": item.source])
             // Cancel the outstanding task BEFORE resuming its continuation,
             // so the awaited body sees Task.isCancelled == true and bails
             // without clobbering the new item.
@@ -222,6 +224,8 @@ final class VoiceFeedbackQueue {
             if candidate.isStale() {
                 droppedStale += 1
                 log.info("VoiceQueue drop stale src=\(candidate.source, privacy: .public)")
+                RunEventLog.shared.record("voice.dropStale", String(candidate.text.prefix(80)),
+                                          data: ["source": candidate.source])
                 // Drop the rest of the exchange too if this was part of one.
                 if let seg = candidate.segmentId {
                     pending.removeAll { $0.segmentId == seg }
@@ -236,6 +240,8 @@ final class VoiceFeedbackQueue {
     private func startPlaying(_ item: VoiceItem) {
         currentlyPlaying = item
         lastDispatchedAt = .now
+        RunEventLog.shared.record("voice.play", String(item.text.prefix(80)),
+                                  data: ["source": item.source, "priority": String(item.priority.rawValue)])
         deactivateTask?.cancel()
         // NOTE: do NOT activate the audio session here. Activation ducks
         // music immediately, and `playSync` will spend the next 100ms-2s

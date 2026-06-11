@@ -95,6 +95,10 @@ final class LiveMetricsConsumer {
         self.startedAt = startedAt
         self.lastFinishedWorkoutUUID = nil
 
+        // Open the per-run diagnostics log (events + voice archive).
+        RunEventLog.shared.startRun(runId: runId)
+        RunEventLog.shared.record("run.start", "runType=\(pendingRunType.rawValue)")
+
         // Hand the most-recently generated script to ScriptEngine so it
         // can begin firing lines on the upcoming live-metrics ticks.
         // The plan (distance / time / open) lives in ScriptPreviewStore
@@ -139,6 +143,11 @@ final class LiveMetricsConsumer {
         Conversation.shared.stop()
         RunDirector.shared.stop()
         LiveActivityController.shared.end()
+
+        // Seal + upload the per-run diagnostics (events JSONL, pinned
+        // voice audio). Fire-and-forget with retries inside.
+        RunEventLog.shared.record("run.end", "workout=\(workoutUUID.uuidString.prefix(8))")
+        RunEventLog.shared.endRun()
 
         // Kick off persistence in the background. HK may take a few
         // seconds to propagate the workout from watch to iPhone, so the

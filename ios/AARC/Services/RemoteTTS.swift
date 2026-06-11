@@ -125,7 +125,7 @@ final class RemoteTTS: NSObject {
             synthStartedAt = Date()
             let started = Date()
             do {
-                let data = try await fetchAudio(text: text, voiceId: voiceId)
+                let data = try await fetchAudioWithOneRetry(text: text, voiceId: voiceId)
                 lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
                 bytesFetchedThisSession += data.count
                 url = try await AudioCache.shared.store(data: data, forKey: key)
@@ -144,6 +144,8 @@ final class RemoteTTS: NSObject {
                 lastError = error.localizedDescription
                 lastBackend = "Apple (fallback)"
                 activity = .playing(remote: false)
+                RunEventLog.shared.record("tts.fallback", String(text.prefix(80)),
+                                          data: ["reason": error.localizedDescription, "backend": "local"])
                 await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
                 return
             }
@@ -151,6 +153,16 @@ final class RemoteTTS: NSObject {
 
         activity = .playing(remote: true)
         lastBackend = "ElevenLabs"
+        // Voice archive + replay: record what's about to be heard, keyed
+        // to the cached MP3 so the run log can pin + replay the audio.
+        RunEventLog.shared.recordSpeech(
+            text: text,
+            voiceId: voiceId,
+            source: lastWasCacheHit ? "cache" : "fetch",
+            cacheKey: key
+        )
+        RunEventLog.shared.record("tts.play", String(text.prefix(80)),
+                                  data: ["ms": String(lastLatencyMs ?? 0), "cached": String(lastWasCacheHit)])
         AudioPlaybackManager.shared.activate()
         // While the queue is in sustained mode (phone-only treadmill),
         // the session is .mixWithOthers WITHOUT ducking. Flip on the
@@ -316,6 +328,30 @@ final class RemoteTTS: NSObject {
     }
 
     // MARK: - Network
+
+    /// `fetchAudio` plus exactly ONE retry, used by the live `play` path.
+    /// Cellular runs drop requests (timed out / connection lost) often
+    /// enough that falling straight to the Apple voice on the first
+    /// failure was wasting recoverable lines. One 1.5s-spaced retry
+    /// recovers most transient drops without stalling the queue long.
+    ///
+    /// Bookkeeping: the caller's `activity = .synthesizing` stays in
+    /// effect across the retry; we re-stamp `synthStartedAt` so the
+    /// live elapsed readout reflects the attempt in flight, not the
+    /// failed one. `Task.sleep` throws on cancellation, which propagates
+    /// to the caller's catch where the `Task.isCancelled` check returns
+    /// without falling back — preserving the stop-mid-fetch discipline.
+    private func fetchAudioWithOneRetry(text: String, voiceId: String) async throws -> Data {
+        do {
+            return try await fetchAudio(text: text, voiceId: voiceId)
+        } catch {
+            if Task.isCancelled { throw error }
+            log.error("[tts] retrying after: \(error.localizedDescription, privacy: .public)")
+            try await Task.sleep(nanoseconds: 1_500_000_000)
+            synthStartedAt = Date()
+            return try await fetchAudio(text: text, voiceId: voiceId)
+        }
+    }
 
     private func fetchAudio(text: String, voiceId: String = RemoteTTS.voiceId) async throws -> Data {
         let url = Config.apiBaseURL.appendingPathComponent("tts")

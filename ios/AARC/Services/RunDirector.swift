@@ -150,7 +150,12 @@ final class RunDirector {
         guard isActive else { return }
         updateSpeed(metrics)
         let candidates = upcomingMilestones(metrics: metrics)
+        let wasProtected = isProtectedWindow
         nextMustPlayETA = candidates.map(\.eta).filter { $0 >= 0 }.min()
+        if isProtectedWindow != wasProtected {
+            RunEventLog.shared.record("director.protect", isProtectedWindow ? "enter" : "exit",
+                                      data: ["eta": String(Int(nextMustPlayETA ?? -1))])
+        }
         prewarmImminent(candidates)
     }
 
@@ -253,6 +258,7 @@ final class RunDirector {
             prewarmed.insert(m.key)
             guard let text = m.announcement else { continue }
             log.info("RunDirector pre-warming \(m.key, privacy: .public) eta=\(Int(m.eta), privacy: .public)s")
+            RunEventLog.shared.record("director.prewarm", m.key, data: ["eta": String(Int(m.eta))])
             Task { await RemoteTTS.shared.prefetch(text) }
         }
     }

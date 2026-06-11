@@ -407,6 +407,7 @@ final class ContextualCoach {
         )
 
         log.info("ContextualCoach firing trigger=\(trigger.rawValue, privacy: .public)")
+        RunEventLog.shared.record("coach.trigger", trigger.rawValue)
 
         inFlightTask = Task { @MainActor [weak self] in
             guard let self else { return }

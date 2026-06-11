@@ -100,6 +100,36 @@ actor AIClient {
         let error: String?
     }
 
+    // MARK: - Transient-failure retry
+
+    /// Run `operation`, retrying exactly ONCE after 2s on the transient
+    /// transport failures we see on the cellular path mid-run: timed out,
+    /// connection lost, can't connect to host. NEVER retries HTTP status
+    /// errors (those are thrown by our own code AFTER a successful
+    /// transport round-trip, as AIError, so they don't match URLError) or
+    /// any other URLError (notably `.cancelled` — a stopped run must not
+    /// re-fire the request). `Task.sleep` throws on cancellation, so a
+    /// cancelled caller exits during the backoff instead of retrying.
+    private func withOneRetry<T: Sendable>(
+        _ operation: @Sendable () async throws -> T
+    ) async throws -> T {
+        do {
+            return try await operation()
+        } catch let error as URLError where Self.isTransient(error) {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+            return try await operation()
+        }
+    }
+
+    private static func isTransient(_ error: URLError) -> Bool {
+        switch error.code {
+        case .timedOut, .networkConnectionLost, .cannotConnectToHost:
+            return true
+        default:
+            return false
+        }
+    }
+
     // MARK: - Dynamic line (/dynamic-line)
 
     /// Triggers that the in-run ContextualCoach can fire. Keep aligned
@@ -204,7 +234,9 @@ actor AIClient {
         urlRequest.timeoutInterval = 15
         urlRequest.httpBody = try encoder.encode(request)
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await withOneRetry { [session, urlRequest] in
+            try await session.data(for: urlRequest)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw AIError.transport("non-HTTP response")
         }
@@ -262,7 +294,9 @@ actor AIClient {
         urlRequest.timeoutInterval = 15
         urlRequest.httpBody = try encoder.encode(request)
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await withOneRetry { [session, urlRequest] in
+            try await session.data(for: urlRequest)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw AIError.transport("non-HTTP response")
         }
@@ -330,7 +364,9 @@ actor AIClient {
         urlRequest.timeoutInterval = 15
         urlRequest.httpBody = try encoder.encode(request)
 
-        let (data, response) = try await session.data(for: urlRequest)
+        let (data, response) = try await withOneRetry { [session, urlRequest] in
+            try await session.data(for: urlRequest)
+        }
         guard let http = response as? HTTPURLResponse else {
             throw AIError.transport("non-HTTP response")
         }

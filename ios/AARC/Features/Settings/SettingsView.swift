@@ -10,16 +10,29 @@ struct SettingsView: View {
     @State private var spotifyAuth = SpotifyAuth.shared
     @State private var spotifyBusy = false
     @State private var musixmatchKey: String = UserDefaults.standard.string(forKey: "musixmatch.apiKey") ?? ""
+    @State private var sentryDSN: String = UserDefaults.standard.string(forKey: CrashReporter.dsnDefaultsKey) ?? ""
     @State private var personalContext: PersonalContextStore = PersonalContextStore.shared
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Diagnostics") {
+                    NavigationLink("Control Room") { ControlRoomView() }
                     NavigationLink("Permissions") { PermissionsView() }
                     NavigationLink("Phone-only / Pedometer") { DiagnosticsView() }
                     NavigationLink("Script Preview (AI)") { ScriptPreviewView() }
                     NavigationLink("Coach Playground") { CoachPlayground() }
+                    SecureField("Sentry DSN (optional)", text: $sentryDSN)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .onChange(of: sentryDSN) { _, newValue in
+                            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if trimmed.isEmpty {
+                                UserDefaults.standard.removeObject(forKey: CrashReporter.dsnDefaultsKey)
+                            } else {
+                                UserDefaults.standard.set(trimmed, forKey: CrashReporter.dsnDefaultsKey)
+                            }
+                        }
                     Button(action: ping) {
                         HStack {
                             Text("Ping API")

@@ -70,12 +70,19 @@ final class LikedLinesStore {
     /// Cap is deliberate: every additional bullet expands the system
     /// prompt and breaks the cache key. 12 lines is enough texture
     /// without bloating the cache.
+    ///
+    /// Belt + braces against the proxy's per-exemplar length cap: a
+    /// single over-long hearted line (a 650+ char Jessica passage) once
+    /// made EVERY reactLine request 400 for an hour. The server cap is
+    /// now 1000 chars; we defensively truncate to 950 here so a long
+    /// like can never poison the request again, and hard-cap the list
+    /// at 12 regardless of what the caller asks for.
     func vibeExemplars(personalityId: String, max: Int = 12) -> [String] {
         lines
             .filter { $0.personalityId == personalityId }
             .sorted { $0.likedAt > $1.likedAt }
-            .prefix(max)
-            .map(\.text)
+            .prefix(Swift.min(max, 12))
+            .map { String($0.text.prefix(950)) }
     }
 
     // MARK: - Persistence
