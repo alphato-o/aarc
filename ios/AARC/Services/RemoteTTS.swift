@@ -373,8 +373,69 @@ final class RemoteTTS: NSObject {
         }
     }
 
+    /// If the active endpoint hasn't delivered the audio within this many
+    /// seconds, the SAME request is raced against the other endpoint and
+    /// whichever finishes first wins. Born from the 2026-06-12 23:57 run:
+    /// the CN→Cloudflare route stayed pingable while audio transfers
+    /// crawled to 259s — the CN2 GIA gateway was healthy the whole time
+    /// and never got asked. A normal synth answers well under this, so
+    /// the hedge fires only when the route is already in trouble.
+    private static let hedgeAfterSeconds: UInt64 = 12
+
     private func fetchAudio(text: String, voiceId: String = RemoteTTS.voiceId) async throws -> Data {
-        let url = Config.apiBaseURL.appendingPathComponent("tts")
+        // Dev override: single attempt, no hedging.
+        if let override = ProcessInfo.processInfo.environment["AARC_API_BASE_URL"],
+           let url = URL(string: override) {
+            return try await attemptFetch(text: text, voiceId: voiceId, baseURL: url, tag: "dev")
+        }
+        let primary = EndpointManager.shared.currentEndpoint
+        guard let backup = EndpointManager.shared.alternate else {
+            return try await attemptFetch(text: text, voiceId: voiceId, baseURL: primary.url, tag: primary.id)
+        }
+        return try await withThrowingTaskGroup(of: (String, Result<Data, Error>).self) { group in
+            group.addTask {
+                do { return (primary.id, .success(try await self.attemptFetch(
+                    text: text, voiceId: voiceId, baseURL: primary.url, tag: primary.id))) }
+                catch { return (primary.id, .failure(error)) }
+            }
+            group.addTask {
+                do {
+                    try await Task.sleep(nanoseconds: Self.hedgeAfterSeconds * 1_000_000_000)
+                    return (backup.id, .success(try await self.attemptFetch(
+                        text: text, voiceId: voiceId, baseURL: backup.url, tag: backup.id)))
+                } catch { return (backup.id, .failure(error)) }
+            }
+            var lastError: Error?
+            while let (id, result) = try await group.next() {
+                switch result {
+                case .success(let data):
+                    group.cancelAll()
+                    await MainActor.run {
+                        EndpointManager.shared.reportOutcome(endpointId: id, ok: true)
+                        if id == backup.id {
+                            // The hedge won: the primary was too slow to
+                            // matter. Slow IS the failure mode here.
+                            EndpointManager.shared.reportOutcome(
+                                endpointId: primary.id, ok: false, reason: "lost tts hedge race")
+                        }
+                    }
+                    return data
+                case .failure(let error):
+                    if !(error is CancellationError) {
+                        lastError = error
+                        await MainActor.run {
+                            EndpointManager.shared.reportOutcome(
+                                endpointId: id, ok: false, reason: error.localizedDescription)
+                        }
+                    }
+                }
+            }
+            throw lastError ?? RemoteTTSError.transport("all endpoints failed")
+        }
+    }
+
+    private func attemptFetch(text: String, voiceId: String, baseURL: URL, tag: String) async throws -> Data {
+        let url = baseURL.appendingPathComponent("tts")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -386,27 +447,28 @@ final class RemoteTTS: NSObject {
         let body: [String: Any] = ["text": text, "voiceId": voiceId]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        // Network inspector: surface the full 11Labs request lifecycle.
+        // Network inspector: surface the full 11Labs request lifecycle,
+        // one entry per attempt so a hedge race shows as two rows.
         let net = NetworkActivityMonitor.shared.begin(
             service: "11Labs", label: text, chars: text.count)
         NetworkActivityMonitor.shared.awaiting(net)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                NetworkActivityMonitor.shared.fail(net, "non-HTTP response")
+                NetworkActivityMonitor.shared.fail(net, "non-HTTP response via \(tag)")
                 throw RemoteTTSError.transport("non-HTTP response")
             }
             guard (200...299).contains(http.statusCode) else {
                 let bodyText = String(data: data, encoding: .utf8) ?? "<binary>"
-                NetworkActivityMonitor.shared.fail(net, "HTTP \(http.statusCode)")
+                NetworkActivityMonitor.shared.fail(net, "HTTP \(http.statusCode) via \(tag)")
                 throw RemoteTTSError.httpStatus(http.statusCode, body: bodyText.prefix(300).description)
             }
-            NetworkActivityMonitor.shared.finish(net, bytes: data.count, detail: "HTTP \(http.statusCode)")
+            NetworkActivityMonitor.shared.finish(net, bytes: data.count, detail: "HTTP \(http.statusCode) via \(tag)")
             return data
         } catch {
             // URLSession transport error (timeout, connection lost) — record
             // it if not already recorded by the guards above.
-            NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            NetworkActivityMonitor.shared.fail(net, "\(error.localizedDescription) via \(tag)")
             throw error
         }
     }

@@ -32,6 +32,13 @@ final class EndpointManager {
         let url: URL
         var lastLatencyMs: Int?
         var consecutiveFailures: Int = 0
+        /// Strikes from REAL traffic (TTS transfers failing or losing a
+        /// hedge race) — probes can stay green on a congested route while
+        /// actual payloads starve, so these are tracked separately and are
+        /// NOT cleared by a successful ping. Cleared by a real success, or
+        /// by 10 minutes without a new strike.
+        var realFailures: Int = 0
+        var lastRealFailureAt: Date?
         var healthy: Bool { consecutiveFailures == 0 && lastLatencyMs != nil }
     }
 
@@ -51,6 +58,29 @@ final class EndpointManager {
         return endpoints.first { $0.id == currentId }?.url ?? endpoints[0].url
     }
     var currentName: String { endpoints.first { $0.id == currentId }?.name ?? "?" }
+
+    /// Snapshot of the active endpoint (for transports that need the id,
+    /// e.g. hedged requests reporting outcomes per endpoint).
+    var currentEndpoint: Endpoint { endpoints.first { $0.id == currentId } ?? endpoints[0] }
+    /// The endpoint we are NOT currently using — the hedge target.
+    var alternate: Endpoint? { endpoints.first { $0.id != currentId } }
+
+    /// Real-traffic verdict from the transport layer. `ok: false` covers
+    /// both hard failures AND losing a hedge race (slow is the failure
+    /// mode on a congested-but-pingable route — the 2026-06-12 23:57 run
+    /// crawled at 2 KB/s for 7 minutes with every probe green).
+    func reportOutcome(endpointId: String, ok: Bool, reason: String = "") {
+        guard let idx = endpoints.firstIndex(where: { $0.id == endpointId }) else { return }
+        if ok {
+            endpoints[idx].realFailures = 0
+            endpoints[idx].lastRealFailureAt = nil
+        } else {
+            endpoints[idx].realFailures += 1
+            endpoints[idx].lastRealFailureAt = Date()
+            log.error("[endpoint] real-traffic strike \(self.endpoints[idx].realFailures, privacy: .public) on \(endpointId, privacy: .public): \(reason, privacy: .public)")
+            applySelection()
+        }
+    }
 
     var mode: String {
         get { UserDefaults.standard.string(forKey: Self.modeKey) ?? "auto" }
@@ -98,19 +128,32 @@ final class EndpointManager {
     }
 
     private func applySelection() {
+        // Real-traffic strikes age out after 10 minutes without a new one,
+        // so a congested evening doesn't pin us off the Worker forever —
+        // and per-request hedging protects every transfer in the meantime.
+        for idx in endpoints.indices {
+            if let t = endpoints[idx].lastRealFailureAt, Date().timeIntervalSince(t) > 600 {
+                endpoints[idx].realFailures = 0
+                endpoints[idx].lastRealFailureAt = nil
+            }
+        }
         let previous = currentId
         switch mode {
         case "cf": currentId = "cf"
         case "us": currentId = "us"
         default:
-            // Auto: Worker preferred; fail over after 2 consecutive probe
-            // failures IF the gateway looks healthy; recover when the
-            // Worker answers again.
+            // Auto: Worker preferred. Fail over on 2 consecutive probe
+            // failures OR 2 real-traffic strikes, if the gateway looks
+            // usable; recover only when the Worker is clean on BOTH
+            // signals (probe green alone must not flap us back while
+            // actual transfers are still starving).
             let cf = endpoints.first { $0.id == "cf" }!
             let us = endpoints.first { $0.id == "us" }!
-            if cf.consecutiveFailures >= 2, us.healthy {
+            let cfBad = cf.consecutiveFailures >= 2 || cf.realFailures >= 2
+            let usOk = us.healthy && us.realFailures < 2
+            if cfBad, usOk {
                 currentId = "us"
-            } else if cf.consecutiveFailures == 0 {
+            } else if cf.consecutiveFailures == 0, cf.realFailures == 0 {
                 currentId = "cf"
             }
         }
