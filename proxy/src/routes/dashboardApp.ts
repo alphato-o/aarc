@@ -290,6 +290,7 @@ export const APP_HTML = `<!doctype html>
     border-radius: 7px; padding: 8px; font: 600 12px/1 inherit; cursor: pointer;
   }
   .seg button.on { background: var(--select); color: #07101c; border-color: var(--select); }
+  .seg button:disabled { opacity: .35; cursor: default; }
   .share-actions { display: flex; gap: 8px; margin-top: 2px; }
   .share-actions button {
     flex: 1; border: 0; border-radius: 8px; padding: 12px; font: 700 13px/1 inherit; cursor: pointer;
@@ -481,6 +482,15 @@ export const APP_HTML = `<!doctype html>
       <div>
         <label>Or write your own</label>
         <textarea id="sharetext" placeholder="Override the quote text…"></textarea>
+      </div>
+      <div>
+        <label>Layout</label>
+        <div class="seg" id="sharelayout">
+          <button data-layout="quote" class="on">Quote</button>
+          <button data-layout="splits">Splits</button>
+          <button data-layout="route">Route</button>
+          <button data-layout="elev">Hills</button>
+        </div>
       </div>
       <div>
         <label>Format</label>
@@ -1929,7 +1939,7 @@ function clampView() {
 // SHARE COMPOSER — turn a run into a shareable card (PNG) or a short video
 // with the chosen line's voice playing back. All canvas-drawn, no deps.
 // =======================================================================
-var shareState = { fmt: "portrait", quoteIdx: -1, recording: false };
+var shareState = { fmt: "portrait", layout: "quote", quoteIdx: -1, recording: false };
 var QFONT = "Georgia, 'Times New Roman', serif";
 var SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 
@@ -1964,6 +1974,74 @@ function shareSpark() {
     hr: downsample(state.metrics.map(function (m) { return m.hr; }), 240)
   };
 }
+// per-km split times (seconds), interpolated from the distance samples.
+function computeSplits() {
+  var m = state.metrics, out = [];
+  if (m.length < 2) return out;
+  var prevT = m[0].t, maxD = m[m.length - 1].d;
+  for (var km = 1; km * 1000 <= maxD + 1; km++) {
+    var target = km * 1000, tAt = null;
+    for (var i = 1; i < m.length; i++) {
+      if (m[i].d >= target) {
+        var a = m[i - 1], b = m[i], span = b.d - a.d;
+        tAt = span > 0 ? a.t + (b.t - a.t) * (target - a.d) / span : b.t;
+        break;
+      }
+    }
+    if (tAt === null) break;
+    out.push(tAt - prevT); prevT = tAt;
+  }
+  return out;
+}
+function distanceAtT(t) {
+  var m = state.metrics; if (!m.length) return NaN;
+  if (t <= m[0].t) return m[0].d;
+  if (t >= m[m.length - 1].t) return m[m.length - 1].d;
+  for (var i = 1; i < m.length; i++) {
+    if (m[i].t >= t) {
+      var a = m[i - 1], b = m[i], sp = b.t - a.t;
+      return sp > 0 ? a.d + (b.d - a.d) * (t - a.t) / sp : b.d;
+    }
+  }
+  return m[m.length - 1].d;
+}
+// GPS route + altitude: read from the event log when the app logs them
+// ("loc" events with lat/lon; metrics with alt). Empty today — the Route and
+// Hills layouts auto-enable the moment the data appears in an upload.
+function routePoints() {
+  var out = [];
+  state.events.forEach(function (ev) {
+    var d = ev.data || {};
+    if (ev.type === "loc" || (has(d.lat) && has(d.lon))) {
+      var la = num(d.lat), lo = num(d.lon);
+      if (isFinite(la) && isFinite(lo)) out.push({ lat: la, lon: lo, t: num(ev.t) });
+    }
+  });
+  return downsampleObjs(out, 300);
+}
+function elevPoints() {
+  var out = [];
+  state.events.forEach(function (ev) {
+    if (ev.type !== "metrics") return;
+    var a = num((ev.data || {}).alt);
+    if (isFinite(a)) out.push(a);
+  });
+  return downsample(out, 240);
+}
+function downsampleObjs(arr, n) {
+  if (arr.length <= n) return arr;
+  var out = [], step = arr.length / n;
+  for (var i = 0; i < n; i++) out.push(arr[Math.floor(i * step)]);
+  out[out.length - 1] = arr[arr.length - 1];
+  return out;
+}
+function shareAvailability() {
+  return {
+    splits: computeSplits().length >= 1,
+    route: routePoints().length > 1,
+    elev: countFinite(elevPoints()) > 1
+  };
+}
 function shareOpts() {
   var s = state.summary || {};
   var lines = shareSpeechLines();
@@ -1971,9 +2049,19 @@ function shareOpts() {
   lines.forEach(function (l) { if (l.idx === shareState.quoteIdx) sel = l; });
   var custom = (document.getElementById("sharetext").value || "").trim();
   var quoteText = cleanQuote(custom || (sel ? sel.text : "Lace up. Get roasted. Run faster."));
+  var quoteKm = NaN;
+  if (sel) {
+    var ev = state.events[sel.idx];
+    var dAt = ev ? distanceAtT(num(ev.t)) : NaN;
+    if (isFinite(dAt) && dAt > 120) quoteKm = Math.max(1, Math.round(dAt / 1000 * 10) / 10);
+  }
   return {
     date: shareDateLabel(),
     spark: shareSpark(),
+    splits: computeSplits(),
+    route: routePoints(),
+    elev: elevPoints(),
+    quoteKm: quoteKm,
     kpis: [
       { k: "Distance", v: fmtDist(s.distance) || "\\u2014" },
       { k: "Time", v: fmtDur(s.duration) || "\\u2014" },
@@ -2079,9 +2167,9 @@ function layoutQuote(ctx, text, boxW, boxH, maxSize) {
 
 // Draw the card in logical 1080-wide space. progress (0..1) drives the
 // highlight-graph reveal + a playback underline; 1 = finished/static image.
-function drawShareCard(ctx, W, H, o, progress) {
+// ---- card chrome: background wash, header, footer (shared by all layouts)
+function drawCardChrome(ctx, W, H, o) {
   var P = 76;
-  // background: near-black with a soft brand-green wash
   ctx.fillStyle = "#0b0e0c"; ctx.fillRect(0, 0, W, H);
   var glow = ctx.createRadialGradient(W * 0.16, -120, 60, W * 0.16, -120, W * 0.9);
   glow.addColorStop(0, "rgba(74,99,80,0.50)"); glow.addColorStop(1, "rgba(74,99,80,0)");
@@ -2090,7 +2178,6 @@ function drawShareCard(ctx, W, H, o, progress) {
   g2.addColorStop(0, "rgba(74,99,80,0.22)"); g2.addColorStop(1, "rgba(74,99,80,0)");
   ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
 
-  // header
   drawLogoCanvas(ctx, P, P - 4, 60);
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
   ctx.fillStyle = "#f2efe2"; ctx.font = "800 38px " + SANS;
@@ -2104,63 +2191,227 @@ function drawShareCard(ctx, W, H, o, progress) {
   ctx.strokeStyle = "rgba(242,239,226,0.10)"; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(P, P + 74); ctx.lineTo(W - P, P + 74); ctx.stroke();
 
-  // KPI band
-  var ky = P + 106;
-  var n = o.kpis.length, cw = (W - P * 2) / n;
-  for (var i = 0; i < n; i++) {
-    var cx = P + cw * i + cw / 2;
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#f2efe2"; ctx.font = "800 42px " + SANS;
-    ctx.fillText(o.kpis[i].v, cx, ky + 36);
-    ctx.fillStyle = "#8a978d"; ctx.font = "700 16px " + SANS;
-    ctx.fillText(o.kpis[i].k.toUpperCase(), cx, ky + 66);
-    if (i > 0) {
-      ctx.strokeStyle = "rgba(242,239,226,0.08)";
-      ctx.beginPath(); ctx.moveTo(P + cw * i, ky + 4); ctx.lineTo(P + cw * i, ky + 60); ctx.stroke();
-    }
-  }
-  ctx.textAlign = "left";
-
-  // highlight graph — compact; the quote is the star
-  var gh = H > 1200 ? 130 : 110;
-  var gy = ky + 100, gx = P, gw = W - P * 2;
-  drawShareGraph(ctx, gx, gy, gw, gh, o.spark, progress);
-
-  // footer first (so we know the quote box bottom)
   var footY = H - 56;
-  ctx.textAlign = "left";
   ctx.fillStyle = "#75816f"; ctx.font = "500 20px " + SANS;
   ctx.fillText("An AI running coach that talks back.", P, footY);
   ctx.textAlign = "right";
   ctx.fillStyle = "#9eb8a5"; ctx.font = "700 20px " + SANS;
   ctx.fillText("aarun.club", W - P, footY);
   ctx.textAlign = "left";
-
-  // centrepiece quote — gets all the room between graph and footer
-  var qTop = gy + gh + 56;
-  var qBot = footY - 70;
-  var boxW = W - P * 2;
-  var ql = layoutQuote(ctx, "\\u201c" + o.quote + "\\u201d", boxW, qBot - qTop, H > 1200 ? 76 : 62);
+  return { P: P, topY: P + 74, footY: footY };
+}
+function drawKpis(ctx, W, P, ky, kpis) {
+  var n = kpis.length, cw = (W - P * 2) / n;
+  for (var i = 0; i < n; i++) {
+    var cx = P + cw * i + cw / 2;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f2efe2"; ctx.font = "800 42px " + SANS;
+    ctx.fillText(kpis[i].v, cx, ky + 36);
+    ctx.fillStyle = "#8a978d"; ctx.font = "700 16px " + SANS;
+    ctx.fillText(kpis[i].k.toUpperCase(), cx, ky + 66);
+    if (i > 0) {
+      ctx.strokeStyle = "rgba(242,239,226,0.08)";
+      ctx.beginPath(); ctx.moveTo(P + cw * i, ky + 4); ctx.lineTo(P + cw * i, ky + 60); ctx.stroke();
+    }
+  }
+  ctx.textAlign = "left";
+  return ky + 80;
+}
+// ---- the quote, word by word. During video (progress < 1) the highlight
+// rolls evenly across the words: read words full-bright, the word being
+// spoken gets a liquid-glass pill + glow, unread words sit dimmed.
+function drawQuote(ctx, x, boxW, topY, botY, maxSize, text, progress, centered) {
+  var ql = layoutQuote(ctx, "\\u201c" + text + "\\u201d", boxW, botY - topY, maxSize);
   var totalH = ql.lines.length * ql.lh;
-  var startY = qTop + Math.max(0, ((qBot - qTop) - totalH) / 2) + ql.size;
-  // fade the quote in over the first beat of the video; full for image
-  var qAlpha = progress >= 1 ? 1 : Math.min(1, progress / 0.12);
-  ctx.globalAlpha = qAlpha;
+  var startY = topY + Math.max(0, ((botY - topY) - totalH) / 2) + ql.size;
   ctx.font = "italic " + ql.size + "px " + QFONT;
-  ctx.fillStyle = "#f4f2e8"; ctx.textAlign = "left";
+  ctx.textAlign = "left";
+  var words = [];
   for (var li = 0; li < ql.lines.length; li++) {
-    ctx.fillText(ql.lines[li], P, startY + li * ql.lh);
+    var line = ql.lines[li];
+    var lx = centered ? x + (boxW - ctx.measureText(line).width) / 2 : x;
+    var parts = line.split(" ");
+    for (var wi = 0; wi < parts.length; wi++) {
+      if (!parts[wi]) continue;
+      words.push({ w: parts[wi], x: lx, y: startY + li * ql.lh });
+      lx += ctx.measureText(parts[wi] + " ").width;
+    }
   }
-  ctx.globalAlpha = 1;
+  if (progress >= 1) {
+    ctx.fillStyle = "#f4f2e8";
+    for (var a = 0; a < words.length; a++) ctx.fillText(words[a].w, words[a].x, words[a].y);
+    return;
+  }
+  var active = Math.min(words.length - 1, Math.floor(progress * words.length));
+  for (var b = 0; b < words.length; b++) {
+    var wo = words[b];
+    if (b === active) {
+      var wW = ctx.measureText(wo.w).width;
+      rr(ctx, wo.x - 8, wo.y - ql.size * 0.84, wW + 16, ql.size * 1.16, 10);
+      ctx.fillStyle = "rgba(143,184,154,0.17)"; ctx.fill();
+      ctx.save();
+      ctx.shadowColor = "rgba(207,232,214,0.95)"; ctx.shadowBlur = 26;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(wo.w, wo.x, wo.y);
+      ctx.fillText(wo.w, wo.x, wo.y);   // double-strike thickens the glow
+      ctx.restore();
+    } else {
+      ctx.fillStyle = b < active ? "#f4f2e8" : "rgba(244,242,232,0.40)";
+      ctx.fillText(wo.w, wo.x, wo.y);
+    }
+  }
+}
 
-  // playback underline (video only): fills as the voice plays
-  if (progress < 1) {
-    var uy = startY + (ql.lines.length - 1) * ql.lh + 26;
-    ctx.strokeStyle = "rgba(242,239,226,0.14)"; ctx.lineWidth = 4; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(P, uy); ctx.lineTo(P + boxW * 0.42, uy); ctx.stroke();
-    ctx.strokeStyle = "#8fb89a";
-    ctx.beginPath(); ctx.moveTo(P, uy); ctx.lineTo(P + boxW * 0.42 * progress, uy); ctx.stroke();
+function drawShareCard(ctx, W, H, o, progress) {
+  var c = drawCardChrome(ctx, W, H, o);
+  var L = shareState.layout;
+  if (L === "splits" && o.splits.length) drawLayoutSplits(ctx, W, H, o, progress, c);
+  else if (L === "route" && o.route.length > 1) drawLayoutRoute(ctx, W, H, o, progress, c);
+  else if (L === "elev" && countFinite(o.elev) > 1) drawLayoutElev(ctx, W, H, o, progress, c);
+  else drawLayoutQuoteFirst(ctx, W, H, o, progress, c);
+}
+
+// ---- layout: quote-first (always available; the Phi-Browser direction)
+function drawLayoutQuoteFirst(ctx, W, H, o, progress, c) {
+  var P = c.P;
+  var kpiY = H - 240;
+  var sparkY = kpiY - 64;
+  // compact pace + HR strip as the divider, revealed by progress
+  drawShareGraph(ctx, W * 0.18, sparkY - 64, W * 0.64, 64, o.spark, progress);
+  var stampY = sparkY - 118;
+  if (isFinite(o.quoteKm)) {
+    ctx.textAlign = "center"; ctx.fillStyle = "#9eb8a5";
+    ctx.font = "700 22px " + SANS;
+    var kmLbl = o.quoteKm % 1 === 0 ? String(o.quoteKm) : o.quoteKm.toFixed(1);
+    ctx.fillText("\\u2014  HEARD AT KM " + kmLbl + "  \\u2014", W / 2, stampY);
+    ctx.textAlign = "left";
   }
+  drawQuote(ctx, P, W - P * 2, c.topY + 56, stampY - 60, H > 1200 ? 80 : 64, o.quote, progress, true);
+  drawKpis(ctx, W, P, kpiY, o.kpis);
+}
+
+// ---- layout: km splits ladder
+function drawLayoutSplits(ctx, W, H, o, progress, c) {
+  var P = c.P;
+  var kpiBot = drawKpis(ctx, W, P, c.topY + 32, o.kpis);
+  var sp = o.splits, n = sp.length;
+  var shown = Math.min(n, 10);
+  var ladTop = kpiBot + 46;
+  var rowH = Math.min(46, Math.max(30, (H > 1200 ? 420 : 300) / shown));
+  ctx.fillStyle = "#8a978d"; ctx.font = "700 16px " + SANS;
+  ctx.fillText("SPLITS" + (n > shown ? "  (first " + shown + ")" : ""), P, ladTop - 14);
+  var maxSplit = 0, minSplit = Infinity, fastest = 0;
+  for (var i = 0; i < shown; i++) {
+    if (sp[i] > maxSplit) maxSplit = sp[i];
+    if (sp[i] < minSplit) { minSplit = sp[i]; fastest = i; }
+  }
+  var barMax = W - P * 2 - 160;
+  for (var r = 0; r < shown; r++) {
+    var y = ladTop + r * rowH;
+    var frac = maxSplit > 0 ? sp[r] / maxSplit : 1;
+    // each bar grows in sequence as the video plays
+    var reveal = progress >= 1 ? 1 : Math.max(0, Math.min(1, progress * shown * 1.4 - r));
+    var bw = Math.max(8, barMax * frac * reveal);
+    var hot = r === fastest;
+    ctx.fillStyle = hot ? "#cfe8d6" : "#aebfb2";
+    ctx.font = (hot ? "800" : "600") + " 20px " + SANS;
+    ctx.textAlign = "left";
+    ctx.fillText(String(r + 1), P, y + rowH * 0.42);
+    rr(ctx, P + 44, y + rowH * 0.42 - 19, bw, 22, 11);
+    ctx.fillStyle = hot ? "#8fb89a" : "#3c4f42"; ctx.fill();
+    if (reveal > 0.95) {
+      ctx.fillStyle = hot ? "#cfe8d6" : "#aebfb2";
+      ctx.font = (hot ? "800" : "600") + " 20px " + SANS;
+      ctx.fillText(fmtPace(sp[r]).replace("/km", "") + (hot ? " \\u26a1" : ""), P + 44 + bw + 14, y + rowH * 0.42);
+    }
+  }
+  var ladBot = ladTop + shown * rowH;
+  drawQuote(ctx, P, W - P * 2, ladBot + 40, c.footY - 70, H > 1200 ? 62 : 50, o.quote, progress, false);
+}
+
+// ---- layout: route silhouette hero (needs GPS polyline in the upload)
+function drawLayoutRoute(ctx, W, H, o, progress, c) {
+  var P = c.P;
+  var pts = o.route;
+  var boxX = P + 30, boxY = c.topY + 40;
+  var boxW = W - (P + 30) * 2, boxH = H > 1200 ? 380 : 290;
+  // normalize lat/lon into the box, preserving aspect (lat shrink ~cos)
+  var minLa = Infinity, maxLa = -Infinity, minLo = Infinity, maxLo = -Infinity;
+  pts.forEach(function (p2) {
+    if (p2.lat < minLa) minLa = p2.lat; if (p2.lat > maxLa) maxLa = p2.lat;
+    if (p2.lon < minLo) minLo = p2.lon; if (p2.lon > maxLo) maxLo = p2.lon;
+  });
+  var latScale = Math.cos(((minLa + maxLa) / 2) * Math.PI / 180);
+  var spanX = (maxLo - minLo) * latScale || 1e-6, spanY = (maxLa - minLa) || 1e-6;
+  var sc = Math.min(boxW / spanX, boxH / spanY) * 0.92;
+  var offX = boxX + (boxW - spanX * sc) / 2, offY = boxY + (boxH - spanY * sc) / 2;
+  function RX(p2) { return offX + (p2.lon - minLo) * latScale * sc; }
+  function RY(p2) { return offY + (maxLa - p2.lat) * sc; }
+  var upto = progress >= 1 ? pts.length - 1 : Math.max(1, Math.floor(progress * (pts.length - 1)));
+  ctx.beginPath();
+  for (var i = 0; i <= upto; i++) {
+    var x = RX(pts[i]), y = RY(pts[i]);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  var grad = ctx.createLinearGradient(boxX, boxY, boxX + boxW, boxY + boxH);
+  grad.addColorStop(0, "#cfe8d6"); grad.addColorStop(1, "#8fb89a");
+  ctx.strokeStyle = grad; ctx.lineWidth = 9; ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.stroke();
+  // start solid, finish ring
+  ctx.beginPath(); ctx.arc(RX(pts[0]), RY(pts[0]), 11, 0, Math.PI * 2); ctx.fillStyle = "#cfe8d6"; ctx.fill();
+  var last = pts[upto];
+  ctx.beginPath(); ctx.arc(RX(last), RY(last), 11, 0, Math.PI * 2);
+  ctx.fillStyle = "#0b0e0c"; ctx.fill();
+  ctx.strokeStyle = "#cfe8d6"; ctx.lineWidth = 4; ctx.stroke();
+  var kpiBot = drawKpis(ctx, W, P, boxY + boxH + 36, o.kpis);
+  drawQuote(ctx, P, W - P * 2, kpiBot + 40, c.footY - 70, H > 1200 ? 58 : 48, o.quote, progress, false);
+}
+
+// ---- layout: elevation + pace strip (needs altitude in metrics)
+function drawLayoutElev(ctx, W, H, o, progress, c) {
+  var P = c.P;
+  // swap the 4th KPI for total climb
+  var climb = 0, alts = o.elev;
+  for (var i = 1; i < alts.length; i++) {
+    var d2 = alts[i] - alts[i - 1];
+    if (isFinite(d2) && d2 > 0) climb += d2;
+  }
+  var kpis = o.kpis.slice(0, 3);
+  kpis.push({ k: "Climb", v: "+" + Math.round(climb) + " m" });
+  var kpiBot = drawKpis(ctx, W, P, c.topY + 32, kpis);
+  var gy = kpiBot + 60, gh = H > 1200 ? 210 : 160, gw = W - P * 2;
+  ctx.fillStyle = "#8a978d"; ctx.font = "700 16px " + SANS;
+  ctx.fillText("ELEVATION & PACE", P, gy - 14);
+  // hills silhouette
+  var minA = Infinity, maxA = -Infinity;
+  alts.forEach(function (a2) { if (isFinite(a2)) { if (a2 < minA) minA = a2; if (a2 > maxA) maxA = a2; } });
+  if (!(maxA > minA)) maxA = minA + 1;
+  var n = alts.length;
+  var upto = progress >= 1 ? n - 1 : Math.max(1, Math.floor(progress * (n - 1)));
+  ctx.beginPath(); ctx.moveTo(P, gy + gh);
+  var crestX = P, crestY = gy + gh, crestA = -Infinity;
+  for (var j = 0; j <= upto; j++) {
+    var a3 = alts[j]; if (!isFinite(a3)) continue;
+    var hx = P + (j / (n - 1)) * gw;
+    var hy = gy + gh - ((a3 - minA) / (maxA - minA)) * (gh * 0.82);
+    ctx.lineTo(hx, hy);
+    if (a3 > crestA) { crestA = a3; crestX = hx; crestY = hy; }
+  }
+  ctx.lineTo(P + (upto / (n - 1)) * gw, gy + gh); ctx.closePath();
+  var hg = ctx.createLinearGradient(0, gy, 0, gy + gh);
+  hg.addColorStop(0, "#5d7a64"); hg.addColorStop(1, "rgba(34,48,31,0.35)");
+  ctx.fillStyle = hg; ctx.fill();
+  // pace line over the hills
+  drawShareSeries(ctx, P, gy, gw, gh * 0.7, o.spark.kmh, progress, {
+    line: "#cfe8d6", width: 3, alpha: 1, dot: progress < 1 ? "#cfe8d6" : null });
+  // crest annotation
+  ctx.beginPath(); ctx.arc(crestX, crestY, 5, 0, Math.PI * 2);
+  ctx.fillStyle = "#0b0e0c"; ctx.fill();
+  ctx.strokeStyle = "#cfe8d6"; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.fillStyle = "#9eb8a5"; ctx.font = "600 17px " + SANS; ctx.textAlign = "center";
+  ctx.fillText("crest \\u00b7 " + Math.round(crestA) + " m", crestX, crestY - 14);
+  ctx.textAlign = "left";
+  drawQuote(ctx, P, W - P * 2, gy + gh + 46, c.footY - 70, H > 1200 ? 60 : 50, o.quote, progress, false);
 }
 function drawShareGraph(ctx, x, y, w, h, spark, progress) {
   var kmh = (spark && spark.kmh) || [], hr = (spark && spark.hr) || [];
@@ -2273,6 +2524,20 @@ function openShareModal() {
   shareStatus("");
   document.getElementById("sharetext").value = "";
   populateQuoteSelect();
+  // enable layouts the run's data can support; default to the richest one
+  var avail = shareAvailability();
+  var pick = avail.route ? "route" : avail.splits ? "splits" : "quote";
+  shareState.layout = pick;
+  document.querySelectorAll("#sharelayout button").forEach(function (b) {
+    var k = b.getAttribute("data-layout");
+    var ok = k === "quote" || (k === "splits" ? avail.splits : k === "route" ? avail.route : avail.elev);
+    b.disabled = !ok;
+    b.title = ok ? "" :
+      k === "route" ? "Needs a GPS route \\u2014 the app doesn't log one yet" :
+      k === "elev" ? "Needs altitude samples \\u2014 the app doesn't log them yet" :
+      "Needs at least one full kilometre";
+    b.classList.toggle("on", k === pick);
+  });
   renderSharePreview();
   document.getElementById("sharemodal").classList.add("open");
 }
@@ -2310,7 +2575,16 @@ function downloadShareImage() {
 }
 
 function pickVideoMime() {
-  var cands = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
+  // MP4 first — H.264/AAC plays everywhere (WeChat, WhatsApp, iMessage…).
+  // Chrome 126+ and Safari mux MP4 natively; Firefox falls back to WebM.
+  var cands = [
+    "video/mp4;codecs=avc1.42E01E,mp4a.40.2",
+    "video/mp4;codecs=avc1,mp4a.40.2",
+    "video/mp4",
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm"
+  ];
   for (var i = 0; i < cands.length; i++) {
     if (window.MediaRecorder && MediaRecorder.isTypeSupported(cands[i])) return cands[i];
   }
@@ -2418,6 +2692,15 @@ document.querySelectorAll("#shareformat button").forEach(function (b) {
     document.querySelectorAll("#shareformat button").forEach(function (x) { x.classList.remove("on"); });
     b.classList.add("on");
     shareState.fmt = b.getAttribute("data-fmt");
+    renderSharePreview();
+  });
+});
+document.querySelectorAll("#sharelayout button").forEach(function (b) {
+  b.addEventListener("click", function () {
+    if (b.disabled) return;
+    document.querySelectorAll("#sharelayout button").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+    shareState.layout = b.getAttribute("data-layout");
     renderSharePreview();
   });
 });
