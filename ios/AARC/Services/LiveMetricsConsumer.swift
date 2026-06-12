@@ -118,10 +118,15 @@ final class LiveMetricsConsumer {
         RunEventLog.shared.record("run.start", "runType=\(pendingRunType.rawValue)")
 
         // Real-world surroundings for the coaches — outdoor runs only.
-        // Never for the desk simulator: relocating fabricated scenery to
-        // the founder's sofa is not grounding, it's comedy of a worse kind.
-        if pendingRunType == .outdoor, !RunOrchestrator.shared.isSimulating {
-            PlaceContext.shared.start()
+        // The desk simulator runs the SAME pipeline fed by a synthetic
+        // route from RunSimulator, so location-grounded feedback can be
+        // diagnosed without leaving the chair.
+        if pendingRunType == .outdoor {
+            if RunOrchestrator.shared.isSimulating {
+                PlaceContext.shared.startSimulated()
+            } else {
+                PlaceContext.shared.start()
+            }
         }
 
         // Hand the most-recently generated script to ScriptEngine so it

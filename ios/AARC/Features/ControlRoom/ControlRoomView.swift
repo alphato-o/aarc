@@ -139,6 +139,42 @@ struct ControlRoomView: View {
                 Button("+2 km") { simulator.jump(meters: 2000) }
             }
             .buttonStyle(.bordered).controlSize(.small)
+            placeAwarenessRows
+        }
+    }
+
+    /// Live diagnosis of the place-awareness pipeline during a simulated
+    /// outdoor run: the synthetic route, what geocoding/POI resolved, the
+    /// detected route shape, and whether the LLM payload is non-nil.
+    @ViewBuilder
+    private var placeAwarenessRows: some View {
+        let place = PlaceContext.shared
+        if place.isActive {
+            Divider()
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text("PLACE").font(.caption2.bold()).foregroundStyle(.teal)
+                    Spacer()
+                    Text(place.llmInfo != nil ? "feeding LLM" : "no payload yet")
+                        .font(.caption2)
+                        .foregroundStyle(place.llmInfo != nil ? .teal : .secondary)
+                }
+                if !simulator.routeStatus.isEmpty {
+                    Text(simulator.routeStatus)
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if let s = place.snapshot {
+                    Text([s.road, s.area].compactMap { $0 }.joined(separator: ", "))
+                        .font(.caption.bold())
+                    ForEach(s.pois.prefix(3), id: \.self) { poi in
+                        Text(poi).font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                if let route = place.routeDescriptionNow {
+                    Text(route).font(.caption2.italic()).foregroundStyle(.teal)
+                }
+            }
         }
     }
 

@@ -34,6 +34,11 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
 
     private(set) var snapshot: Snapshot?
     private(set) var isActive = false
+    /// Simulated mode: fixes come from RunSimulator's synthetic route via
+    /// `ingestSimulated` instead of CLLocationManager — the rest of the
+    /// pipeline (geocode, POI, route shape, LLM payloads) runs unchanged,
+    /// which is the whole point: desk-verify the real machinery.
+    private(set) var isSimulated = false
 
     private let manager = CLLocationManager()
     private let geocoder = CLGeocoder()
@@ -134,6 +139,7 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
     func start() {
         guard !isActive else { return }
         isActive = true
+        isSimulated = false
         snapshot = nil
         lastFix = nil
         lastFixAt = nil
@@ -152,11 +158,36 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
     func stop() {
         guard isActive else { return }
         isActive = false
-        manager.stopUpdatingLocation()
-        manager.allowsBackgroundLocationUpdates = false
+        if !isSimulated {
+            manager.stopUpdatingLocation()
+            manager.allowsBackgroundLocationUpdates = false
+        }
+        isSimulated = false
         geocoder.cancelGeocode()
         log.info("[place] sampling stopped")
     }
+
+    /// Begin a SIMULATED session: same state machine, no GPS hardware.
+    /// RunSimulator injects synthetic fixes along its generated route.
+    func startSimulated() {
+        guard !isActive else { return }
+        isActive = true
+        isSimulated = true
+        snapshot = nil
+        lastFix = nil
+        lastFixAt = nil
+        routeShape.reset()
+        log.info("[place] SIMULATED sampling started")
+    }
+
+    /// Synthetic fix from the desk simulator. Ignored outside simulation.
+    func ingestSimulated(_ loc: CLLocation) {
+        guard isActive, isSimulated else { return }
+        consider(loc)
+    }
+
+    /// Live route-shape readout for the Control Room diagnosis panel.
+    var routeDescriptionNow: String? { routeShape.routeDescription }
 
     /// Compact payload for the LLM endpoints. nil when inactive, empty,
     /// or stale (>5 min old — better no context than wrong context).

@@ -34,6 +34,19 @@ enum ChinaCoordinateTransform {
         cs.map(displayCoordinate)
     }
 
+    /// Approximate inverse: map a GCJ-02 (Apple-Maps-space) coordinate back
+    /// to WGS-84. One-step approximation — the shift varies slowly, so
+    /// applying the forward delta in reverse is accurate to ~1-2 m, plenty
+    /// for synthetic test routes. Identity outside mainland China.
+    static func wgsCoordinate(fromDisplay c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        guard isInsideChina(c) else { return c }
+        let shifted = wgs84ToGcj02(c)
+        return CLLocationCoordinate2D(
+            latitude: c.latitude - (shifted.latitude - c.latitude),
+            longitude: c.longitude - (shifted.longitude - c.longitude)
+        )
+    }
+
     // MARK: - Internals
     //
     // Algorithm from the published GCJ-02 reverse-engineering work — the

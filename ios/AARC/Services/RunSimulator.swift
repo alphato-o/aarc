@@ -1,6 +1,101 @@
 import Foundation
 import Observation
+import CoreLocation
+import MapKit
 import AARCKit
+
+/// A synthetic GPS route the desk simulator walks along, so a simulated
+/// OUTDOOR run exercises the real place-awareness pipeline (geocoding,
+/// POI lookups, route-shape detection) from the founder's chair.
+///
+/// Built from the device's actual location: a random bearing is picked,
+/// MKDirections plots a real walking route out to ~45% of the planned
+/// distance, and the return leg retraces it — a plausible out-and-back
+/// past real roads and real POIs. If directions fail (offline, no route),
+/// a geometric dogleg stands in; names still resolve, geometry still loops.
+struct SimRoute {
+    let coords: [CLLocationCoordinate2D]   // WGS-84
+    let cum: [Double]                      // cumulative meters per vertex
+    let total: Double
+
+    /// Position after `dist` simulated meters; wraps so an open run keeps
+    /// repeating the circuit (and the lap detector gets material).
+    func location(at dist: Double) -> CLLocation {
+        guard total > 0, coords.count > 1 else {
+            return CLLocation(latitude: coords.first?.latitude ?? 0,
+                              longitude: coords.first?.longitude ?? 0)
+        }
+        var d = dist.truncatingRemainder(dividingBy: total)
+        if d < 0 { d += total }
+        var lo = 0, hi = cum.count - 1
+        while hi - lo > 1 {
+            let mid = (lo + hi) / 2
+            if cum[mid] <= d { lo = mid } else { hi = mid }
+        }
+        let span = cum[hi] - cum[lo]
+        let f = span > 0 ? (d - cum[lo]) / span : 0
+        let a = coords[lo], b = coords[hi]
+        return CLLocation(
+            latitude: a.latitude + (b.latitude - a.latitude) * f,
+            longitude: a.longitude + (b.longitude - a.longitude) * f
+        )
+    }
+
+    static func build(points: [CLLocationCoordinate2D]) -> SimRoute? {
+        guard points.count > 1 else { return nil }
+        var cum: [Double] = [0]
+        var total: Double = 0
+        for i in 1..<points.count {
+            let a = CLLocation(latitude: points[i-1].latitude, longitude: points[i-1].longitude)
+            let b = CLLocation(latitude: points[i].latitude, longitude: points[i].longitude)
+            total += b.distance(from: a)
+            cum.append(total)
+        }
+        guard total > 50 else { return nil }
+        return SimRoute(coords: points, cum: cum, total: total)
+    }
+}
+
+enum SimRouteBuilder {
+    /// Offset a WGS-84 coordinate by `meters` along `bearing` (radians).
+    static func offset(_ c: CLLocationCoordinate2D, bearing: Double, meters: Double) -> CLLocationCoordinate2D {
+        let dLat = meters * cos(bearing) / 111_320.0
+        let dLon = meters * sin(bearing) / (111_320.0 * cos(c.latitude * .pi / 180))
+        return CLLocationCoordinate2D(latitude: c.latitude + dLat, longitude: c.longitude + dLon)
+    }
+
+    /// Out-and-back route from `origin`, total length ≈ `targetMeters`.
+    static func build(from origin: CLLocationCoordinate2D, targetMeters: Double) async -> SimRoute? {
+        let bearing = Double.random(in: 0..<(2 * .pi))
+        let outMeters = max(300, targetMeters * 0.45)
+        let target = offset(origin, bearing: bearing, meters: outMeters)
+
+        // MKDirections speaks Apple-Maps space — GCJ-02 inside mainland
+        // China — so shift the request in and the polyline back out.
+        let req = MKDirections.Request()
+        req.source = MKMapItem(placemark: MKPlacemark(
+            coordinate: ChinaCoordinateTransform.displayCoordinate(origin)))
+        req.destination = MKMapItem(placemark: MKPlacemark(
+            coordinate: ChinaCoordinateTransform.displayCoordinate(target)))
+        req.transportType = .walking
+
+        if let route = try? await MKDirections(request: req).calculate().routes.first {
+            let poly = route.polyline
+            var pts = [CLLocationCoordinate2D](
+                repeating: CLLocationCoordinate2D(), count: poly.pointCount)
+            poly.getCoordinates(&pts, range: NSRange(location: 0, length: poly.pointCount))
+            let wgs = pts.map(ChinaCoordinateTransform.wgsCoordinate(fromDisplay:))
+            if let r = SimRoute.build(points: wgs + wgs.dropLast().reversed()) {
+                return r
+            }
+        }
+        // Fallback: geometric dogleg out-and-back. Roads aren't followed,
+        // but reverse geocoding + POI search still resolve real names.
+        let mid = offset(origin, bearing: bearing + 0.5, meters: outMeters * 0.5)
+        let out = [origin, mid, target]
+        return SimRoute.build(points: out + out.dropLast().reversed())
+    }
+}
 
 /// Desk-test metrics source. When the start screen's test mode is
 /// `.simulate`, this drives SYNTHETIC `LiveMetrics` into the exact same
@@ -46,6 +141,13 @@ final class RunSimulator {
     private var lastWall: Date?
     private var ticker: Timer?
 
+    /// Synthetic GPS for simulated OUTDOOR runs — drives PlaceContext so
+    /// location-grounded feedback can be desk-verified. nil while the
+    /// route is still being plotted (or for treadmill sims).
+    private(set) var simRoute: SimRoute?
+    /// Where the route started — surfaces in the Control Room panel.
+    private(set) var routeStatus: String = ""
+
     private init() {}
 
     // MARK: - Lifecycle
@@ -58,10 +160,38 @@ final class RunSimulator {
         paused = false
         lastWall = nil
         isActive = true
+        simRoute = nil
+        routeStatus = ""
 
         LiveMetricsConsumer.shared.pendingRunType = runType
         LiveMetricsConsumer.shared.pendingPersonalityId = personalityId
         LiveMetricsConsumer.shared.ingestStarted(runId: runId, startedAt: Date())
+
+        // Simulated OUTDOOR run: plot a synthetic route from the device's
+        // real location so the place-awareness pipeline fires for real.
+        if runType == .outdoor {
+            routeStatus = "plotting route\u{2026}"
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // Last cached fix is fine — we're at a desk, not moving.
+                let origin = CLLocationManager().location?.coordinate
+                    ?? CLLocationCoordinate2D(latitude: 31.2304, longitude: 121.4737)
+                let target: Double
+                switch plan.kind {
+                case .distance: target = max((plan.distanceKm ?? 3) * 1000, 600)
+                case .time:
+                    let mins = plan.timeMinutes ?? 30
+                    target = max(mins * 60 / max(self.paceSecPerKm, 60) * 1000, 600)
+                case .open: target = Double.random(in: 1800...4200)
+                }
+                let route = await SimRouteBuilder.build(from: origin, targetMeters: target)
+                guard self.isActive else { return }
+                self.simRoute = route
+                self.routeStatus = route.map {
+                    "route: \(Int($0.total))m out-and-back"
+                } ?? "route plotting failed — metrics only"
+            }
+        }
 
         ticker?.invalidate()
         let t = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -136,5 +266,11 @@ final class RunSimulator {
             state: .running
         )
         LiveMetricsConsumer.shared.ingest(metrics)
+
+        // Walk the synthetic route — PlaceContext gets a fix per tick and
+        // applies its own thresholds, exactly as with real GPS.
+        if let route = simRoute {
+            PlaceContext.shared.ingestSimulated(route.location(at: simDistance))
+        }
     }
 }
