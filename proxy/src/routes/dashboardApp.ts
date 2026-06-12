@@ -170,6 +170,13 @@ export const APP_HTML = `<!doctype html>
     white-space: nowrap; z-index: 3;
   }
   .crosspill b { color: var(--speed); } .crosspill .h { color: var(--hr); }
+  .voicetip {
+    position: absolute; pointer-events: none; display: none; z-index: 5;
+    max-width: 340px; background: rgba(13,17,23,.97); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 10px; font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--textHi); box-shadow: 0 6px 22px rgba(0,0,0,.5); white-space: normal; word-break: break-word;
+  }
+  .voicetip .vt-h { font: 600 10px/1 ui-monospace, Menlo, monospace; letter-spacing: .04em; color: var(--textDim); margin-bottom: 5px; text-transform: uppercase; }
 
   /* audio player bar */
   #player {
@@ -362,6 +369,7 @@ export const APP_HTML = `<!doctype html>
           <span class="dbgonly"><i style="background:var(--llm)"></i>LLM</span>
         </div>
         <div class="crosspill" id="crosspill"></div>
+        <div class="voicetip" id="voicetip"></div>
         <div id="chartempty">Select a run</div>
       </div>
       <div id="player">
@@ -448,6 +456,7 @@ var state = {
 var chart = document.getElementById("chart");
 var chartWrap = document.getElementById("chartwrap");
 var crosspill = document.getElementById("crosspill");
+var voicetip = document.getElementById("voicetip");
 var audio = new Audio();
 var curAudio = null;
 
@@ -1052,22 +1061,28 @@ function drawVoiceBars(X, g, plotW) {
   var rl = el("text", { x: PAD_L + 3, y: g.heatTop + subH + 10, fill: C.ricky, "font-size": 8, "pointer-events": "none", opacity: 0.65 });
   rl.textContent = "ricky"; chart.appendChild(rl);
 
+  var plotRight = PAD_L + plotW;
   state.events.forEach(function (ev, idx) {
     if (ev.type !== "speech") return;
     var who = voiceLabel(ev), isJess = who === "jessica";
     var text = String(ev.detail || "");
-    var dur = Math.max(1.6, text.length / 14);   // estimated spoken seconds
+    var dur = Math.max(1.6, text.length / 13);   // estimated spoken seconds (~13 chars/s)
     var x0 = X(tToX(ev.t)), x1 = X(tToX(num(ev.t) + dur));
-    if (x1 < PAD_L || x0 > PAD_L + plotW) return;
-    var cx0 = Math.max(x0, PAD_L), cx1 = Math.min(Math.max(x1, x0 + 5), PAD_L + plotW);
-    var w = Math.max(cx1 - cx0, 5);
+    if (x1 < PAD_L || x0 > plotRight) return;
+    // clip the bar to the plot area so it never shoots past the time axis
+    var cx0 = Math.max(x0, PAD_L), cx1 = Math.min(x1, plotRight);
+    var w = Math.max(cx1 - cx0, 4);
     var rowY = (isJess ? g.heatTop : g.heatTop + subH) + 3, barH = subH - 6;
     var sel = state.selected === idx, col = isJess ? C.jessica : C.ricky;
     var bar = el("rect", { x: cx0, y: rowY, width: w, height: barH, rx: 3,
-      fill: col, "fill-opacity": sel ? 1 : 0.8, stroke: sel ? C.select : "none", "stroke-width": 2 });
-    withTitle(bar, who + " @ " + fmtClock(ev.t) + "  (~" + Math.round(dur) + "s)\\n" + text);
+      fill: col, "fill-opacity": sel ? 1 : 0.78, stroke: sel ? C.select : "none", "stroke-width": 2,
+      style: "cursor:pointer" });
+    var tipHead = who + " \\u00b7 " + fmtClock(ev.t) + " \\u00b7 ~" + Math.round(dur) + "s";
+    bar.addEventListener("pointerenter", function (e) { showVoiceTip(e, tipHead, text); });
+    bar.addEventListener("pointermove", positionVoiceTip);
+    bar.addEventListener("pointerleave", hideVoiceTip);
     clickable(bar, idx); chart.appendChild(bar);
-    if (w > 46) {
+    if (w > 44) {
       var maxChars = Math.max(4, Math.floor((w - 8) / 5));
       var label = text.length > maxChars ? text.slice(0, maxChars - 1) + "\\u2026" : text;
       var tx = el("text", { x: cx0 + 5, y: rowY + barH - 3.5, fill: "#0b0e13", "font-size": 9, "font-weight": 600, "pointer-events": "none" });
@@ -1283,6 +1298,23 @@ function showCrosshair(e) {
   var left = sx - pw / 2; if (left < 50) left = 50; if (left > W - pw - 6) left = W - pw - 6;
   crosspill.style.left = left + "px";
 }
+// --- voice-bar hover tooltip (full quote text) -------------------------
+function showVoiceTip(e, head, text) {
+  voicetip.innerHTML = '<div class="vt-h">' + esc(head) + "</div>" + esc(text);
+  voicetip.style.display = "block";
+  positionVoiceTip(e);
+}
+function positionVoiceTip(e) {
+  if (voicetip.style.display === "none") return;
+  var r = chartWrap.getBoundingClientRect();
+  var x = e.clientX - r.left, y = e.clientY - r.top;
+  var tw = voicetip.offsetWidth, th = voicetip.offsetHeight, W = chartWrap.clientWidth;
+  var left = x + 14; if (left + tw > W - 6) left = x - tw - 14; if (left < 4) left = 4;
+  var top = y - th - 12; if (top < 4) top = y + 20;
+  voicetip.style.left = left + "px"; voicetip.style.top = top + "px";
+}
+function hideVoiceTip() { voicetip.style.display = "none"; }
+
 function distToT(d) {
   var m = state.metrics; if (!m.length) return 0;
   if (d <= m[0].d) return m[0].t; if (d >= m[m.length - 1].d) return m[m.length - 1].t;
@@ -1654,25 +1686,30 @@ chart.addEventListener("wheel", function (e) {
   state.v0 = pivot - px * newSpan; state.v1 = state.v0 + newSpan;
   clampView(); scheduleRender();
 }, { passive: false });
+// Pan tracking lives on window (not setPointerCapture) so a real click still
+// reaches the speech bars — capture would retarget the click to the SVG root
+// and the bars would never fire. A pan only begins after the pointer actually
+// moves past a small threshold, so a tap selects instead of nudging the view.
 chart.addEventListener("pointerdown", function (e) {
-  if (!state.events.length) return;
+  if (!state.events.length || e.button !== 0) return;
   state.pan = { x: e.clientX, v0: state.v0, v1: state.v1, moved: false };
-  chart.classList.add("panning");
-  try { chart.setPointerCapture(e.pointerId); } catch (err) {}
 });
-chart.addEventListener("pointermove", function (e) {
+window.addEventListener("pointermove", function (e) {
   if (!state.pan) return;
   var W = chartWrap.clientWidth || 800;
   var plotW = Math.max(W - PAD_L - PAD_R, 10);
   var dx = e.clientX - state.pan.x;
-  if (Math.abs(dx) > 2) state.pan.moved = true;
+  if (!state.pan.moved) {
+    if (Math.abs(dx) <= 3) return;        // tap, not a drag — leave clicks alone
+    state.pan.moved = true; chart.classList.add("panning"); hideVoiceTip();
+  }
   var dv = -dx / plotW * (state.pan.v1 - state.pan.v0);
   state.v0 = state.pan.v0 + dv; state.v1 = state.pan.v1 + dv;
   clampView(); scheduleRender();
 });
 function endPan() { state.pan = null; chart.classList.remove("panning"); }
-chart.addEventListener("pointerup", endPan);
-chart.addEventListener("pointercancel", endPan);
+window.addEventListener("pointerup", endPan);
+window.addEventListener("pointercancel", endPan);
 
 function clampView() {
   var span = state.v1 - state.v0;
