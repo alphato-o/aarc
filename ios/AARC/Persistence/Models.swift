@@ -29,6 +29,12 @@ final class RunRecord {
     var cachedAvgPaceSecPerKm: Double = 0
     var cachedEnergyKcal: Double = 0
 
+    /// Soft-delete tombstone. nil = active. When the user deletes a run we
+    /// only set this (and KEEP the HealthKit workout), so the run sits in
+    /// "Recently Deleted" and can be restored. A sweep purges tombstones
+    /// (permanently removing the HK workout too) after the retention window.
+    var deletedAt: Date? = nil
+
     init(
         id: UUID = UUID(),
         startedAt: Date = .now,

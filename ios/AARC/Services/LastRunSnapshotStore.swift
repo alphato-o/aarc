@@ -85,6 +85,7 @@ enum LastRunSnapshotStore {
     static func backfillFromHistory() {
         let context = PersistenceStore.shared.container.mainContext
         var descriptor = FetchDescriptor<RunRecord>(
+            predicate: #Predicate { $0.deletedAt == nil },
             sortBy: [SortDescriptor(\.startedAt, order: .reverse)]
         )
         descriptor.fetchLimit = 1

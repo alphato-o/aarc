@@ -191,7 +191,8 @@ final class LiveMetricsConsumer {
         let distance = HealthKitReader.shared.distanceMeters(workout)
         let energy = HealthKitReader.shared.energyKcal(workout)
         let runType = HealthKitReader.shared.runType(workout)
-        let isTest = HealthKitReader.shared.isTestData(workout)
+        // Test either from the HK workout metadata OR the start-screen toggle.
+        let isTest = HealthKitReader.shared.isTestData(workout) || RunOrchestrator.shared.isTestRun
         let aarcId = HealthKitReader.shared.aarcRunId(workout) ?? currentRunId ?? UUID()
         let duration = workout.duration
         let avgPace = (distance > 0) ? duration / (distance / 1000) : 0

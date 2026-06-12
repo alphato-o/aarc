@@ -64,6 +64,7 @@ struct RunHomeView: View {
                 .frame(maxHeight: .infinity)
                 .layoutPriority(1)
             trackingSourcePicker
+            testRunToggle
             watchUnreachableBanner
             startButtons
                 .frame(maxHeight: .infinity)
@@ -73,6 +74,30 @@ struct RunHomeView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Sticky "test run" toggle. When on, the run is tagged as test data
+    /// (TEST badge in History, sweepable via "Delete all test runs"). Stays
+    /// where the user left it, and shows its state so it's never a surprise.
+    @ViewBuilder
+    private var testRunToggle: some View {
+        Toggle(isOn: Binding(
+            get: { orchestrator.isTestRun },
+            set: { orchestrator.isTestRun = $0 }
+        )) {
+            Label {
+                Text(orchestrator.isTestRun ? "Test run — won't count" : "Test run")
+                    .font(.subheadline)
+            } icon: {
+                Image(systemName: "flask")
+            }
+            .foregroundStyle(orchestrator.isTestRun ? .orange : .secondary)
+        }
+        .tint(.orange)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(orchestrator.isTestRun ? Color.orange.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 10))
     }
 
     @ViewBuilder

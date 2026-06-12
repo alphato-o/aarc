@@ -37,6 +37,16 @@ final class RunOrchestrator {
     private(set) var phase: Phase = .idle
     var lastError: String?
 
+    /// Sticky "this is a test run" toggle, set on the start screen. When on,
+    /// the saved RunRecord is flagged `isTestData` (regardless of the HK
+    /// workout's own metadata) so it shows the TEST badge and is sweepable
+    /// via "Delete all test runs". Persisted + visible so the user always
+    /// sees whether it's armed.
+    private static let kTestRun = "aarc.run.isTestRun"
+    var isTestRun: Bool = UserDefaults.standard.bool(forKey: kTestRun) {
+        didSet { UserDefaults.standard.set(isTestRun, forKey: Self.kTestRun) }
+    }
+
     /// Human-readable reason shown on the watch-timeout card.
     private(set) var watchFailureReason: String?
 
