@@ -89,6 +89,9 @@ export const APP_HTML = `<!doctype html>
   }
   .xtoggle button.on { background: #1c2632; color: var(--textHi); }
   .xtoggle button + button { border-left: 1px solid var(--line); }
+  .dbgtoggle { display: inline-flex; align-items: center; gap: 5px; color: var(--textDim);
+    font: 600 11px/1 inherit; cursor: pointer; user-select: none; }
+  .dbgtoggle input { accent-color: var(--select); cursor: pointer; }
 
   #layout { display: flex; height: calc(100% - 46px); }
 
@@ -154,10 +157,11 @@ export const APP_HTML = `<!doctype html>
     justify-content: center; color: var(--textFaint); font-size: 13px; pointer-events: none;
   }
   .legend {
-    position: absolute; top: 8px; right: 12px; display: flex; gap: 13px; flex-wrap: wrap;
-    justify-content: flex-end; font-size: 11px; color: var(--textDim); pointer-events: none; max-width: 60%;
+    position: absolute; top: 7px; left: 50%; transform: translateX(-50%); display: flex; gap: 13px; flex-wrap: wrap;
+    justify-content: center; font-size: 11px; color: var(--textDim); pointer-events: none; max-width: 64%;
   }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  body:not(.debug-on) .legend .dbgonly { display: none; }
   .legend i { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
   .crosspill {
     position: absolute; top: 4px; left: 50px; pointer-events: none; display: none;
@@ -335,6 +339,9 @@ export const APP_HTML = `<!doctype html>
     <button data-x="time" class="on">Time</button>
     <button data-x="dist">Distance</button>
   </span>
+  <label class="dbgtoggle" id="dbgtoggle" title="Show network + pipeline diagnostics lanes">
+    <input type="checkbox" id="dbgchk"> Debug
+  </label>
   <span class="hint">wheel = zoom &middot; drag = pan</span>
 </header>
 <div id="layout">
@@ -351,8 +358,8 @@ export const APP_HTML = `<!doctype html>
           <span><i style="background:var(--hr)"></i>HR</span>
           <span><i style="background:var(--jessica)"></i>jessica</span>
           <span><i style="background:var(--ricky)"></i>ricky</span>
-          <span><i style="background:var(--amber)"></i>11Labs</span>
-          <span><i style="background:var(--llm)"></i>LLM</span>
+          <span class="dbgonly"><i style="background:var(--amber)"></i>11Labs</span>
+          <span class="dbgonly"><i style="background:var(--llm)"></i>LLM</span>
         </div>
         <div class="crosspill" id="crosspill"></div>
         <div id="chartempty">Select a run</div>
@@ -421,7 +428,7 @@ var C = {
 // chart geometry: stacked lanes sharing one x-scale
 var PAD_L = 46, PAD_R = 46, PAD_T = 14;
 var PLOT_H = 158;          // performance plot (speed area + HR line + glyphs)
-var HEAT_H = 26;           // voice-density heat strip (jessica + ricky sub-rows)
+var HEAT_H = 50;           // VOICE lane: clickable bars sized to how long each line was spoken (jessica + ricky rows)
 var MARK_H = 58;           // event-marker swim lanes
 var WF_H = 86;             // net.req request waterfall
 var AXIS_H = 22;
@@ -435,7 +442,7 @@ var state = {
   xmode: "time", dur: 60, maxDist: 0,
   v0: 0, v1: 60, domain0: 0, domain1: 60,
   selected: -1, directorIntervals: [], summary: null, net: [], pan: null,
-  tab: "perf"
+  tab: "perf", debug: false
 };
 
 var chart = document.getElementById("chart");
@@ -553,7 +560,7 @@ function renderRuns() {
     var bits = [];
     var fd = fmtDur(md.dur); if (fd) bits.push("<b>" + esc(fd) + "</b>");
     var fdist = fmtDist(md.dist); if (fdist) bits.push("<b>" + esc(fdist) + "</b>");
-    bits.push(esc(run.event_count + " ev"));
+    bits.push(esc(run.event_count + " events"));
     var bad = run._health === "bad";
     row.innerHTML =
       '<div class="toprow"><span class="hdot' + (bad ? " bad" : "") + '"></span>' +
@@ -863,10 +870,15 @@ function scheduleRender() {
 
 // lane Y offsets (computed each render so resize is fine)
 function laneGeo() {
+  // DEBUG OFF (default): performance + the VOICE lane only. DEBUG ON adds the
+  // EVENTS swim-lanes + the NETWORK request waterfall.
   var plotTop = PAD_T, plotBot = plotTop + PLOT_H;
   var heatTop = plotBot + GAP, heatBot = heatTop + HEAT_H;
-  var markTop = heatBot + GAP, markBot = markTop + MARK_H;
-  var wfTop = markBot + GAP, wfBot = wfTop + WF_H;
+  var markTop = heatBot, markBot = heatBot, wfTop = heatBot, wfBot = heatBot;
+  if (state.debug) {
+    markTop = heatBot + GAP; markBot = markTop + MARK_H;
+    wfTop = markBot + GAP; wfBot = wfTop + WF_H;
+  }
   var axisY = wfBot;
   return { plotTop: plotTop, plotBot: plotBot, heatTop: heatTop, heatBot: heatBot,
     markTop: markTop, markBot: markBot, wfTop: wfTop, wfBot: wfBot, axisY: axisY,
@@ -921,9 +933,8 @@ function render() {
 
   // lane labels
   laneLabel("SPEED / HR", g.plotTop + 2);
-  laneLabel("VOICE", g.heatTop + 2);
-  laneLabel("EVENTS", g.markTop + 2);
-  laneLabel("NET WATERFALL", g.wfTop + 2);
+  laneLabel("VOICES", g.heatTop + 2);
+  if (state.debug) { laneLabel("EVENTS", g.markTop + 2); laneLabel("NETWORK", g.wfTop + 2); }
 
   // ---- shared x grid across ALL lanes ----
   var ticks = niceTicks(v0, v1, 10);
@@ -942,8 +953,8 @@ function render() {
   drawSeries(chart, X, function (r) { return r.hr; }, Yhr, {
     area: false, color: C.hr, lineOpacity: 0.95, width: 1.7, clipTop: g.plotTop, clipBot: g.plotBot });
 
-  // ---- director protect bands (behind glyphs) ----
-  state.directorIntervals.forEach(function (iv) {
+  // ---- director protect bands (behind glyphs) — debug only ----
+  if (state.debug) state.directorIntervals.forEach(function (iv) {
     var x0 = Math.max(X(tToX(iv.start)), PAD_L), x1 = Math.min(X(tToX(iv.end)), PAD_L + plotW);
     if (x1 <= PAD_L || x0 >= PAD_L + plotW) return;
     var idx = state.events.indexOf(iv.ev);
@@ -954,21 +965,21 @@ function render() {
     clickable(band, idx); chart.appendChild(band);
   });
 
-  // ---- speech glyphs pinned on the speed curve (wow: fuse events into chart) ----
+  // ---- speech glyphs pinned on the speed curve ----
   drawSpeechGlyphs(X, Yspeed, g, speedTop);
 
-  // ---- VOICE-DENSITY HEAT STRIP (wow viz) ----
-  drawHeatStrip(X, g, plotW);
+  // ---- VOICES lane: clickable bars sized to how long each line was spoken ----
+  drawVoiceBars(X, g, plotW);
 
-  // ---- EVENT swim lanes ----
-  for (var ri = 1; ri < MARK_ROWS; ri++) {
-    var ry = g.markTop + ri * ROW_H;
-    chart.appendChild(el("line", { x1: PAD_L, y1: ry, x2: PAD_L + plotW, y2: ry, stroke: C.grid, "stroke-opacity": 0.4 }));
+  // ---- DEBUG-only lanes: EVENTS swim lanes + NETWORK waterfall ----
+  if (state.debug) {
+    for (var ri = 1; ri < MARK_ROWS; ri++) {
+      var ry = g.markTop + ri * ROW_H;
+      chart.appendChild(el("line", { x1: PAD_L, y1: ry, x2: PAD_L + plotW, y2: ry, stroke: C.grid, "stroke-opacity": 0.4 }));
+    }
+    drawEventMarkers(X, g, v0, v1, span, plotW);
+    drawWaterfall(X, g, plotW);
   }
-  drawEventMarkers(X, g, v0, v1, span, plotW);
-
-  // ---- NET.REQ REQUEST WATERFALL (wow viz) ----
-  drawWaterfall(X, g, plotW);
 }
 
 function laneLabel(txt, y) {
@@ -979,7 +990,9 @@ function laneLabel(txt, y) {
 function drawSpeechGlyphs(X, Yspeed, g, speedTop) {
   state.events.forEach(function (ev, idx) {
     var type = String(ev.type || "");
-    if (type !== "speech" && type !== "coach.trigger" && type !== "milestone.owner" && type !== "endpoint.switch" && type !== "tts.fallback") return;
+    var debugGlyph = (type === "coach.trigger" || type === "endpoint.switch" || type === "tts.fallback");
+    if (type !== "speech" && type !== "milestone.owner" && !debugGlyph) return;
+    if (debugGlyph && !state.debug) return;   // declutter: debug glyphs hidden by default
     var px = X(tToX(ev.t));
     if (px < PAD_L - 4 || px > PAD_L + (chartWrap.clientWidth - PAD_L - PAD_R) + 4) return;
     // anchor glyph to speed curve height at this t
@@ -1027,44 +1040,47 @@ function metricAt(t) {
 
 // VOICE-DENSITY HEAT STRIP: two sub-rows (jessica/ricky), color intensity =
 // speech seconds per bucket. Faint ticks for voice.dropStale/deferGap.
-function drawHeatStrip(X, g, plotW) {
-  var NB = Math.max(24, Math.min(160, Math.floor(plotW / 6)));
-  var jess = new Array(NB).fill(0), ricky = new Array(NB).fill(0);
-  var v0 = state.v0, v1 = state.v1, span = (v1 - v0) || 1;
+// VOICES lane: one bar per spoken line, its WIDTH = how long it took to say
+// (estimated from text length, ~14 chars/sec). Jessica on top, Ricky below.
+// Hover shows the full quote; click selects + replays the audio.
+function drawVoiceBars(X, g, plotW) {
   var subH = HEAT_H / 2;
-  function bucketOf(ev) {
-    var vx = tToX(ev.t); var f = (vx - v0) / span;
-    if (f < 0 || f >= 1) return -1; return Math.floor(f * NB);
-  }
-  state.events.forEach(function (ev) {
-    if (ev.type !== "speech") return;
-    var b = bucketOf(ev); if (b < 0) return;
-    var dur = Math.max(String(ev.detail || "").length / 15, 1);
-    var vid = String((ev.data || {}).voiceId || "");
-    var isJess = vid === VOICE_JESSICA || String((ev.data || {}).source || "").indexOf("jessica") === 0;
-    if (isJess) jess[b] += dur; else ricky[b] += dur;
-  });
-  var maxJ = Math.max.apply(null, jess.concat([1])), maxR = Math.max.apply(null, ricky.concat([1]));
-  // baseline strip background
   chart.appendChild(el("rect", { x: PAD_L, y: g.heatTop, width: plotW, height: HEAT_H, fill: "#0c0f14", stroke: C.axis, "stroke-opacity": 0.5 }));
-  var cw = plotW / NB;
-  for (var i = 0; i < NB; i++) {
-    var x = PAD_L + i * cw;
-    if (jess[i] > 0) chart.appendChild(el("rect", { x: x, y: g.heatTop, width: cw + 0.5, height: subH, fill: C.heatJess, "fill-opacity": (0.12 + 0.82 * (jess[i] / maxJ)).toFixed(3) }));
-    if (ricky[i] > 0) chart.appendChild(el("rect", { x: x, y: g.heatTop + subH, width: cw + 0.5, height: subH, fill: C.heatRicky, "fill-opacity": (0.12 + 0.82 * (ricky[i] / maxR)).toFixed(3) }));
-  }
   chart.appendChild(el("line", { x1: PAD_L, y1: g.heatTop + subH, x2: PAD_L + plotW, y2: g.heatTop + subH, stroke: "#0b0e13", "stroke-opacity": 0.6 }));
-  // pathology ticks
-  state.events.forEach(function (ev) {
+  var jl = el("text", { x: PAD_L + 3, y: g.heatTop + 10, fill: C.jessica, "font-size": 8, "pointer-events": "none", opacity: 0.65 });
+  jl.textContent = "jessica"; chart.appendChild(jl);
+  var rl = el("text", { x: PAD_L + 3, y: g.heatTop + subH + 10, fill: C.ricky, "font-size": 8, "pointer-events": "none", opacity: 0.65 });
+  rl.textContent = "ricky"; chart.appendChild(rl);
+
+  state.events.forEach(function (ev, idx) {
+    if (ev.type !== "speech") return;
+    var who = voiceLabel(ev), isJess = who === "jessica";
+    var text = String(ev.detail || "");
+    var dur = Math.max(1.6, text.length / 14);   // estimated spoken seconds
+    var x0 = X(tToX(ev.t)), x1 = X(tToX(num(ev.t) + dur));
+    if (x1 < PAD_L || x0 > PAD_L + plotW) return;
+    var cx0 = Math.max(x0, PAD_L), cx1 = Math.min(Math.max(x1, x0 + 5), PAD_L + plotW);
+    var w = Math.max(cx1 - cx0, 5);
+    var rowY = (isJess ? g.heatTop : g.heatTop + subH) + 3, barH = subH - 6;
+    var sel = state.selected === idx, col = isJess ? C.jessica : C.ricky;
+    var bar = el("rect", { x: cx0, y: rowY, width: w, height: barH, rx: 3,
+      fill: col, "fill-opacity": sel ? 1 : 0.8, stroke: sel ? C.select : "none", "stroke-width": 2 });
+    withTitle(bar, who + " @ " + fmtClock(ev.t) + "  (~" + Math.round(dur) + "s)\\n" + text);
+    clickable(bar, idx); chart.appendChild(bar);
+    if (w > 46) {
+      var maxChars = Math.max(4, Math.floor((w - 8) / 5));
+      var label = text.length > maxChars ? text.slice(0, maxChars - 1) + "\\u2026" : text;
+      var tx = el("text", { x: cx0 + 5, y: rowY + barH - 3.5, fill: "#0b0e13", "font-size": 9, "font-weight": 600, "pointer-events": "none" });
+      tx.textContent = label; chart.appendChild(tx);
+    }
+  });
+
+  if (state.debug) state.events.forEach(function (ev) {
     if (ev.type !== "voice.dropStale" && ev.type !== "voice.deferGap") return;
     var px = X(tToX(ev.t)); if (px < PAD_L || px > PAD_L + plotW) return;
     var tk = el("line", { x1: px, y1: g.heatTop, x2: px, y2: g.heatBot, stroke: ev.type === "voice.dropStale" ? C.drop : C.preempt, "stroke-width": 1, "stroke-opacity": 0.85 });
     withTitle(tk, ev.type + " @ " + fmtClock(ev.t)); clickable(tk, state.events.indexOf(ev)); chart.appendChild(tk);
   });
-  var jl = el("text", { x: PAD_L + 3, y: g.heatTop + subH - 2, fill: C.jessica, "font-size": 8, "pointer-events": "none", opacity: 0.8 });
-  jl.textContent = "jessica"; chart.appendChild(jl);
-  var rl = el("text", { x: PAD_L + 3, y: g.heatBot - 2, fill: C.ricky, "font-size": 8, "pointer-events": "none", opacity: 0.8 });
-  rl.textContent = "ricky"; chart.appendChild(rl);
 }
 
 function drawEventMarkers(X, g, v0, v1, span, plotW) {
@@ -1612,6 +1628,13 @@ document.querySelectorAll("#xtoggle button").forEach(function (b) {
     setXMode(b.getAttribute("data-x"), true);
     scheduleRender();
   });
+});
+
+// --- debug toggle: show/hide network + pipeline diagnostics lanes -------
+document.getElementById("dbgchk").addEventListener("change", function () {
+  state.debug = this.checked;
+  document.body.classList.toggle("debug-on", state.debug);
+  scheduleRender();
 });
 
 // --- zoom + pan --------------------------------------------------------
