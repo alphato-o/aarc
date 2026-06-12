@@ -2242,24 +2242,93 @@ function drawQuote(ctx, x, boxW, topY, botY, maxSize, text, progress, centered) 
     for (var a = 0; a < words.length; a++) ctx.fillText(words[a].w, words[a].x, words[a].y);
     return;
   }
-  var active = Math.min(words.length - 1, Math.floor(progress * words.length));
+  // per-word glow level 0..1 with eased rise/fall — karaoke-timed when the
+  // audio envelope alignment is available, evenly spread otherwise.
   for (var b = 0; b < words.length; b++) {
     var wo = words[b];
-    if (b === active) {
+    var g = 0, read = false;
+    if (karaoke && karaoke.times.length) {
+      var ti = Math.min(karaoke.times.length - 1, Math.floor(b * karaoke.times.length / words.length));
+      var kt = karaoke.times[ti], t = karaoke.t;
+      var rise = sstep((t - kt.s + 0.05) / 0.12);
+      var fall = 1 - sstep((t - kt.e) / 0.22);
+      g = Math.max(0, Math.min(rise, fall));
+      read = t >= kt.e;
+    } else {
+      var pos = progress * words.length - 0.5;
+      var dist = pos - b;
+      g = sstep(1 - Math.abs(dist) / 1.3);
+      read = dist > 0.8;
+    }
+    var alpha = read ? 1 : 0.40 + 0.60 * g;
+    if (g > 0.04) {
       var wW = ctx.measureText(wo.w).width;
       rr(ctx, wo.x - 8, wo.y - ql.size * 0.84, wW + 16, ql.size * 1.16, 10);
-      ctx.fillStyle = "rgba(143,184,154,0.17)"; ctx.fill();
+      ctx.fillStyle = "rgba(143,184,154," + (0.18 * g).toFixed(3) + ")"; ctx.fill();
+    }
+    ctx.fillStyle = "rgba(244,242,232," + alpha.toFixed(3) + ")";
+    ctx.fillText(wo.w, wo.x, wo.y);
+    if (g > 0.04) {
       ctx.save();
-      ctx.shadowColor = "rgba(207,232,214,0.95)"; ctx.shadowBlur = 26;
-      ctx.fillStyle = "#ffffff";
+      ctx.shadowColor = "rgba(207,232,214," + (0.95 * g).toFixed(3) + ")";
+      ctx.shadowBlur = 28 * g;
+      ctx.fillStyle = "rgba(255,255,255," + (0.9 * g).toFixed(3) + ")";
       ctx.fillText(wo.w, wo.x, wo.y);
-      ctx.fillText(wo.w, wo.x, wo.y);   // double-strike thickens the glow
       ctx.restore();
-    } else {
-      ctx.fillStyle = b < active ? "#f4f2e8" : "rgba(244,242,232,0.40)";
-      ctx.fillText(wo.w, wo.x, wo.y);
     }
   }
+}
+function sstep(x) { if (x <= 0) return 0; if (x >= 1) return 1; return x * x * (3 - 2 * x); }
+
+// =======================================================================
+// Karaoke alignment — match the rolling highlight to what's actually being
+// said WITHOUT timestamps from the TTS vendor. The decoded audio buffer is
+// analysed for an RMS energy envelope; silence is detected with an adaptive
+// threshold; words are then distributed over VOICED time only, weighted by
+// syllable count. Pauses between phrases stop drifting the highlight, and
+// long words get proportionally longer slots.
+// =======================================================================
+var karaoke = null;
+function buildKaraoke(buf, text) {
+  var words = String(text).split(" ").filter(function (w) { return !!w; });
+  if (!words.length) return [];
+  var ch = buf.getChannelData(0);
+  var sr = buf.sampleRate;
+  var frame = Math.max(1, Math.floor(sr / 50));   // 20ms frames
+  var env = [];
+  for (var i = 0; i + frame <= ch.length; i += frame) {
+    var s = 0, cnt = 0;
+    for (var j = i; j < i + frame; j += 4) { s += ch[j] * ch[j]; cnt++; }
+    env.push(Math.sqrt(s / Math.max(cnt, 1)));
+  }
+  if (env.length < 4) return [];
+  var sorted = env.slice().sort(function (a, b) { return a - b; });
+  var p90 = sorted[Math.floor(sorted.length * 0.9)] || 0;
+  var thr = Math.max(p90 * 0.16, 0.0035);
+  var dt = frame / sr;
+  var cum = [], c = 0;
+  for (var k = 0; k < env.length; k++) { if (env[k] > thr) c += dt; cum.push(c); }
+  var totalVoiced = c;
+  if (totalVoiced < 0.4) return [];                // degenerate — fall back to uniform
+  // syllable-ish weights: vowel groups + a touch of raw length
+  var weights = words.map(function (w) {
+    var m = w.toLowerCase().match(/[aeiouy]+/g);
+    return (m ? m.length : 1) + w.length * 0.08;
+  });
+  var wsum = 0; weights.forEach(function (x) { wsum += x; });
+  function timeAtVoiced(v) {
+    var lo = 0, hi = cum.length - 1;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (cum[mid] < v) lo = mid + 1; else hi = mid; }
+    return lo * dt;
+  }
+  var times = [], acc = 0;
+  for (var x2 = 0; x2 < words.length; x2++) {
+    var sV = (acc / wsum) * totalVoiced;
+    acc += weights[x2];
+    var eV = (acc / wsum) * totalVoiced;
+    times.push({ s: timeAtVoiced(sV), e: timeAtVoiced(eV) });
+  }
+  return times;
 }
 
 function drawShareCard(ctx, W, H, o, progress) {
@@ -2275,10 +2344,10 @@ function drawShareCard(ctx, W, H, o, progress) {
 function drawLayoutQuoteFirst(ctx, W, H, o, progress, c) {
   var P = c.P;
   var kpiY = H - 240;
-  var sparkY = kpiY - 64;
-  // compact pace + HR strip as the divider, revealed by progress
-  drawShareGraph(ctx, W * 0.18, sparkY - 64, W * 0.64, 64, o.spark, progress);
-  var stampY = sparkY - 118;
+  // pace + HR strip, full quote-container width for a consistent grid
+  var gBot = kpiY - 56, gH = H > 1200 ? 110 : 92;
+  drawShareGraph(ctx, P, gBot - gH, W - P * 2, gH, o.spark, progress);
+  var stampY = gBot - gH - 48;
   if (isFinite(o.quoteKm)) {
     ctx.textAlign = "center"; ctx.fillStyle = "#9eb8a5";
     ctx.font = "700 22px " + SANS;
@@ -2652,6 +2721,7 @@ function runVideoRecorder(actx, buf, mime) {
     var blob = new Blob(chunks, { type: type });
     downloadBlob(blob, shareSlug() + ext);
     try { actx.close(); } catch (e2) {}
+    karaoke = null;
     shareState.recording = false;
     document.getElementById("sharevid").disabled = false;
     document.getElementById("shareimg").disabled = false;
@@ -2661,15 +2731,19 @@ function runVideoRecorder(actx, buf, mime) {
   };
 
   var dur = buf.duration, outro = 1.1, total = dur + outro;
+  var opts = shareOpts();
+  // envelope-align the highlight to the actual speech before rolling
+  karaoke = { times: buildKaraoke(buf, "\\u201c" + opts.quote + "\\u201d"), t: 0 };
   var t0 = performance.now();
   rec.start();
   src.start();
   function frame() {
     var t = (performance.now() - t0) / 1000;
     var p = Math.min(t / dur, 1);
+    karaoke.t = Math.min(t, dur);
     var ctx = canvas.getContext("2d");
     ctx.save(); ctx.scale(vw / d.w, vh / d.h);
-    drawShareCard(ctx, d.w, d.h, shareOpts(), p);
+    drawShareCard(ctx, d.w, d.h, opts, p);
     ctx.restore();
     shareStatus("Recording\\u2026 " + Math.min(t, dur).toFixed(1) + "s / " + dur.toFixed(1) + "s");
     if (t < total && shareState.recording) requestAnimationFrame(frame);
