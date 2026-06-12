@@ -604,7 +604,7 @@ function loadRuns(keepSel) {
     return r.json();
   }).then(function (runs) {
     state.runs = Array.isArray(runs) ? runs : [];
-    renderRuns();
+    prefetchSparks();   // cached sparks paint now; the rest load in background
     if (!keepSel && state.runs.length > 0) selectRun(state.runs[0].run_id);
     else if (keepSel && state.runId && !state.runs.some(function (r) { return r.run_id === state.runId; })) {
       if (state.runs.length > 0) selectRun(state.runs[0].run_id); else clearRun();
@@ -644,6 +644,96 @@ function sparkPath(arr, W, H, color, width, op) {
   return '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="' + width + '" stroke-opacity="' + op + '" stroke-linejoin="round"/>';
 }
 
+// --- per-run spark cache (localStorage) + background prefetch ----------
+// Every run row gets its sparkline + dist/dur/pace WITHOUT being clicked:
+// cached entries paint instantly on page load; missing ones are fetched in
+// the background (2 at a time) and persisted, keyed by run_id and validated
+// against event_count so a re-uploaded run refreshes itself.
+var SPARK_VER = 1;
+var SPARK_PTS = 48;
+function sparkKey(id) { return "aarc.spark." + id; }
+function downsample(arr, n) {
+  if (!arr || arr.length <= n) return arr || [];
+  var out = [], step = arr.length / n;
+  for (var i = 0; i < n; i++) out.push(arr[Math.floor(i * step)]);
+  return out;
+}
+function applySparkCache(run) {
+  try {
+    var raw = localStorage.getItem(sparkKey(run.run_id));
+    if (!raw) return false;
+    var c = JSON.parse(raw);
+    if (c.v !== SPARK_VER || c.ec !== run.event_count) return false;
+    run._spark = { kmh: c.kmh || [], hr: c.hr || [] };
+    if (c.health) run._health = c.health;
+    if (isFinite(num(c.dur))) run._dur = num(c.dur);
+    if (isFinite(num(c.dist))) run._dist = num(c.dist);
+    return true;
+  } catch (e) { return false; }
+}
+function saveSparkCache(run) {
+  try {
+    localStorage.setItem(sparkKey(run.run_id), JSON.stringify({
+      v: SPARK_VER, ec: run.event_count,
+      kmh: downsample(run._spark.kmh, SPARK_PTS),
+      hr: downsample(run._spark.hr, SPARK_PTS),
+      dur: isFinite(run._dur) ? run._dur : null,
+      dist: isFinite(run._dist) ? run._dist : null,
+      health: run._health || null
+    }));
+  } catch (e) { /* quota — sparks just stay session-only */ }
+}
+function pruneSparkCache() {
+  try {
+    var live = {};
+    state.runs.forEach(function (r) { live[sparkKey(r.run_id)] = 1; });
+    var dead = [];
+    for (var i = 0; i < localStorage.length; i++) {
+      var k = localStorage.key(i);
+      if (k && k.indexOf("aarc.spark.") === 0 && !live[k]) dead.push(k);
+    }
+    dead.forEach(function (k) { localStorage.removeItem(k); });
+  } catch (e) {}
+}
+var sparkQueue = [], sparkActive = 0;
+function prefetchSparks() {
+  state.runs.forEach(function (run) {
+    if (run._spark || run._sparkPending) return;
+    if (applySparkCache(run)) return;
+    run._sparkPending = true;
+    sparkQueue.push(run);
+  });
+  pruneSparkCache();
+  renderRuns();           // paint everything we already have
+  pumpSparks();
+}
+function pumpSparks() {
+  while (sparkActive < 2 && sparkQueue.length) {
+    sparkActive++;
+    fetchSpark(sparkQueue.shift());
+  }
+}
+function fetchSpark(run) {
+  function done() { run._sparkPending = false; sparkActive--; pumpSparks(); }
+  fetch("/api/runs/" + encodeURIComponent(run.run_id) + "/events").then(function (r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }).then(function (events) {
+    events = normalizeEvents(events);
+    var m = metricsFromEvents(events);
+    run._spark = {
+      kmh: downsample(m.map(function (x) { return x.kmh; }), SPARK_PTS),
+      hr: downsample(m.map(function (x) { return x.hr; }), SPARK_PTS)
+    };
+    run._health = eventsLookBad(events) ? "bad" : "ok";
+    run._dur = events.length ? events[events.length - 1].t : NaN;
+    run._dist = m.length ? m[m.length - 1].d : NaN;
+    saveSparkCache(run);
+    renderRuns();
+    done();
+  }).catch(function () { done(); });
+}
+
 function renderRuns() {
   var nav = document.getElementById("runs");
   nav.innerHTML = "";
@@ -656,9 +746,13 @@ function renderRuns() {
       : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
         d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
     var md = metaDurDist(metaObj(run.meta));
+    var dur = isFinite(md.dur) ? md.dur : run._dur;
+    var dist = isFinite(md.dist) ? md.dist : run._dist;
     var bits = [];
-    var fd = fmtDur(md.dur); if (fd) bits.push("<b>" + esc(fd) + "</b>");
-    var fdist = fmtDist(md.dist); if (fdist) bits.push("<b>" + esc(fdist) + "</b>");
+    var fdist = fmtDist(dist); if (fdist) bits.push("<b>" + esc(fdist) + "</b>");
+    var fd = fmtDur(dur); if (fd) bits.push("<b>" + esc(fd) + "</b>");
+    var fp = (isFinite(dist) && dist > 0 && isFinite(dur) && dur > 0) ? fmtPace(dur / (dist / 1000)) : "";
+    if (fp) bits.push("<b>" + esc(fp) + "</b>");
     bits.push(esc(run.event_count + " events"));
     var bad = run._health === "bad";
     row.innerHTML =
@@ -692,11 +786,8 @@ function selectRun(id) {
     return r.json();
   }).then(function (events) {
     if (state.runId !== id) return;
-    events = Array.isArray(events) ? events : [];
-    events.forEach(function (ev) { ev.t = num(ev.t); if (isNaN(ev.t)) ev.t = 0; ev.data = ev.data || {}; });
-    events.sort(function (a, b) { return a.t - b.t; });
+    events = normalizeEvents(events);
     var maxT = events.length ? events[events.length - 1].t : 0;
-    if (maxT > 21600) { events.forEach(function (ev) { ev.t = ev.t / 1000; }); maxT = maxT / 1000; }
     state.events = events;
     extractMetrics();
     extractNet();
@@ -709,11 +800,13 @@ function selectRun(id) {
     if (!(state.maxDist > 0)) { var md = metaDurDist(meta).dist; if (md > 0) state.maxDist = md; }
     buildDirectorIntervals();
     computeSummary(meta);
-    // cache health + spark on the run obj for the list
+    // cache health + spark on the run obj for the list (+ persist for next load)
     if (run) {
       run._health = (state.summary.netFailCt > 0 || state.summary.errCt > 0) ? "bad" : "ok";
       run._spark = { kmh: state.metrics.map(function (m) { return m.kmh; }),
                      hr: state.metrics.map(function (m) { return m.hr; }) };
+      run._dur = state.dur; run._dist = state.maxDist;
+      saveSparkCache(run);
     }
     setXMode(state.xmode, true);
     document.getElementById("runlabel").textContent =
@@ -733,8 +826,11 @@ function selectRun(id) {
 }
 
 function extractMetrics() {
+  state.metrics = metricsFromEvents(state.events);
+}
+function metricsFromEvents(events) {
   var out = [];
-  state.events.forEach(function (ev) {
+  events.forEach(function (ev) {
     if (ev.type !== "metrics") return;
     var d = ev.data || {};
     var dist = num(d.d), speedMps = num(d.v), paceSpk = num(d.p), hr = num(d.hr);
@@ -754,7 +850,25 @@ function extractMetrics() {
   out.sort(function (a, b) { return a.t - b.t; });
   var lastD = 0;
   out.forEach(function (r) { if (isFinite(r.d)) lastD = r.d; else r.d = lastD; });
-  state.metrics = out;
+  return out;
+}
+// shared event normalization: numeric t, sorted, ms -> s when the log was
+// recorded in milliseconds. Used by selectRun AND the background spark fetch.
+function normalizeEvents(events) {
+  events = Array.isArray(events) ? events : [];
+  events.forEach(function (ev) { ev.t = num(ev.t); if (isNaN(ev.t)) ev.t = 0; ev.data = ev.data || {}; });
+  events.sort(function (a, b) { return a.t - b.t; });
+  var maxT = events.length ? events[events.length - 1].t : 0;
+  if (maxT > 21600) events.forEach(function (ev) { ev.t = ev.t / 1000; });
+  return events;
+}
+function eventsLookBad(events) {
+  var bad = false;
+  events.forEach(function (ev) {
+    if (ev.type === "error" || ev.type === "tts.fallback" || ev.type === "gen.error") bad = true;
+    if (ev.type === "net.req" && String((ev.data || {}).phase) === "failed") bad = true;
+  });
+  return bad;
 }
 
 // pull net.req events into a structured array for waterfall + inspector.
