@@ -16,6 +16,7 @@ import {
 } from "./routes/ingestRun";
 import { dashHandler, dashAuthPollHandler, dashAuthApproveHandler } from "./routes/dashboard";
 import { landingHandler } from "./routes/landing";
+import { waitlistSubmitHandler, waitlistListHandler } from "./routes/waitlist";
 import { captureException } from "./lib/sentry";
 
 interface Env {
@@ -105,6 +106,10 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         return ingestAudioHandler(request, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/api/waitlist") {
+        return waitlistSubmitHandler(request, env);
+    }
+
     if (request.method === "POST") {
         const deleteMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/delete$/);
         if (deleteMatch?.[1]) {
@@ -126,6 +131,9 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         }
         if (url.pathname === "/api/runs/deleted") {
             return listDeletedRunsHandler(request, env);
+        }
+        if (url.pathname === "/api/waitlist") {
+            return waitlistListHandler(request, env);
         }
         const eventsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
         if (eventsMatch?.[1]) {

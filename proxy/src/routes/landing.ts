@@ -69,11 +69,8 @@ export const LANDING_HTML = `<!doctype html>
   }
   .brand { display: flex; align-items: center; gap: 11px; font-weight: 700; letter-spacing: -0.01em; }
   .brand .mark {
-    width: 30px; height: 30px; border-radius: 9px;
-    background: linear-gradient(150deg, var(--accent), #ff8a36);
-    display: grid; place-items: center;
-    font-size: 15px; font-weight: 800; color: #150a06;
-    box-shadow: 0 4px 16px #ff5a3640, inset 0 0 0 1px #ffffff22;
+    width: 32px; height: 32px; display: block;
+    filter: drop-shadow(0 4px 14px #ff5a3640);
   }
   .brand .name { font-size: 17px; }
   .signin {
@@ -112,6 +109,26 @@ export const LANDING_HTML = `<!doctype html>
   .cta:hover { transform: translateY(-1px); box-shadow: 0 12px 34px #ff5a3655, inset 0 0 0 1px #ffffff33; }
   .cta:active { transform: translateY(0); }
   .cta-note { font-size: 13.5px; color: var(--faint); }
+
+  /* ---- waitlist / "I'm interested" capture ---- */
+  .wl { width: 100%; max-width: 30rem; }
+  .wl-form { display: flex; gap: 9px; flex-wrap: wrap; align-items: stretch; }
+  .wl-email {
+    flex: 1 1 14rem; min-width: 0;
+    font: 500 15px/1 inherit; color: var(--ink);
+    background: #14141b; border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; outline: none;
+    transition: border-color .18s ease, background .18s ease;
+  }
+  .wl-email::placeholder { color: var(--faint); }
+  .wl-email:focus { border-color: #4a3a3a; background: #181820; }
+  .wl-form .cta { border: 0; cursor: pointer; white-space: nowrap; font-family: inherit; }
+  .wl-form .cta:disabled { opacity: .6; cursor: default; transform: none; }
+  .wl-msg { flex-basis: 100%; font-size: 13.5px; color: var(--faint); min-height: 1.1em; margin-top: 2px; }
+  .wl-msg.ok { color: var(--accent-3); }
+  .wl-msg.err { color: #ff7a6a; }
+  .wl-note { font-size: 13px; color: var(--faint); margin-top: 11px; }
+  .wl-note a { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
 
   /* ---- hero glass scene (GlassRipple target) ---- */
   .stage { display: flex; justify-content: center; }
@@ -205,7 +222,23 @@ export const LANDING_HTML = `<!doctype html>
 <header class="nav">
   <div class="wrap">
     <div class="brand">
-      <span class="mark">A</span>
+      <svg class="mark" viewBox="0 0 40 40" width="32" height="32" aria-hidden="true">
+        <defs>
+          <linearGradient id="aarcLg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#ff8a4c"/>
+            <stop offset="1" stop-color="#ff4f2e"/>
+          </linearGradient>
+        </defs>
+        <rect x="1.5" y="1.5" width="37" height="37" rx="11" fill="url(#aarcLg)"/>
+        <rect x="1.5" y="1.5" width="37" height="37" rx="11" fill="none" stroke="#fff" stroke-opacity=".18"/>
+        <g stroke="#fff" stroke-linecap="round" fill="none">
+          <line x1="6.5" y1="15" x2="12.5" y2="15" stroke-width="2.1" stroke-opacity=".5"/>
+          <line x1="5.5" y1="20.5" x2="13.5" y2="20.5" stroke-width="2.1" stroke-opacity=".72"/>
+          <line x1="7.5" y1="26" x2="11.5" y2="26" stroke-width="2.1" stroke-opacity=".4"/>
+        </g>
+        <path d="M15.5 29.5 L23 11.5 L30.5 29.5" fill="none" stroke="#fff" stroke-width="3.3" stroke-linejoin="round" stroke-linecap="round"/>
+        <line x1="19" y1="23.4" x2="27" y2="23.4" stroke="#fff" stroke-width="2.9" stroke-linecap="round"/>
+      </svg>
       <span class="name">AARC</span>
     </div>
     <a class="signin" href="https://my.aarun.club">Sign in</a>
@@ -221,9 +254,15 @@ export const LANDING_HTML = `<!doctype html>
         Meet Ricky — a savage British roast-coach who reacts <em>live</em> to your pace,
         your heart rate and the music in your ears. Real lines. Real timing. Mid-run.
       </p>
-      <div class="cta-row">
-        <a class="cta" href="https://my.aarun.club">Sign in</a>
-        <span class="cta-note">Start a run on your iPhone — the watch launches itself.</span>
+      <div class="wl">
+        <form class="wl-form" data-source="hero" novalidate>
+          <input class="wl-email" type="email" inputmode="email" autocomplete="email"
+                 placeholder="you@email.com" aria-label="Email address" required>
+          <button class="cta" type="submit">I&rsquo;m interested</button>
+          <div class="wl-msg" role="status" aria-live="polite"></div>
+        </form>
+        <p class="wl-note">Not public yet. Leave your email and I&rsquo;ll tell you the moment it&rsquo;s ready &mdash; no spam.
+          Already in? <a href="https://my.aarun.club">Sign in</a>.</p>
       </div>
     </div>
 
@@ -284,7 +323,14 @@ export const LANDING_HTML = `<!doctype html>
   <div class="wrap">
     <h2>Lace up. Get roasted. Run faster.</h2>
     <p>AARC turns a solo run into a conversation — one that&rsquo;s funnier, sharper and more honest than the voice in your own head.</p>
-    <a class="cta" href="https://my.aarun.club">Sign in</a>
+    <div class="wl" style="margin: 0 auto;">
+      <form class="wl-form" data-source="band" novalidate>
+        <input class="wl-email" type="email" inputmode="email" autocomplete="email"
+               placeholder="you@email.com" aria-label="Email address" required>
+        <button class="cta" type="submit">Keep me posted</button>
+        <div class="wl-msg" role="status" aria-live="polite"></div>
+      </form>
+    </div>
   </div>
 </section>
 
@@ -763,6 +809,60 @@ if (overlay && scene && "backdropFilter" in document.body.style) {
   // tap hint; the scene still reads as a static branded panel.
   hint.style.display = "none";
 }
+</script>
+
+<script>
+// Waitlist capture — posts {email, source} to /api/waitlist and reports inline.
+(function () {
+  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  var forms = document.querySelectorAll(".wl-form");
+  for (var i = 0; i < forms.length; i++) wire(forms[i]);
+
+  function wire(form) {
+    var input = form.querySelector(".wl-email");
+    var btn = form.querySelector(".cta");
+    var msg = form.querySelector(".wl-msg");
+    var done = false;
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (done) return;
+      var email = (input.value || "").trim();
+      if (!EMAIL_RE.test(email)) {
+        show("err", "That doesn’t look like an email address.");
+        input.focus();
+        return;
+      }
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = "…";
+      show("", "");
+      fetch("/api/waitlist", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: email, source: form.getAttribute("data-source") || "site" })
+      }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (res) {
+          if (res.ok && res.j && res.j.ok) {
+            done = true;
+            input.disabled = true;
+            btn.style.display = "none";
+            show("ok", "You’re on the list — I’ll be in touch. 🏃");
+          } else {
+            btn.disabled = false; btn.textContent = label;
+            show("err", "Couldn’t save that. Try again in a moment.");
+          }
+        })
+        .catch(function () {
+          btn.disabled = false; btn.textContent = label;
+          show("err", "Network hiccup — try again.");
+        });
+    });
+    function show(cls, text) {
+      msg.className = "wl-msg" + (cls ? " " + cls : "");
+      msg.textContent = text;
+    }
+  }
+})();
 </script>
 </body>
 </html>

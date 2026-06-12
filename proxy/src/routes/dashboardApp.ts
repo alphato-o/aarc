@@ -252,6 +252,58 @@ export const APP_HTML = `<!doctype html>
     font: 700 12px/1 inherit; padding: 8px 14px; margin-bottom: 8px; cursor: pointer;
   }
   #dplay:hover { filter: brightness(1.1); }
+  #sharebtn {
+    display: none; width: 100%; margin: 4px 0 2px;
+    background: linear-gradient(150deg, #ff7a3c, #ff5130); color: #1a0a05; border: 0; border-radius: 7px;
+    font: 700 12px/1 inherit; padding: 10px 14px; cursor: pointer; box-shadow: 0 4px 14px #ff5a3633;
+    transition: filter .15s ease, transform .15s ease;
+  }
+  #sharebtn:hover { filter: brightness(1.07); transform: translateY(-1px); }
+  #sharebtn:active { transform: translateY(0); }
+
+  /* ---- share composer modal ---- */
+  .modal {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    background: rgba(6,8,12,.72); backdrop-filter: blur(3px);
+    align-items: center; justify-content: center; padding: 24px;
+  }
+  .modal.open { display: flex; }
+  .modal-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    box-shadow: 0 24px 80px rgba(0,0,0,.6); max-width: 940px; width: 100%;
+    max-height: 92vh; overflow: auto; display: grid; grid-template-columns: minmax(0,360px) 1fr; gap: 0;
+  }
+  .modal-preview { background: #07090d; border-right: 1px solid var(--line); padding: 18px; display: grid; place-items: center; }
+  .modal-preview canvas { width: 100%; height: auto; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .modal-ctl { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .modal-ctl h2 { margin: 0; font-size: 15px; color: var(--textHi); }
+  .modal-ctl .sub { font-size: 12px; color: var(--textDim); margin-top: -8px; }
+  .modal-ctl label { font: 600 11px/1 inherit; color: var(--textDim); text-transform: uppercase; letter-spacing: .04em; }
+  .modal-ctl select, .modal-ctl textarea {
+    width: 100%; background: var(--panel2); color: var(--textHi); border: 1px solid var(--line);
+    border-radius: 7px; padding: 9px 10px; font: 13px/1.4 inherit; resize: vertical;
+  }
+  .modal-ctl textarea { min-height: 70px; }
+  .seg { display: flex; gap: 6px; }
+  .seg button {
+    flex: 1; background: var(--panel2); color: var(--textDim); border: 1px solid var(--line);
+    border-radius: 7px; padding: 8px; font: 600 12px/1 inherit; cursor: pointer;
+  }
+  .seg button.on { background: var(--select); color: #07101c; border-color: var(--select); }
+  .share-actions { display: flex; gap: 8px; margin-top: 2px; }
+  .share-actions button {
+    flex: 1; border: 0; border-radius: 8px; padding: 12px; font: 700 13px/1 inherit; cursor: pointer;
+    background: linear-gradient(150deg, #ff7a3c, #ff5130); color: #1a0a05;
+  }
+  .share-actions button.alt { background: var(--panel2); color: var(--textHi); border: 1px solid var(--line); }
+  .share-actions button:disabled { opacity: .5; cursor: default; }
+  .share-status { font-size: 12px; color: var(--textDim); min-height: 1.1em; }
+  .share-status.err { color: var(--error); }
+  .share-close {
+    align-self: flex-end; background: none; border: 0; color: var(--textDim); font-size: 20px; cursor: pointer;
+    line-height: 1; padding: 0; margin: -6px -4px -8px 0;
+  }
+  @media (max-width: 760px) { .modal-card { grid-template-columns: 1fr; } .modal-preview { border-right: 0; border-bottom: 1px solid var(--line); } }
   #djson {
     font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background: var(--panel2); border: 1px solid var(--line); border-radius: 6px;
@@ -405,10 +457,48 @@ export const APP_HTML = `<!doctype html>
     <button id="dplay">&#9654; Play audio</button>
     <h2 style="margin-top:14px">Run summary</h2>
     <div id="dstats"><div class="row"><span>—</span><span></span></div></div>
+    <button id="sharebtn">&#10150;&nbsp; Share this run</button>
     <h2>Raw JSON</h2>
     <pre id="djson">Click an event.</pre>
   </aside>
 </div>
+
+<!-- ============ SHARE COMPOSER MODAL ============ -->
+<div class="modal" id="sharemodal">
+  <div class="modal-card">
+    <div class="modal-preview">
+      <canvas id="sharecanvas" width="540" height="675"></canvas>
+    </div>
+    <div class="modal-ctl">
+      <button class="share-close" id="shareclose" title="Close">&times;</button>
+      <h2>Share this run</h2>
+      <div class="sub">A card with your run, the highlight graph and the line that defines it.</div>
+
+      <div>
+        <label>Centrepiece quote</label>
+        <select id="sharequote"></select>
+      </div>
+      <div>
+        <label>Or write your own</label>
+        <textarea id="sharetext" placeholder="Override the quote text…"></textarea>
+      </div>
+      <div>
+        <label>Format</label>
+        <div class="seg" id="shareformat">
+          <button data-fmt="portrait" class="on">Portrait</button>
+          <button data-fmt="square">Square</button>
+        </div>
+      </div>
+
+      <div class="share-actions">
+        <button id="shareimg">Download image</button>
+        <button id="sharevid" class="alt">Record video &#9654;</button>
+      </div>
+      <div class="share-status" id="sharestatus"></div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <script>
 "use strict";
@@ -586,6 +676,7 @@ function renderRuns() {
 }
 function clearRun() {
   state.runId = null; state.events = []; state.metrics = []; state.net = [];
+  document.getElementById("sharebtn").style.display = "none";
   document.getElementById("runlabel").textContent = "no run selected";
   document.getElementById("film").innerHTML = "";
   scheduleRender(); renderLog(); renderControl();
@@ -628,6 +719,7 @@ function selectRun(id) {
     document.getElementById("runlabel").textContent =
       "run " + id + " \\u00b7 " + events.length + " events \\u00b7 " + (fmtDur(state.dur) || "");
     var hasData = events.length > 0;
+    document.getElementById("sharebtn").style.display = hasData ? "block" : "none";
     document.getElementById("chartempty").style.display = hasData ? "none" : "flex";
     document.getElementById("chartempty").textContent = hasData ? "" : "No events in this run";
     renderFilm();
@@ -1718,6 +1810,457 @@ function clampView() {
   if (state.v0 < lo) { state.v0 = lo; state.v1 = lo + span; }
   if (state.v1 > hi) { state.v1 = hi; state.v0 = hi - span; }
 }
+
+// =======================================================================
+// SHARE COMPOSER — turn a run into a shareable card (PNG) or a short video
+// with the chosen line's voice playing back. All canvas-drawn, no deps.
+// =======================================================================
+var shareState = { fmt: "portrait", quoteIdx: -1, recording: false };
+var QFONT = "Georgia, 'Times New Roman', serif";
+var SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+
+function shareDims() {
+  return shareState.fmt === "square" ? { w: 1080, h: 1080 } : { w: 1080, h: 1350 };
+}
+function currentRunObj() {
+  var r = null;
+  state.runs.forEach(function (x) { if (x.run_id === state.runId) r = x; });
+  return r;
+}
+function shareDateLabel() {
+  var r = currentRunObj();
+  if (!r) return "";
+  var d = new Date(r.started_at);
+  if (isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+function shareSpeechLines() {
+  var out = [];
+  state.events.forEach(function (ev, idx) {
+    if (ev.type !== "speech") return;
+    var t = String(ev.detail || "").trim();
+    if (!t) return;
+    out.push({ idx: idx, who: voiceLabel(ev), text: t, cacheKey: (ev.data || {}).cacheKey || "" });
+  });
+  return out;
+}
+function shareSpark() {
+  var src = state.metrics.map(function (m) { return m.kmh; }).filter(function (v) { return isFinite(v); });
+  if (src.length <= 240) return src;
+  var step = src.length / 240, out = [];
+  for (var i = 0; i < 240; i++) out.push(src[Math.floor(i * step)]);
+  return out;
+}
+function shareOpts() {
+  var s = state.summary || {};
+  var lines = shareSpeechLines();
+  var sel = null;
+  lines.forEach(function (l) { if (l.idx === shareState.quoteIdx) sel = l; });
+  var custom = (document.getElementById("sharetext").value || "").trim();
+  var quoteText = custom || (sel ? sel.text : "Lace up. Get roasted. Run faster.");
+  var who = sel ? sel.who : "";
+  return {
+    date: shareDateLabel(),
+    spark: shareSpark(),
+    kpis: [
+      { k: "Distance", v: fmtDist(s.distance) || "\\u2014" },
+      { k: "Time", v: fmtDur(s.duration) || "\\u2014" },
+      { k: "Pace", v: fmtPace(s.avgPace) || "\\u2014" },
+      { k: "Avg HR", v: isFinite(s.avgHr) ? Math.round(s.avgHr) + " bpm" : "\\u2014" }
+    ],
+    quote: quoteText,
+    who: who
+  };
+}
+
+function rr(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function drawLogoCanvas(ctx, ox, oy, s) {
+  var f = s / 40;
+  function P(v) { return v * f; }
+  function seg(x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(ox + x1, oy + y1); ctx.lineTo(ox + x2, oy + y2); ctx.stroke(); }
+  var g = ctx.createLinearGradient(ox, oy, ox + s, oy + s);
+  g.addColorStop(0, "#ff8a4c"); g.addColorStop(1, "#ff4f2e");
+  rr(ctx, ox + P(1.5), oy + P(1.5), P(37), P(37), P(11)); ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = "#fff"; ctx.lineCap = "round";
+  ctx.lineWidth = P(2.1);
+  ctx.globalAlpha = 0.5; seg(P(6.5), P(15), P(12.5), P(15));
+  ctx.globalAlpha = 0.72; seg(P(5.5), P(20.5), P(13.5), P(20.5));
+  ctx.globalAlpha = 0.4; seg(P(7.5), P(26), P(11.5), P(26));
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = P(3.3); ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(ox + P(15.5), oy + P(29.5)); ctx.lineTo(ox + P(23), oy + P(11.5)); ctx.lineTo(ox + P(30.5), oy + P(29.5));
+  ctx.stroke();
+  ctx.lineWidth = P(2.9); seg(P(19), P(23.4), P(27), P(23.4));
+}
+function wrapLines(ctx, text, maxW) {
+  var words = String(text).split(/\s+/), lines = [], cur = "";
+  for (var i = 0; i < words.length; i++) {
+    var t = cur ? cur + " " + words[i] : words[i];
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = words[i]; }
+    else cur = t;
+  }
+  if (cur) lines.push(cur);
+  return lines;
+}
+function layoutQuote(ctx, text, boxW, boxH, maxSize) {
+  for (var size = maxSize; size >= 26; size -= 2) {
+    ctx.font = "italic " + size + "px " + QFONT;
+    var lines = wrapLines(ctx, text, boxW);
+    var lh = size * 1.3;
+    if (lines.length * lh <= boxH) return { lines: lines, size: size, lh: lh };
+  }
+  ctx.font = "italic 26px " + QFONT;
+  return { lines: wrapLines(ctx, text, boxW), size: 26, lh: 26 * 1.3 };
+}
+
+// Draw the card in logical 1080-wide space. progress (0..1) drives the
+// highlight-graph reveal + a playback underline; 1 = finished/static image.
+function drawShareCard(ctx, W, H, o, progress) {
+  var P = 76;
+  // background
+  ctx.fillStyle = "#0a0c11"; ctx.fillRect(0, 0, W, H);
+  var glow = ctx.createRadialGradient(W * 0.16, -120, 60, W * 0.16, -120, W * 0.9);
+  glow.addColorStop(0, "rgba(255,90,54,0.22)"); glow.addColorStop(1, "rgba(255,90,54,0)");
+  ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "rgba(152,150,255,0.10)";
+  var g2 = ctx.createRadialGradient(W * 0.95, H * 0.05, 40, W * 0.95, H * 0.05, W * 0.6);
+  g2.addColorStop(0, "rgba(152,150,255,0.16)"); g2.addColorStop(1, "rgba(152,150,255,0)");
+  ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
+
+  // header
+  drawLogoCanvas(ctx, P, P - 4, 60);
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#f4f6fa"; ctx.font = "800 38px " + SANS;
+  ctx.fillText("AARC", P + 76, P + 34);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#ff7a52"; ctx.font = "700 24px " + SANS;
+  ctx.fillText("aarun.club", W - P, P + 22);
+  ctx.fillStyle = "#7d8696"; ctx.font = "500 18px " + SANS;
+  if (o.date) ctx.fillText(o.date, W - P, P + 48);
+  ctx.textAlign = "left";
+  ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(P, P + 74); ctx.lineTo(W - P, P + 74); ctx.stroke();
+
+  // KPI band
+  var ky = P + 110;
+  var n = o.kpis.length, cw = (W - P * 2) / n;
+  for (var i = 0; i < n; i++) {
+    var cx = P + cw * i + cw / 2;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f4f6fa"; ctx.font = "800 44px " + SANS;
+    ctx.fillText(o.kpis[i].v, cx, ky + 38);
+    ctx.fillStyle = "#828b9b"; ctx.font = "700 17px " + SANS;
+    ctx.fillText(o.kpis[i].k.toUpperCase(), cx, ky + 70);
+    if (i > 0) {
+      ctx.strokeStyle = "rgba(255,255,255,0.07)";
+      ctx.beginPath(); ctx.moveTo(P + cw * i, ky + 4); ctx.lineTo(P + cw * i, ky + 64); ctx.stroke();
+    }
+  }
+  ctx.textAlign = "left";
+
+  // highlight graph
+  var gh = H > 1200 ? 196 : 150;
+  var gy = ky + 110, gx = P, gw = W - P * 2;
+  drawShareGraph(ctx, gx, gy, gw, gh, o.spark, progress);
+
+  // footer first (so we know the quote box bottom)
+  var footY = H - 56;
+  ctx.textAlign = "left";
+  ctx.fillStyle = "#6b7484"; ctx.font = "500 20px " + SANS;
+  ctx.fillText("An AI running coach that talks back.", P, footY);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#7d8696"; ctx.font = "700 20px " + SANS;
+  ctx.fillText("aarun.club", W - P, footY);
+  ctx.textAlign = "left";
+
+  // centrepiece quote
+  var qTop = gy + gh + 46;
+  var qBot = footY - 64;
+  var boxW = W - P * 2;
+  // speaker chip
+  var chipH = 0;
+  if (o.who === "ricky" || o.who === "jessica") {
+    var label = o.who.toUpperCase();
+    var col = o.who === "jessica" ? "#ef6da8" : "#e8a13a";
+    ctx.font = "800 20px " + SANS;
+    var tw = ctx.measureText(label).width;
+    var pad = 16, ch = 38, cwc = tw + pad * 2;
+    rr(ctx, P, qTop, cwc, ch, 10);
+    ctx.fillStyle = col; ctx.globalAlpha = 0.16; ctx.fill(); ctx.globalAlpha = 1;
+    rr(ctx, P, qTop, cwc, ch, 10); ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.fillStyle = col; ctx.textAlign = "left"; ctx.fillText(label, P + pad, qTop + 26);
+    chipH = ch + 22;
+  }
+  var qBoxTop = qTop + chipH;
+  var ql = layoutQuote(ctx, "\\u201c" + o.quote + "\\u201d", boxW, qBot - qBoxTop, H > 1200 ? 66 : 54);
+  var totalH = ql.lines.length * ql.lh;
+  var startY = qBoxTop + Math.max(0, ((qBot - qBoxTop) - totalH) / 2) + ql.size;
+  // fade the quote in over the first 0.6s of video; full for image
+  var qAlpha = progress >= 1 ? 1 : Math.min(1, progress / 0.12);
+  ctx.globalAlpha = qAlpha;
+  ctx.font = "italic " + ql.size + "px " + QFONT;
+  ctx.fillStyle = "#f6f7fb"; ctx.textAlign = "left";
+  for (var li = 0; li < ql.lines.length; li++) {
+    ctx.fillText(ql.lines[li], P, startY + li * ql.lh);
+  }
+  ctx.globalAlpha = 1;
+
+  // playback underline (video only): fills as the voice plays
+  if (progress < 1) {
+    var uy = startY + (ql.lines.length - 1) * ql.lh + 22;
+    ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.lineWidth = 4; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(P, uy); ctx.lineTo(P + boxW * 0.42, uy); ctx.stroke();
+    ctx.strokeStyle = "#ff6a44";
+    ctx.beginPath(); ctx.moveTo(P, uy); ctx.lineTo(P + boxW * 0.42 * progress, uy); ctx.stroke();
+  }
+}
+function drawShareGraph(ctx, x, y, w, h, spark, progress) {
+  var pts = spark || [];
+  if (pts.length < 2) {
+    ctx.fillStyle = "#5b6470"; ctx.font = "500 22px " + SANS; ctx.textAlign = "left";
+    ctx.fillText("No GPS trace for this run", x, y + h / 2);
+    return;
+  }
+  var min = Infinity, max = -Infinity;
+  for (var i = 0; i < pts.length; i++) { if (pts[i] < min) min = pts[i]; if (pts[i] > max) max = pts[i]; }
+  if (!(max > min)) { max = min + 1; }
+  var range = max - min, top = max + range * 0.12, bot = Math.max(0, min - range * 0.12);
+  var n = pts.length;
+  function PX(i) { return x + (i / (n - 1)) * w; }
+  function PY(v) { return y + h - ((v - bot) / (top - bot)) * h; }
+  var upto = Math.max(1, Math.min(n - 1, Math.floor(progress * (n - 1))));
+  // area
+  ctx.beginPath(); ctx.moveTo(x, y + h);
+  for (var a = 0; a <= upto; a++) ctx.lineTo(PX(a), PY(pts[a]));
+  ctx.lineTo(PX(upto), y + h); ctx.closePath();
+  var grd = ctx.createLinearGradient(0, y, 0, y + h);
+  grd.addColorStop(0, "rgba(255,122,60,0.34)"); grd.addColorStop(1, "rgba(255,122,60,0.02)");
+  ctx.fillStyle = grd; ctx.fill();
+  // line
+  ctx.beginPath();
+  for (var b = 0; b <= upto; b++) { var fx = PX(b), fy = PY(pts[b]); if (b === 0) ctx.moveTo(fx, fy); else ctx.lineTo(fx, fy); }
+  ctx.strokeStyle = "#ff8a4c"; ctx.lineWidth = 3.5; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
+  // tip dot
+  var tx = PX(upto), ty = PY(pts[upto]);
+  ctx.beginPath(); ctx.arc(tx, ty, 7, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill();
+  ctx.beginPath(); ctx.arc(tx, ty, 4, 0, Math.PI * 2); ctx.fillStyle = "#ff5130"; ctx.fill();
+  // baseline
+  ctx.strokeStyle = "rgba(255,255,255,0.06)"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(x, y + h); ctx.lineTo(x + w, y + h); ctx.stroke();
+}
+
+function paintToCanvas(canvas, progress) {
+  var d = shareDims();
+  var ctx = canvas.getContext("2d");
+  ctx.save();
+  ctx.scale(canvas.width / d.w, canvas.height / d.h);
+  drawShareCard(ctx, d.w, d.h, shareOpts(), progress);
+  ctx.restore();
+}
+function renderSharePreview() {
+  var d = shareDims();
+  var c = document.getElementById("sharecanvas");
+  c.width = 540; c.height = Math.round(540 * d.h / d.w);
+  paintToCanvas(c, 1);
+}
+
+function populateQuoteSelect() {
+  var sel = document.getElementById("sharequote");
+  sel.innerHTML = "";
+  var lines = shareSpeechLines();
+  if (!lines.length) {
+    var o = document.createElement("option"); o.value = "-1"; o.textContent = "(no spoken lines in this run)";
+    sel.appendChild(o); shareState.quoteIdx = -1; return;
+  }
+  // default: current chart selection if it's speech, else the longest line
+  var def = -1;
+  lines.forEach(function (l) { if (l.idx === state.selected) def = l.idx; });
+  if (def < 0) {
+    var best = lines[0];
+    lines.forEach(function (l) { if (l.text.length > best.text.length) best = l; });
+    def = best.idx;
+  }
+  lines.forEach(function (l) {
+    var o = document.createElement("option");
+    o.value = String(l.idx);
+    var t = l.text.length > 64 ? l.text.slice(0, 63) + "\\u2026" : l.text;
+    o.textContent = (l.who === "jessica" ? "Jessica" : l.who === "ricky" ? "Ricky" : "Voice") + ": " + t;
+    sel.appendChild(o);
+  });
+  shareState.quoteIdx = def;
+  sel.value = String(def);
+}
+
+function openShareModal() {
+  if (!state.runId || !state.events.length) { toast("Select a run first"); return; }
+  shareStatus("");
+  document.getElementById("sharetext").value = "";
+  populateQuoteSelect();
+  renderSharePreview();
+  document.getElementById("sharemodal").classList.add("open");
+}
+function closeShareModal() {
+  if (shareState.recording) return;
+  document.getElementById("sharemodal").classList.remove("open");
+}
+function shareStatus(msg, isErr) {
+  var el = document.getElementById("sharestatus");
+  el.textContent = msg || "";
+  el.className = "share-status" + (isErr ? " err" : "");
+}
+function shareSlug() {
+  var r = currentRunObj();
+  var d = r ? new Date(r.started_at) : null;
+  if (d && !isNaN(d.getTime())) return "aarc-" + d.toISOString().slice(0, 10);
+  return "aarc-run";
+}
+function downloadBlob(blob, name) {
+  var a = document.createElement("a"), u = URL.createObjectURL(blob);
+  a.href = u; a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(function () { URL.revokeObjectURL(u); a.remove(); }, 1500);
+}
+
+function downloadShareImage() {
+  var d = shareDims();
+  var c = document.createElement("canvas"); c.width = d.w; c.height = d.h;
+  paintToCanvas(c, 1);
+  c.toBlob(function (blob) {
+    if (!blob) { shareStatus("Could not render image", true); return; }
+    downloadBlob(blob, shareSlug() + ".png");
+    toast("Image saved");
+    shareStatus("Saved " + shareSlug() + ".png");
+  }, "image/png");
+}
+
+function pickVideoMime() {
+  var cands = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm", "video/mp4"];
+  for (var i = 0; i < cands.length; i++) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(cands[i])) return cands[i];
+  }
+  return "";
+}
+function recordShareVideo() {
+  if (shareState.recording) return;
+  if (!window.MediaRecorder) { shareStatus("This browser can't record video — try Chrome.", true); return; }
+  var mime = pickVideoMime();
+  if (!mime) { shareStatus("No supported video codec in this browser.", true); return; }
+  // the video always uses the SELECTED spoken line (its text + its audio)
+  var lines = shareSpeechLines(), sel = null;
+  lines.forEach(function (l) { if (l.idx === shareState.quoteIdx) sel = l; });
+  if (!sel || !sel.cacheKey) { shareStatus("Pick a spoken line — video needs its audio.", true); return; }
+  // honour the line's own text for the video (ignore the image override)
+  document.getElementById("sharetext").value = "";
+  renderSharePreview();
+
+  shareState.recording = true;
+  document.getElementById("sharevid").disabled = true;
+  document.getElementById("shareimg").disabled = true;
+  shareStatus("Loading voice\\u2026");
+  audio.pause();
+
+  var url = "/api/runs/" + encodeURIComponent(state.runId) + "/audio/" + encodeURIComponent(sel.cacheKey);
+  fetch(url).then(function (r) {
+    if (!r.ok) throw new Error("audio " + r.status);
+    return r.arrayBuffer();
+  }).then(function (ab) {
+    var ACtx = window.AudioContext || window.webkitAudioContext;
+    var actx = new ACtx();
+    return actx.decodeAudioData(ab.slice(0)).then(function (buf) { return { actx: actx, buf: buf }; });
+  }).then(function (a) {
+    runVideoRecorder(a.actx, a.buf, mime);
+  }).catch(function (e) {
+    shareState.recording = false;
+    document.getElementById("sharevid").disabled = false;
+    document.getElementById("shareimg").disabled = false;
+    shareStatus("Couldn't load audio: " + (e && e.message ? e.message : e), true);
+  });
+}
+function runVideoRecorder(actx, buf, mime) {
+  var d = shareDims();
+  // 720-wide canvas keeps realtime encoding smooth; aspect preserved
+  var vw = 720, vh = Math.round(720 * d.h / d.w);
+  var canvas = document.createElement("canvas"); canvas.width = vw; canvas.height = vh;
+
+  var src = actx.createBufferSource(); src.buffer = buf;
+  var dest = actx.createMediaStreamDestination();
+  src.connect(dest); src.connect(actx.destination);
+
+  var vstream = canvas.captureStream(30);
+  var mixed = new MediaStream();
+  vstream.getVideoTracks().forEach(function (t) { mixed.addTrack(t); });
+  dest.stream.getAudioTracks().forEach(function (t) { mixed.addTrack(t); });
+
+  var chunks = [];
+  var rec;
+  try { rec = new MediaRecorder(mixed, { mimeType: mime, videoBitsPerSecond: 6000000 }); }
+  catch (e) { rec = new MediaRecorder(mixed); }
+  rec.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = function () {
+    var type = (mime && mime.indexOf("mp4") >= 0) ? "video/mp4" : "video/webm";
+    var ext = type === "video/mp4" ? ".mp4" : ".webm";
+    var blob = new Blob(chunks, { type: type });
+    downloadBlob(blob, shareSlug() + ext);
+    try { actx.close(); } catch (e2) {}
+    shareState.recording = false;
+    document.getElementById("sharevid").disabled = false;
+    document.getElementById("shareimg").disabled = false;
+    shareStatus("Saved " + shareSlug() + ext + " \\u00b7 " + Math.round(buf.duration) + "s");
+    toast("Video saved");
+    renderSharePreview();
+  };
+
+  var dur = buf.duration, outro = 1.1, total = dur + outro;
+  var t0 = performance.now();
+  rec.start();
+  src.start();
+  function frame() {
+    var t = (performance.now() - t0) / 1000;
+    var p = Math.min(t / dur, 1);
+    var ctx = canvas.getContext("2d");
+    ctx.save(); ctx.scale(vw / d.w, vh / d.h);
+    drawShareCard(ctx, d.w, d.h, shareOpts(), p);
+    ctx.restore();
+    shareStatus("Recording\\u2026 " + Math.min(t, dur).toFixed(1) + "s / " + dur.toFixed(1) + "s");
+    if (t < total && shareState.recording) requestAnimationFrame(frame);
+    else { try { rec.stop(); } catch (e) {} }
+  }
+  requestAnimationFrame(frame);
+}
+
+// share wiring
+document.getElementById("sharebtn").addEventListener("click", openShareModal);
+document.getElementById("shareclose").addEventListener("click", closeShareModal);
+document.getElementById("sharemodal").addEventListener("click", function (e) {
+  if (e.target === this) closeShareModal();
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key === "Escape" && document.getElementById("sharemodal").classList.contains("open")) closeShareModal();
+});
+document.querySelectorAll("#shareformat button").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll("#shareformat button").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+    shareState.fmt = b.getAttribute("data-fmt");
+    renderSharePreview();
+  });
+});
+document.getElementById("sharequote").addEventListener("change", function () {
+  shareState.quoteIdx = parseInt(this.value, 10);
+  document.getElementById("sharetext").value = "";
+  renderSharePreview();
+});
+document.getElementById("sharetext").addEventListener("input", renderSharePreview);
+document.getElementById("shareimg").addEventListener("click", downloadShareImage);
+document.getElementById("sharevid").addEventListener("click", recordShareVideo);
 
 window.addEventListener("resize", scheduleRender);
 loadRuns();
