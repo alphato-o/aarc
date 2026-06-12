@@ -131,6 +131,20 @@ export interface GenerateScriptResponse {
 // /dynamic-line — short reactive lines fired in-run by the ContextualCoach
 // ---------------------------------------------------------------------------
 
+/// Real surroundings sampled live from the phone's GPS during outdoor
+/// runs: road/area names, nearby POIs as preformatted display strings
+/// ("The PuLi (hotel, 140m)"), and the geometric pattern of the route so
+/// far ("circling the same ~400m loop, on lap 3 now"). Names only — raw
+/// coordinates never reach the proxy.
+export const PlaceSchema = z.object({
+    road: z.string().max(120).optional(),
+    area: z.string().max(120).optional(),
+    pois: z.array(z.string().max(160)).max(8).optional(),
+    route: z.string().max(200).optional(),
+});
+
+export type PlaceInfo = z.infer<typeof PlaceSchema>;
+
 export const DynamicLineRequestSchema = z.object({
     personalityId: z.string().default("roast_coach"),
     trigger: z.enum([
@@ -160,6 +174,7 @@ export const DynamicLineRequestSchema = z.object({
         /// how long the runner has been still. Lets the prompt anchor on
         /// "you've been stood there for 40 seconds".
         stationarySeconds: z.number().nonnegative().optional(),
+        place: PlaceSchema.optional(),
     }),
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
     customNote: z.string().max(300).optional(),
@@ -221,6 +236,7 @@ export const MusicCommentRequestSchema = z.object({
         currentPaceSecPerKm: z.number().positive().optional(),
         planKind: z.enum(["distance", "time", "open"]),
         runType: z.enum(["outdoor", "treadmill"]),
+        place: PlaceSchema.optional(),
     }),
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
@@ -258,6 +274,7 @@ export const ReactLineRequestSchema = z.object({
         currentPaceSecPerKm: z.number().positive().optional(),
         planKind: z.enum(["distance", "time", "open"]),
         runType: z.enum(["outdoor", "treadmill"]),
+        place: PlaceSchema.optional(),
     }),
     /// Recent exchange (both voices) so she doesn't repeat and can build on it.
     recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),

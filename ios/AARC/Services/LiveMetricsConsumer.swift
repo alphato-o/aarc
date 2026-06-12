@@ -117,6 +117,13 @@ final class LiveMetricsConsumer {
         RunEventLog.shared.startRun(runId: runId)
         RunEventLog.shared.record("run.start", "runType=\(pendingRunType.rawValue)")
 
+        // Real-world surroundings for the coaches — outdoor runs only.
+        // Never for the desk simulator: relocating fabricated scenery to
+        // the founder's sofa is not grounding, it's comedy of a worse kind.
+        if pendingRunType == .outdoor, !RunOrchestrator.shared.isSimulating {
+            PlaceContext.shared.start()
+        }
+
         // Hand the most-recently generated script to ScriptEngine so it
         // can begin firing lines on the upcoming live-metrics ticks.
         // The plan (distance / time / open) lives in ScriptPreviewStore
@@ -163,6 +170,7 @@ final class LiveMetricsConsumer {
         ContextualCoach.shared.stop()
         Conversation.shared.stop()
         RunDirector.shared.stop()
+        PlaceContext.shared.stop()
         LiveActivityController.shared.end()
 
         // Seal + upload the per-run diagnostics (events JSONL, pinned

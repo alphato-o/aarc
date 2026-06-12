@@ -5,6 +5,7 @@ import {
     DynamicLineResponse,
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
+import { pushPlaceBlock } from "../lib/placeBlock";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
@@ -149,6 +150,7 @@ function buildUserPrompt(req: DynamicLineRequest): string {
     if (c.stationarySeconds !== undefined && c.stationarySeconds > 0) {
         lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (they were running and have now STOPPED — quote the seconds, never a distance)`);
     }
+    pushPlaceBlock(lines, c.place);
 
     if (req.customNote && req.customNote.trim().length > 0) {
         lines.push("");

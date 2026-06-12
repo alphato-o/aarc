@@ -5,6 +5,7 @@ import {
     MusicCommentResponse,
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
+import { pushPlaceBlock } from "../lib/placeBlock";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
@@ -153,6 +154,7 @@ function buildUserPrompt(req: MusicCommentRequest): string {
     }
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
+    pushPlaceBlock(lines, c.place);
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");

@@ -159,6 +159,21 @@ actor AIClient {
         case custom
     }
 
+    /// Real surroundings sampled live from GPS during outdoor runs —
+    /// road/area names plus nearby named POIs as preformatted strings
+    /// ("The PuLi (hotel, 140m)"). nil on treadmill, in the simulator,
+    /// or when the last sample is stale. Names only — raw coordinates
+    /// never leave the device.
+    struct PlaceInfo: Codable, Sendable {
+        var road: String?
+        var area: String?
+        var pois: [String]
+        /// Geometry of the run so far, when the shape is clear — e.g.
+        /// "circling the same ~400m loop, on lap 3 now" or "out-and-back:
+        /// turned around ~2km out". nil while ambiguous.
+        var route: String? = nil
+    }
+
     struct DynamicLineContext: Codable, Sendable {
         var elapsedSeconds: Double
         var distanceMeters: Double
@@ -174,6 +189,9 @@ actor AIClient {
         /// coach fires the .stationary trigger — gives the model the
         /// "you've been still for X seconds" hook.
         var stationarySeconds: Double?
+        /// Defaulted so pre-run call sites (opener, Playground) compile
+        /// unchanged and send nothing.
+        var place: PlaceInfo? = nil
     }
 
     struct DynamicLineRequest: Codable, Sendable {
@@ -290,6 +308,8 @@ actor AIClient {
         var currentPaceSecPerKm: Double?
         var planKind: String        // "distance" | "time" | "open"
         var runType: String         // "outdoor" | "treadmill"
+        /// Real surroundings (outdoor runs) — see PlaceInfo.
+        var place: PlaceInfo? = nil
     }
 
     struct ReactLineRequest: Codable, Sendable {
@@ -367,6 +387,8 @@ actor AIClient {
         var currentPaceSecPerKm: Double?
         var planKind: String          // "distance" | "time" | "open"
         var runType: String           // "outdoor" | "treadmill"
+        /// Real surroundings (outdoor runs) — see PlaceInfo.
+        var place: PlaceInfo? = nil
     }
 
     struct MusicCommentRequest: Codable, Sendable {
