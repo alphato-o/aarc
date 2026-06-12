@@ -32,6 +32,7 @@ struct ControlRoomView: View {
     @State private var conversation = Conversation.shared
     @State private var nowPlaying = NowPlayingStore.shared
     @State private var eventLog = RunEventLog.shared
+    @State private var simulator = RunSimulator.shared
     @State private var netMonitor = NetworkActivityMonitor.shared
     @State private var planStore = ScriptPreviewStore.shared
 
@@ -86,6 +87,7 @@ struct ControlRoomView: View {
     @ViewBuilder
     private func liveBody(now: Date) -> some View {
         header(now: now)
+        if simulator.isActive { simControlSection }
         runProgressSection(now: now)
         networkInspectorSection(now: now)
         watchLinkSection
@@ -94,6 +96,55 @@ struct ControlRoomView: View {
         voicesSection
         musicSection
         eventTailSection
+    }
+
+    // MARK: - Simulator controls (desk test)
+
+    @ViewBuilder
+    private var simControlSection: some View {
+        section("SIMULATOR", accent: .pink) {
+            HStack {
+                Text(String(format: "%.0f m", simulator.simDistance))
+                    .font(.callout.bold().monospacedDigit())
+                Text(formatElapsed(simulator.simElapsed))
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Spacer()
+                Text(simulator.paused ? "PAUSED" : "\(Int(simulator.speedMultiplier))×")
+                    .font(.caption.bold())
+                    .foregroundStyle(simulator.paused ? .yellow : .pink)
+            }
+            HStack(spacing: 8) {
+                Text("Pace").font(.caption2).foregroundStyle(.secondary)
+                Button { simulator.paceSecPerKm = min(900, simulator.paceSecPerKm + 15) } label: { Image(systemName: "minus") }
+                Text(simPaceText).font(.caption.monospacedDigit()).frame(width: 52)
+                Button { simulator.paceSecPerKm = max(150, simulator.paceSecPerKm - 15) } label: { Image(systemName: "plus") }
+                Spacer()
+                ForEach([1, 2, 4, 8], id: \.self) { m in
+                    Button("\(m)×") { simulator.speedMultiplier = Double(m) }
+                        .tint(Int(simulator.speedMultiplier) == m ? .pink : .gray)
+                }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            HStack(spacing: 6) {
+                Button(simulator.paused ? "Resume" : "Pause") { simulator.paused.toggle() }.tint(.yellow)
+                Button("Stand still") { simulator.injectStationary() }
+                Button("HR↑") { simulator.injectHRSpike() }
+                Button("Surge") { simulator.injectPaceSurge() }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            HStack(spacing: 6) {
+                Text("Jump").font(.caption2).foregroundStyle(.secondary)
+                Button("+500 m") { simulator.jump(meters: 500) }
+                Button("+1 km") { simulator.jump(meters: 1000) }
+                Button("+2 km") { simulator.jump(meters: 2000) }
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+        }
+    }
+
+    private var simPaceText: String {
+        let p = Int(simulator.paceSecPerKm)
+        return String(format: "%d:%02d", p / 60, p % 60)
     }
 
     /// The REPLAY layout — the SAME sections reconstructed from recorded

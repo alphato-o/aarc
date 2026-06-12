@@ -240,6 +240,21 @@ final class PhoneWorkoutSession: NSObject {
             try? await builder.addSamples([distSample])
         }
 
+        // TEST RUN: never write to Apple Health. We collected real GPS/pace
+        // (so the live run + diagnostics worked), but we DON'T finishWorkout,
+        // so no junk 0.01km entry lands in Fitness. The builder is just
+        // dropped; HealthKit only persists on finishWorkout().
+        if RunOrchestrator.shared.isTestRun {
+            workoutBuilder = nil
+            routeBuilder = nil
+            isActive = false
+            log.info("PhoneWorkoutSession ended TEST run — discarded (no Apple Health write)")
+            LiveMetricsConsumer.shared.ingestEnded(workoutUUID: nil)
+            currentRunId = nil
+            startedAt = nil
+            return nil
+        }
+
         var workoutUUID: UUID?
         do {
             try await workoutBuilder?.endCollection(at: endDate)

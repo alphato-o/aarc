@@ -149,7 +149,10 @@ final class LiveMetricsConsumer {
         latest = latest?.with(state: .running)
     }
 
-    func ingestEnded(workoutUUID: UUID) {
+    /// `workoutUUID` is nil for TEST / SIMULATED runs that intentionally
+    /// wrote nothing to Apple Health — those persist a RunRecord straight
+    /// from the live metrics instead of reading HealthKit back.
+    func ingestEnded(workoutUUID: UUID?) {
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
 
@@ -164,13 +167,46 @@ final class LiveMetricsConsumer {
 
         // Seal + upload the per-run diagnostics (events JSONL, pinned
         // voice audio). Fire-and-forget with retries inside.
-        RunEventLog.shared.record("run.end", "workout=\(workoutUUID.uuidString.prefix(8))")
+        RunEventLog.shared.record("run.end", "workout=\(workoutUUID?.uuidString.prefix(8) ?? "test/sim")")
         RunEventLog.shared.endRun()
 
+        guard let workoutUUID else {
+            // Test / simulated run — no HealthKit workout. Persist a record
+            // straight from the live metrics so it still shows in History
+            // (flagged test) and replays its diagnostics.
+            persistTestRunFromLive()
+            return
+        }
         // Kick off persistence in the background. HK may take a few
         // seconds to propagate the workout from watch to iPhone, so the
         // task retries with backoff.
         Task { await persistRun(workoutUUID: workoutUUID) }
+    }
+
+    /// Persist a RunRecord for a test/sim run (no HK workout) from the last
+    /// live metrics. Flagged `isTestData`, no `healthKitWorkoutUUID`.
+    private func persistTestRunFromLive() {
+        let context = PersistenceStore.shared.container.mainContext
+        let id = currentRunId ?? UUID()
+        if let existing = try? context.fetch(FetchDescriptor<RunRecord>(
+            predicate: #Predicate { $0.id == id })), !existing.isEmpty { return }
+        let dist = latest?.distanceMeters ?? 0
+        let dur = latest?.elapsed ?? 0
+        let record = RunRecord(
+            id: id,
+            startedAt: startedAt ?? .now,
+            endedAt: .now,
+            personality: pendingPersonalityId,
+            isTestData: true,
+            healthKitWorkoutUUID: nil,
+            runTypeRaw: pendingRunType.rawValue,
+            cachedDistanceMeters: dist,
+            cachedDurationSeconds: dur,
+            cachedAvgPaceSecPerKm: dist > 0 ? dur / (dist / 1000) : 0,
+            cachedEnergyKcal: 0
+        )
+        context.insert(record)
+        try? context.save()
     }
 
     /// Fetch the workout from HealthKit and write a `RunRecord` row.

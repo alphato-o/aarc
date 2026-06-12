@@ -81,22 +81,40 @@ struct RunHomeView: View {
     /// where the user left it, and shows its state so it's never a surprise.
     @ViewBuilder
     private var testRunToggle: some View {
-        Toggle(isOn: Binding(
-            get: { orchestrator.isTestRun },
-            set: { orchestrator.isTestRun = $0 }
-        )) {
-            Label {
-                Text(orchestrator.isTestRun ? "Test run — won't count" : "Test run")
-                    .font(.subheadline)
-            } icon: {
-                Image(systemName: "flask")
+        VStack(spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { orchestrator.testMode != .off },
+                set: { orchestrator.testMode = $0 ? .real : .off }
+            )) {
+                Label {
+                    Text(orchestrator.testMode != .off ? "Test run — not saved to Apple Health" : "Test run")
+                        .font(.subheadline)
+                } icon: {
+                    Image(systemName: "flask")
+                }
+                .foregroundStyle(orchestrator.testMode != .off ? .orange : .secondary)
             }
-            .foregroundStyle(orchestrator.isTestRun ? .orange : .secondary)
+            .tint(.orange)
+
+            if orchestrator.testMode != .off {
+                Picker("", selection: Binding(
+                    get: { orchestrator.testMode == .simulate },
+                    set: { orchestrator.testMode = $0 ? .simulate : .real }
+                )) {
+                    Text("I'll actually run").tag(false)
+                    Text("Simulate at my desk").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Text(orchestrator.testMode == .simulate
+                     ? "No GPS — a synthetic run drives the coaching; steer it from the Control Room."
+                     : "Real GPS/pace, but nothing is written to Apple Health.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .tint(.orange)
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(orchestrator.isTestRun ? Color.orange.opacity(0.12) : Color.clear,
+        .padding(.vertical, 8)
+        .background(orchestrator.testMode != .off ? Color.orange.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 10))
     }
 
@@ -474,6 +492,13 @@ struct RunHomeView: View {
     }
 
     private func startTapped(_ runType: RunType) async {
+        // A simulated test never involves the watch — it's a desk run driven
+        // by synthetic metrics, so always take the phone-only path (which
+        // routes to RunSimulator when testMode == .simulate).
+        if orchestrator.testMode == .simulate {
+            await orchestrator.startPhoneOnly(runType: runType)
+            return
+        }
         switch trackingSource {
         case .watch:
             await orchestrator.startFromPhone(runType: runType)

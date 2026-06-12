@@ -119,7 +119,10 @@ export async function ingestRunHandler(request: Request, env: Env): Promise<Resp
         env.DB.prepare("DELETE FROM run_events WHERE run_id = ?").bind(runId),
         env.DB
             .prepare(
-                "INSERT OR REPLACE INTO runs (run_id, started_at, uploaded_at, event_count, meta) VALUES (?, ?, ?, ?, ?)",
+                // Re-ingesting a run_id clears any prior soft-delete: an iPhone
+                // restore re-uploading, or a fresh run reusing the id, brings
+                // the run back as active (deleted_at = NULL).
+                "INSERT OR REPLACE INTO runs (run_id, started_at, uploaded_at, event_count, meta, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)",
             )
             .bind(runId, startedAt, uploadedAt, events.length, "{}"),
     ]);
@@ -182,15 +185,114 @@ export async function ingestAudioHandler(request: Request, env: Env): Promise<Re
 
 // MARK: - GET /api/runs
 
-/// Newest-first run index. Bare JSON array of run rows.
+/// Newest-first index of active (non-deleted) runs. Bare JSON array of rows.
 export async function listRunsHandler(request: Request, env: Env): Promise<Response> {
     if (!readAuthorized(request, env)) return unauthorized();
     const { results } = await env.DB
         .prepare(
-            "SELECT run_id, started_at, uploaded_at, event_count, meta FROM runs ORDER BY started_at DESC LIMIT 500",
+            "SELECT run_id, started_at, uploaded_at, event_count, meta FROM runs WHERE deleted_at IS NULL ORDER BY started_at DESC LIMIT 500",
         )
         .all();
     return json(results);
+}
+
+// MARK: - GET /api/runs/deleted
+
+/// Recycle bin: soft-deleted runs, newest by deletion time. Same row shape as
+/// the active index plus a `deleted_at` ISO timestamp.
+export async function listDeletedRunsHandler(request: Request, env: Env): Promise<Response> {
+    if (!readAuthorized(request, env)) return unauthorized();
+    const { results } = await env.DB
+        .prepare(
+            "SELECT run_id, started_at, uploaded_at, event_count, meta, deleted_at FROM runs WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 500",
+        )
+        .all();
+    return json(results);
+}
+
+// MARK: - POST /api/runs/:id/delete
+
+/// Soft-delete a run (sets deleted_at = now). Idempotent — re-deleting an
+/// already-deleted run keeps its original deletion time. 404 if unknown.
+export async function deleteRunHandler(
+    request: Request,
+    env: Env,
+    runId: string,
+): Promise<Response> {
+    if (!readAuthorized(request, env)) return unauthorized();
+    if (!RUN_ID_RE.test(runId)) {
+        return json({ ok: false, error: "invalid run id" }, { status: 400 });
+    }
+    const now = new Date().toISOString();
+    const result = await env.DB
+        .prepare("UPDATE runs SET deleted_at = ? WHERE run_id = ? AND deleted_at IS NULL")
+        .bind(now, runId)
+        .run();
+    if (result.meta.changes === 0) {
+        // Either unknown run, or already soft-deleted (idempotent success).
+        const existing = await env.DB
+            .prepare("SELECT 1 FROM runs WHERE run_id = ?")
+            .bind(runId)
+            .first();
+        if (!existing) {
+            return json({ ok: false, error: "not_found" }, { status: 404 });
+        }
+    }
+    return json({ ok: true });
+}
+
+// MARK: - POST /api/runs/:id/restore
+
+/// Restore a soft-deleted run (deleted_at -> NULL). Idempotent. 404 if unknown.
+export async function restoreRunHandler(
+    request: Request,
+    env: Env,
+    runId: string,
+): Promise<Response> {
+    if (!readAuthorized(request, env)) return unauthorized();
+    if (!RUN_ID_RE.test(runId)) {
+        return json({ ok: false, error: "invalid run id" }, { status: 400 });
+    }
+    const result = await env.DB
+        .prepare("UPDATE runs SET deleted_at = NULL WHERE run_id = ?")
+        .bind(runId)
+        .run();
+    if (result.meta.changes === 0) {
+        return json({ ok: false, error: "not_found" }, { status: 404 });
+    }
+    return json({ ok: true });
+}
+
+// MARK: - POST /api/runs/:id/purge
+
+/// Hard-delete a run: removes the run row, its events, and — best effort, when
+/// R2 is enabled — any pinned audio objects under `runId/`. Idempotent.
+export async function purgeRunHandler(
+    request: Request,
+    env: Env,
+    runId: string,
+): Promise<Response> {
+    if (!readAuthorized(request, env)) return unauthorized();
+    if (!RUN_ID_RE.test(runId)) {
+        return json({ ok: false, error: "invalid run id" }, { status: 400 });
+    }
+    await env.DB.batch([
+        env.DB.prepare("DELETE FROM run_events WHERE run_id = ?").bind(runId),
+        env.DB.prepare("DELETE FROM runs WHERE run_id = ?").bind(runId),
+    ]);
+    // Best-effort R2 cleanup; never blocks the DB purge from succeeding.
+    if (env.VOICES) {
+        try {
+            const listed = await env.VOICES.list({ prefix: `${runId}/` });
+            const keys = listed.objects.map((o) => o.key);
+            if (keys.length > 0) {
+                await env.VOICES.delete(keys);
+            }
+        } catch {
+            // Swallow R2 errors — orphaned audio is harmless and reclaimable.
+        }
+    }
+    return json({ ok: true });
 }
 
 // MARK: - GET /api/runs/:id/events

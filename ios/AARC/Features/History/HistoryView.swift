@@ -17,6 +17,8 @@ struct HistoryView: View {
     @State private var confirmTestPurge = false
     @State private var deletingId: PersistentIdentifier?
     @State private var deleteError: String?
+    @State private var importing = false
+    @State private var importResult: String?
 
     /// Archived diagnostics logs on device, newest first. Loaded off-main.
     @State private var archivedRuns: [RunEventLog.ArchivedRun] = []
@@ -36,29 +38,7 @@ struct HistoryView: View {
                     )
                 } else {
                     List {
-                        ForEach(runs) { run in
-                            NavigationLink {
-                                RunDetailView(run: run)
-                            } label: {
-                                RunListRow(run: run)
-                            }
-                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) { pendingDelete = run } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                                if let archived = diagnostics(for: run) {
-                                    NavigationLink {
-                                        ControlRoomView(replay: archived)
-                                    } label: {
-                                        Label("Control Room", systemImage: "waveform.path.ecg")
-                                    }
-                                    .tint(.purple)
-                                }
-                            }
-                            .opacity(deletingId == run.persistentModelID ? 0.4 : 1)
-                        }
+                        ForEach(runs) { run in runRow(run) }
                     }
                     .listStyle(.plain)
                 }
@@ -85,6 +65,21 @@ struct HistoryView: View {
                         } label: {
                             Label("Run Diagnostics", systemImage: "waveform.path.ecg")
                         }
+                        Divider()
+                        Button {
+                            Task {
+                                importing = true
+                                let n = await HealthImporter.importMissing(context: modelContext)
+                                importing = false
+                                importResult = n == 0
+                                    ? "Nothing to import — every Apple Health run is already in AARC."
+                                    : "Recovered \(n) run\(n == 1 ? "" : "s") from Apple Health."
+                            }
+                        } label: {
+                            Label(importing ? "Importing…" : "Import from Apple Health",
+                                  systemImage: "square.and.arrow.down")
+                        }
+                        .disabled(importing)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -119,7 +114,49 @@ struct HistoryView: View {
             ), presenting: deleteError) { _ in
                 Button("OK", role: .cancel) {}
             } message: { Text($0) }
+            .alert("Import from Apple Health", isPresented: Binding(
+                get: { importResult != nil }, set: { if !$0 { importResult = nil } }
+            ), presenting: importResult) { _ in
+                Button("OK", role: .cancel) {}
+            } message: { Text($0) }
         }
+    }
+
+    @ViewBuilder
+    private func runRow(_ run: RunRecord) -> some View {
+        NavigationLink {
+            RunDetailView(run: run)
+        } label: {
+            RunListRow(run: run)
+        }
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) { pendingDelete = run } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if let archived = diagnostics(for: run) {
+                NavigationLink {
+                    ControlRoomView(replay: archived)
+                } label: {
+                    Label("Control Room", systemImage: "waveform.path.ecg")
+                }
+                .tint(.purple)
+            }
+        }
+        .contextMenu {
+            Button {
+                run.isTestData.toggle()
+                try? modelContext.save()
+            } label: {
+                Label(run.isTestData ? "Unmark test run" : "Mark as test run",
+                      systemImage: run.isTestData ? "flask.fill" : "flask")
+            }
+            Button(role: .destructive) { pendingDelete = run } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+        .opacity(deletingId == run.persistentModelID ? 0.4 : 1)
     }
 
     private func diagnostics(for run: RunRecord) -> RunEventLog.ArchivedRun? {
@@ -138,13 +175,20 @@ struct HistoryView: View {
         run.deletedAt = .now
         do { try modelContext.save() }
         catch { deleteError = "Couldn't move run to Recently Deleted: \(error.localizedDescription)" }
+        // Mirror to the cloud dashboard (soft-delete) if a diagnostics log
+        // links this run to a cloud run_id.
+        if let arch = diagnostics(for: run) { CloudRunSync.delete(runId: arch.runId) }
     }
 
     private func softDeleteTestRuns() async {
         let now = Date()
-        for run in testRuns { run.deletedAt = now }
+        let toDelete = testRuns
+        for run in toDelete { run.deletedAt = now }
         do { try modelContext.save() }
         catch { deleteError = "Couldn't delete test runs: \(error.localizedDescription)" }
+        for run in toDelete {
+            if let arch = diagnostics(for: run) { CloudRunSync.delete(runId: arch.runId) }
+        }
     }
 }
 
@@ -155,6 +199,14 @@ struct RecentlyDeletedView: View {
     @Query(filter: #Predicate<RunRecord> { $0.deletedAt != nil },
            sort: \RunRecord.deletedAt, order: .reverse) private var deleted: [RunRecord]
     @State private var error: String?
+    @State private var archivedRuns: [RunEventLog.ArchivedRun] = []
+
+    private func cloudId(for run: RunRecord) -> UUID? {
+        archivedRuns
+            .filter { abs($0.startedAt.timeIntervalSince(run.startedAt)) <= 120 }
+            .min { abs($0.startedAt.timeIntervalSince(run.startedAt))
+                 < abs($1.startedAt.timeIntervalSince(run.startedAt)) }?.runId
+    }
 
     var body: some View {
         Group {
@@ -191,6 +243,11 @@ struct RecentlyDeletedView: View {
         }
         .navigationTitle("Recently Deleted")
         .navigationBarTitleDisplayMode(.inline)
+        .task {
+            archivedRuns = await Task.detached(priority: .utility) {
+                RunEventLog.archivedRuns()
+            }.value
+        }
         .alert("Couldn't complete", isPresented: Binding(
             get: { error != nil }, set: { if !$0 { error = nil } }
         ), presenting: error) { _ in Button("OK", role: .cancel) {} } message: { Text($0) }
@@ -199,12 +256,15 @@ struct RecentlyDeletedView: View {
     private func restore(_ run: RunRecord) {
         run.deletedAt = nil
         try? modelContext.save()
+        if let id = cloudId(for: run) { CloudRunSync.restore(runId: id) }
     }
 
     private func purge(_ run: RunRecord) async {
+        let id = cloudId(for: run)
         if let hk = await RunTrash.permanentlyDelete(run, context: modelContext) {
             error = hk
         }
+        if let id { CloudRunSync.purge(runId: id) }
     }
 }
 

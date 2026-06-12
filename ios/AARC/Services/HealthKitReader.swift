@@ -15,6 +15,40 @@ actor HealthKitReader {
         self.store = store
     }
 
+    /// A Sendable snapshot of a HealthKit running workout — extracted
+    /// inside the actor so the non-Sendable HKWorkout never escapes.
+    struct WorkoutSummary: Sendable, Identifiable {
+        let uuid: UUID
+        let start: Date
+        let end: Date
+        let distanceMeters: Double
+        let energyKcal: Double
+        let runTypeRaw: String
+        let isTest: Bool
+        let aarcRunId: UUID?
+        var id: UUID { uuid }
+        var durationSeconds: Double { end.timeIntervalSince(start) }
+    }
+
+    /// All running workouts in Apple Health from the last `days` days,
+    /// newest first. Used by the "Import from Apple Health" recovery to find
+    /// runs the watch saved that AARC never recorded (e.g. when the phone↔
+    /// watch link broke mid-run).
+    func recentRunningWorkouts(days: Int = 60) async -> [WorkoutSummary] {
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        let datePred = HKQuery.predicateForSamples(withStart: cutoff, end: nil)
+        let runPred = HKQuery.predicateForWorkouts(with: .running)
+        let pred = NSCompoundPredicate(andPredicateWithSubpredicates: [datePred, runPred])
+        guard let samples = try? await sample(
+            of: HKObjectType.workoutType(), predicate: pred, limit: HKObjectQueryNoLimit) else { return [] }
+        return samples.compactMap { $0 as? HKWorkout }.map { w in
+            WorkoutSummary(uuid: w.uuid, start: w.startDate, end: w.endDate,
+                           distanceMeters: distanceMeters(w), energyKcal: energyKcal(w),
+                           runTypeRaw: runType(w).rawValue, isTest: isTestData(w),
+                           aarcRunId: aarcRunId(w))
+        }.sorted { $0.start > $1.start }
+    }
+
     /// Try to fetch a specific HK workout by UUID. Returns nil if HK
     /// hasn't yet propagated the workout from the watch (this can take
     /// a few seconds after `finishWorkout`).

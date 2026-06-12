@@ -437,6 +437,8 @@ struct ActiveRunView: View {
         RunDirector.shared.stop()
         VoiceFeedbackQueue.shared.stopAll()
 
+        // Desk-test simulator (if it was driving this run).
+        RunSimulator.shared.end()
         // Phone-only run: tell PhoneWorkoutSession to end.
         Task { @MainActor in
             await PhoneWorkoutSession.shared.end()

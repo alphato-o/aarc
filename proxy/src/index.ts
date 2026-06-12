@@ -7,6 +7,10 @@ import {
     ingestRunHandler,
     ingestAudioHandler,
     listRunsHandler,
+    listDeletedRunsHandler,
+    deleteRunHandler,
+    restoreRunHandler,
+    purgeRunHandler,
     runEventsHandler,
     runAudioHandler,
 } from "./routes/ingestRun";
@@ -101,9 +105,27 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         return ingestAudioHandler(request, env);
     }
 
+    if (request.method === "POST") {
+        const deleteMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/delete$/);
+        if (deleteMatch?.[1]) {
+            return deleteRunHandler(request, env, deleteMatch[1]);
+        }
+        const restoreMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/restore$/);
+        if (restoreMatch?.[1]) {
+            return restoreRunHandler(request, env, restoreMatch[1]);
+        }
+        const purgeMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/purge$/);
+        if (purgeMatch?.[1]) {
+            return purgeRunHandler(request, env, purgeMatch[1]);
+        }
+    }
+
     if (request.method === "GET") {
         if (url.pathname === "/api/runs") {
             return listRunsHandler(request, env);
+        }
+        if (url.pathname === "/api/runs/deleted") {
+            return listDeletedRunsHandler(request, env);
         }
         const eventsMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
         if (eventsMatch?.[1]) {

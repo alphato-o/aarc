@@ -2,6 +2,11 @@ import Foundation
 import Observation
 import AARCKit
 
+/// How a run is being conducted for testing. See `RunOrchestrator.testMode`.
+enum RunTestMode: String, CaseIterable, Sendable {
+    case off, real, simulate
+}
+
 /// Coordinates the "user wants to start a run" flow on the phone,
 /// regardless of whether the trigger came from the iPhone (its own
 /// Start button) or the Apple Watch (sent prepareWorkout to us).
@@ -37,15 +42,24 @@ final class RunOrchestrator {
     private(set) var phase: Phase = .idle
     var lastError: String?
 
-    /// Sticky "this is a test run" toggle, set on the start screen. When on,
-    /// the saved RunRecord is flagged `isTestData` (regardless of the HK
-    /// workout's own metadata) so it shows the TEST badge and is sweepable
-    /// via "Delete all test runs". Persisted + visible so the user always
-    /// sees whether it's armed.
-    private static let kTestRun = "aarc.run.isTestRun"
-    var isTestRun: Bool = UserDefaults.standard.bool(forKey: kTestRun) {
-        didSet { UserDefaults.standard.set(isTestRun, forKey: Self.kTestRun) }
+    /// Sticky test-run mode, set on the start screen. Persisted + visible.
+    ///   .off       — a real run: writes to Apple Health as normal.
+    ///   .real      — a test run you ACTUALLY run/cycle (GPS, pace, route all
+    ///                live) — but NOTHING is written to Apple Health, so test
+    ///                runs never pollute Fitness with 0.01km junk.
+    ///   .simulate  — a desk test: no movement, no Health. A synthetic metrics
+    ///                source drives the whole pipeline (director / coach /
+    ///                Jessica / milestones) so you can hear + tune the audio
+    ///                without leaving your chair; the Control Room exposes
+    ///                speed / pace / event controls.
+    private static let kTestMode = "aarc.run.testMode"
+    var testMode: RunTestMode =
+        RunTestMode(rawValue: UserDefaults.standard.string(forKey: kTestMode) ?? "") ?? .off {
+        didSet { UserDefaults.standard.set(testMode.rawValue, forKey: Self.kTestMode) }
     }
+    /// Any test run (real or simulated) — flags the RunRecord + skips Health.
+    var isTestRun: Bool { testMode != .off }
+    var isSimulating: Bool { testMode == .simulate }
 
     /// Human-readable reason shown on the watch-timeout card.
     private(set) var watchFailureReason: String?
@@ -106,11 +120,19 @@ final class RunOrchestrator {
             ScriptPreviewStore.shared.latest = stub
             prefetchEarlyLines(script: stub)
 
-            try await PhoneWorkoutSession.shared.start(
-                runType: runType,
-                runId: runId,
-                personalityId: personalityId
-            )
+            if testMode == .simulate {
+                // Desk test: no GPS / pedometer / HealthKit. The simulator
+                // drives synthetic metrics into the same pipeline so the
+                // audio fires exactly as on a real run.
+                RunSimulator.shared.start(runType: runType, runId: runId,
+                                          personalityId: personalityId, plan: plan)
+            } else {
+                try await PhoneWorkoutSession.shared.start(
+                    runType: runType,
+                    runId: runId,
+                    personalityId: personalityId
+                )
+            }
             scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
             // No watch involvement — no startWorkout WC message, no
             // wrist-cue notification. The phone is tracking, done.
