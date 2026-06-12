@@ -1959,11 +1959,10 @@ function shareSpeechLines() {
   return out;
 }
 function shareSpark() {
-  var src = state.metrics.map(function (m) { return m.kmh; }).filter(function (v) { return isFinite(v); });
-  if (src.length <= 240) return src;
-  var step = src.length / 240, out = [];
-  for (var i = 0; i < 240; i++) out.push(src[Math.floor(i * step)]);
-  return out;
+  return {
+    kmh: downsample(state.metrics.map(function (m) { return m.kmh; }), 240),
+    hr: downsample(state.metrics.map(function (m) { return m.hr; }), 240)
+  };
 }
 function shareOpts() {
   var s = state.summary || {};
@@ -1971,8 +1970,7 @@ function shareOpts() {
   var sel = null;
   lines.forEach(function (l) { if (l.idx === shareState.quoteIdx) sel = l; });
   var custom = (document.getElementById("sharetext").value || "").trim();
-  var quoteText = custom || (sel ? sel.text : "Lace up. Get roasted. Run faster.");
-  var who = sel ? sel.who : "";
+  var quoteText = cleanQuote(custom || (sel ? sel.text : "Lace up. Get roasted. Run faster."));
   return {
     date: shareDateLabel(),
     spark: shareSpark(),
@@ -1982,8 +1980,7 @@ function shareOpts() {
       { k: "Pace", v: fmtPace(s.avgPace) || "\\u2014" },
       { k: "Avg HR", v: isFinite(s.avgHr) ? Math.round(s.avgHr) + " bpm" : "\\u2014" }
     ],
-    quote: quoteText,
-    who: who
+    quote: quoteText
   };
 }
 
@@ -1996,34 +1993,78 @@ function rr(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
+// Brand mark — matches the iOS app icon: muted dark-green tile, cream goblet
+// with the dizzy spiral, plus speed streaks behind it (drinking, but make
+// it cardio).
+var BRAND_GREEN = "#4a6350", BRAND_CREAM = "#f2efe2";
 function drawLogoCanvas(ctx, ox, oy, s) {
   var f = s / 40;
   function P(v) { return v * f; }
   function seg(x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(ox + x1, oy + y1); ctx.lineTo(ox + x2, oy + y2); ctx.stroke(); }
-  var g = ctx.createLinearGradient(ox, oy, ox + s, oy + s);
-  g.addColorStop(0, "#ff8a4c"); g.addColorStop(1, "#ff4f2e");
-  rr(ctx, ox + P(1.5), oy + P(1.5), P(37), P(37), P(11)); ctx.fillStyle = g; ctx.fill();
-  ctx.strokeStyle = "#fff"; ctx.lineCap = "round";
-  ctx.lineWidth = P(2.1);
-  ctx.globalAlpha = 0.5; seg(P(6.5), P(15), P(12.5), P(15));
-  ctx.globalAlpha = 0.72; seg(P(5.5), P(20.5), P(13.5), P(20.5));
-  ctx.globalAlpha = 0.4; seg(P(7.5), P(26), P(11.5), P(26));
+  rr(ctx, ox + P(1), oy + P(1), P(38), P(38), P(10.5));
+  ctx.fillStyle = BRAND_GREEN; ctx.fill();
+  rr(ctx, ox + P(1), oy + P(1), P(38), P(38), P(10.5));
+  ctx.strokeStyle = "rgba(255,255,255,0.14)"; ctx.lineWidth = P(1); ctx.stroke();
+  // speed streaks (left of the goblet — it's mid-run)
+  ctx.strokeStyle = BRAND_CREAM; ctx.lineCap = "round";
+  ctx.lineWidth = P(1.9);
+  ctx.globalAlpha = 0.45; seg(P(4.5), P(14.5), P(10), P(14.5));
+  ctx.globalAlpha = 0.8;  seg(P(3.5), P(19.5), P(10.5), P(19.5));
+  ctx.globalAlpha = 0.35; seg(P(5.5), P(24.5), P(9.5), P(24.5));
   ctx.globalAlpha = 1;
-  ctx.lineWidth = P(3.3); ctx.lineJoin = "round";
+  // goblet: bowl + stem + foot, leaning forward like a runner
+  ctx.save();
+  ctx.translate(ox + P(24), oy + P(20));
+  ctx.rotate(0.10);
+  ctx.fillStyle = BRAND_CREAM;
+  ctx.beginPath();                       // bowl
+  ctx.moveTo(P(-8.2), P(-13));
+  ctx.lineTo(P(8.2), P(-13));
+  ctx.bezierCurveTo(P(8.2), P(-4.5), P(4.4), P(0.2), P(0), P(1.6));
+  ctx.bezierCurveTo(P(-4.4), P(0.2), P(-8.2), P(-4.5), P(-8.2), P(-13));
+  ctx.closePath(); ctx.fill();
+  ctx.fillRect(P(-1.15), P(1), P(2.3), P(9.2));   // stem
+  ctx.beginPath();                       // foot
+  ctx.ellipse(P(0), P(11.2), P(5.6), P(1.7), 0, 0, Math.PI * 2);
+  ctx.fill();
+  // dizzy spiral in the bowl
+  ctx.strokeStyle = BRAND_GREEN; ctx.lineWidth = P(1.5); ctx.lineCap = "round";
   ctx.beginPath();
-  ctx.moveTo(ox + P(15.5), oy + P(29.5)); ctx.lineTo(ox + P(23), oy + P(11.5)); ctx.lineTo(ox + P(30.5), oy + P(29.5));
+  var cxs = P(0), cys = P(-7.2);
+  for (var a = 0; a <= Math.PI * 5.0; a += 0.12) {
+    var r = P(0.42) * a;
+    var px = cxs + r * Math.cos(a - 1.2), py = cys + r * Math.sin(a - 1.2);
+    if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
   ctx.stroke();
-  ctx.lineWidth = P(2.9); seg(P(19), P(23.4), P(27), P(23.4));
+  ctx.restore();
 }
 function wrapLines(ctx, text, maxW) {
-  var words = String(text).split(/\s+/), lines = [], cur = "";
+  // NOTE: regexes inside this template MUST double-escape backslashes —
+  // a bare \\s in the TS source reaches the browser as the letter s.
+  var words = String(text).split(/\\s+/), lines = [], cur = "";
   for (var i = 0; i < words.length; i++) {
-    var t = cur ? cur + " " + words[i] : words[i];
-    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = words[i]; }
+    var w = words[i];
+    if (!w) continue;
+    // hard-break a single word that alone exceeds the line width
+    while (ctx.measureText(w).width > maxW && w.length > 2) {
+      var fit = w.length;
+      while (fit > 2 && ctx.measureText((cur ? cur + " " : "") + w.slice(0, fit) + "-").width > maxW) fit--;
+      if (cur) { lines.push(cur); cur = ""; continue; }
+      lines.push(w.slice(0, fit) + "-");
+      w = w.slice(fit);
+    }
+    var t = cur ? cur + " " + w : w;
+    if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; }
     else cur = t;
   }
   if (cur) lines.push(cur);
   return lines;
+}
+// spoken lines carry ElevenLabs expressive tags like [breathy] — strip them
+// for print, they're stage directions, not words.
+function cleanQuote(text) {
+  return String(text).replace(/\\[[^\\]]*\\]/g, " ").replace(/\\s+/g, " ").trim();
 }
 function layoutQuote(ctx, text, boxW, boxH, maxSize) {
   for (var size = maxSize; size >= 26; size -= 2) {
@@ -2040,89 +2081,73 @@ function layoutQuote(ctx, text, boxW, boxH, maxSize) {
 // highlight-graph reveal + a playback underline; 1 = finished/static image.
 function drawShareCard(ctx, W, H, o, progress) {
   var P = 76;
-  // background
-  ctx.fillStyle = "#0a0c11"; ctx.fillRect(0, 0, W, H);
+  // background: near-black with a soft brand-green wash
+  ctx.fillStyle = "#0b0e0c"; ctx.fillRect(0, 0, W, H);
   var glow = ctx.createRadialGradient(W * 0.16, -120, 60, W * 0.16, -120, W * 0.9);
-  glow.addColorStop(0, "rgba(255,90,54,0.22)"); glow.addColorStop(1, "rgba(255,90,54,0)");
+  glow.addColorStop(0, "rgba(74,99,80,0.50)"); glow.addColorStop(1, "rgba(74,99,80,0)");
   ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = "rgba(152,150,255,0.10)";
-  var g2 = ctx.createRadialGradient(W * 0.95, H * 0.05, 40, W * 0.95, H * 0.05, W * 0.6);
-  g2.addColorStop(0, "rgba(152,150,255,0.16)"); g2.addColorStop(1, "rgba(152,150,255,0)");
+  var g2 = ctx.createRadialGradient(W * 0.95, H * 0.92, 40, W * 0.95, H * 0.92, W * 0.7);
+  g2.addColorStop(0, "rgba(74,99,80,0.22)"); g2.addColorStop(1, "rgba(74,99,80,0)");
   ctx.fillStyle = g2; ctx.fillRect(0, 0, W, H);
 
   // header
   drawLogoCanvas(ctx, P, P - 4, 60);
   ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-  ctx.fillStyle = "#f4f6fa"; ctx.font = "800 38px " + SANS;
+  ctx.fillStyle = "#f2efe2"; ctx.font = "800 38px " + SANS;
   ctx.fillText("AARC", P + 76, P + 34);
   ctx.textAlign = "right";
-  ctx.fillStyle = "#ff7a52"; ctx.font = "700 24px " + SANS;
+  ctx.fillStyle = "#9eb8a5"; ctx.font = "700 24px " + SANS;
   ctx.fillText("aarun.club", W - P, P + 22);
-  ctx.fillStyle = "#7d8696"; ctx.font = "500 18px " + SANS;
+  ctx.fillStyle = "#7d8a80"; ctx.font = "500 18px " + SANS;
   if (o.date) ctx.fillText(o.date, W - P, P + 48);
   ctx.textAlign = "left";
-  ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(242,239,226,0.10)"; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(P, P + 74); ctx.lineTo(W - P, P + 74); ctx.stroke();
 
   // KPI band
-  var ky = P + 110;
+  var ky = P + 106;
   var n = o.kpis.length, cw = (W - P * 2) / n;
   for (var i = 0; i < n; i++) {
     var cx = P + cw * i + cw / 2;
     ctx.textAlign = "center";
-    ctx.fillStyle = "#f4f6fa"; ctx.font = "800 44px " + SANS;
-    ctx.fillText(o.kpis[i].v, cx, ky + 38);
-    ctx.fillStyle = "#828b9b"; ctx.font = "700 17px " + SANS;
-    ctx.fillText(o.kpis[i].k.toUpperCase(), cx, ky + 70);
+    ctx.fillStyle = "#f2efe2"; ctx.font = "800 42px " + SANS;
+    ctx.fillText(o.kpis[i].v, cx, ky + 36);
+    ctx.fillStyle = "#8a978d"; ctx.font = "700 16px " + SANS;
+    ctx.fillText(o.kpis[i].k.toUpperCase(), cx, ky + 66);
     if (i > 0) {
-      ctx.strokeStyle = "rgba(255,255,255,0.07)";
-      ctx.beginPath(); ctx.moveTo(P + cw * i, ky + 4); ctx.lineTo(P + cw * i, ky + 64); ctx.stroke();
+      ctx.strokeStyle = "rgba(242,239,226,0.08)";
+      ctx.beginPath(); ctx.moveTo(P + cw * i, ky + 4); ctx.lineTo(P + cw * i, ky + 60); ctx.stroke();
     }
   }
   ctx.textAlign = "left";
 
-  // highlight graph
-  var gh = H > 1200 ? 196 : 150;
-  var gy = ky + 110, gx = P, gw = W - P * 2;
+  // highlight graph — compact; the quote is the star
+  var gh = H > 1200 ? 130 : 110;
+  var gy = ky + 100, gx = P, gw = W - P * 2;
   drawShareGraph(ctx, gx, gy, gw, gh, o.spark, progress);
 
   // footer first (so we know the quote box bottom)
   var footY = H - 56;
   ctx.textAlign = "left";
-  ctx.fillStyle = "#6b7484"; ctx.font = "500 20px " + SANS;
+  ctx.fillStyle = "#75816f"; ctx.font = "500 20px " + SANS;
   ctx.fillText("An AI running coach that talks back.", P, footY);
   ctx.textAlign = "right";
-  ctx.fillStyle = "#7d8696"; ctx.font = "700 20px " + SANS;
+  ctx.fillStyle = "#9eb8a5"; ctx.font = "700 20px " + SANS;
   ctx.fillText("aarun.club", W - P, footY);
   ctx.textAlign = "left";
 
-  // centrepiece quote
-  var qTop = gy + gh + 46;
-  var qBot = footY - 64;
+  // centrepiece quote — gets all the room between graph and footer
+  var qTop = gy + gh + 56;
+  var qBot = footY - 70;
   var boxW = W - P * 2;
-  // speaker chip
-  var chipH = 0;
-  if (o.who === "ricky" || o.who === "jessica") {
-    var label = o.who.toUpperCase();
-    var col = o.who === "jessica" ? "#ef6da8" : "#e8a13a";
-    ctx.font = "800 20px " + SANS;
-    var tw = ctx.measureText(label).width;
-    var pad = 16, ch = 38, cwc = tw + pad * 2;
-    rr(ctx, P, qTop, cwc, ch, 10);
-    ctx.fillStyle = col; ctx.globalAlpha = 0.16; ctx.fill(); ctx.globalAlpha = 1;
-    rr(ctx, P, qTop, cwc, ch, 10); ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
-    ctx.fillStyle = col; ctx.textAlign = "left"; ctx.fillText(label, P + pad, qTop + 26);
-    chipH = ch + 22;
-  }
-  var qBoxTop = qTop + chipH;
-  var ql = layoutQuote(ctx, "\\u201c" + o.quote + "\\u201d", boxW, qBot - qBoxTop, H > 1200 ? 66 : 54);
+  var ql = layoutQuote(ctx, "\\u201c" + o.quote + "\\u201d", boxW, qBot - qTop, H > 1200 ? 76 : 62);
   var totalH = ql.lines.length * ql.lh;
-  var startY = qBoxTop + Math.max(0, ((qBot - qBoxTop) - totalH) / 2) + ql.size;
-  // fade the quote in over the first 0.6s of video; full for image
+  var startY = qTop + Math.max(0, ((qBot - qTop) - totalH) / 2) + ql.size;
+  // fade the quote in over the first beat of the video; full for image
   var qAlpha = progress >= 1 ? 1 : Math.min(1, progress / 0.12);
   ctx.globalAlpha = qAlpha;
   ctx.font = "italic " + ql.size + "px " + QFONT;
-  ctx.fillStyle = "#f6f7fb"; ctx.textAlign = "left";
+  ctx.fillStyle = "#f4f2e8"; ctx.textAlign = "left";
   for (var li = 0; li < ql.lines.length; li++) {
     ctx.fillText(ql.lines[li], P, startY + li * ql.lh);
   }
@@ -2130,46 +2155,75 @@ function drawShareCard(ctx, W, H, o, progress) {
 
   // playback underline (video only): fills as the voice plays
   if (progress < 1) {
-    var uy = startY + (ql.lines.length - 1) * ql.lh + 22;
-    ctx.strokeStyle = "rgba(255,255,255,0.12)"; ctx.lineWidth = 4; ctx.lineCap = "round";
+    var uy = startY + (ql.lines.length - 1) * ql.lh + 26;
+    ctx.strokeStyle = "rgba(242,239,226,0.14)"; ctx.lineWidth = 4; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(P, uy); ctx.lineTo(P + boxW * 0.42, uy); ctx.stroke();
-    ctx.strokeStyle = "#ff6a44";
+    ctx.strokeStyle = "#8fb89a";
     ctx.beginPath(); ctx.moveTo(P, uy); ctx.lineTo(P + boxW * 0.42 * progress, uy); ctx.stroke();
   }
 }
 function drawShareGraph(ctx, x, y, w, h, spark, progress) {
-  var pts = spark || [];
-  if (pts.length < 2) {
-    ctx.fillStyle = "#5b6470"; ctx.font = "500 22px " + SANS; ctx.textAlign = "left";
-    ctx.fillText("No GPS trace for this run", x, y + h / 2);
+  var kmh = (spark && spark.kmh) || [], hr = (spark && spark.hr) || [];
+  var hasK = countFinite(kmh) > 1, hasH = countFinite(hr) > 1;
+  if (!hasK && !hasH) {
+    ctx.fillStyle = "#75816f"; ctx.font = "500 22px " + SANS; ctx.textAlign = "left";
+    ctx.fillText("No pace trace for this run", x, y + h / 2);
     return;
   }
-  var min = Infinity, max = -Infinity;
-  for (var i = 0; i < pts.length; i++) { if (pts[i] < min) min = pts[i]; if (pts[i] > max) max = pts[i]; }
-  if (!(max > min)) { max = min + 1; }
-  var range = max - min, top = max + range * 0.12, bot = Math.max(0, min - range * 0.12);
-  var n = pts.length;
-  function PX(i) { return x + (i / (n - 1)) * w; }
-  function PY(v) { return y + h - ((v - bot) / (top - bot)) * h; }
-  var upto = Math.max(1, Math.min(n - 1, Math.floor(progress * (n - 1))));
-  // area
-  ctx.beginPath(); ctx.moveTo(x, y + h);
-  for (var a = 0; a <= upto; a++) ctx.lineTo(PX(a), PY(pts[a]));
-  ctx.lineTo(PX(upto), y + h); ctx.closePath();
-  var grd = ctx.createLinearGradient(0, y, 0, y + h);
-  grd.addColorStop(0, "rgba(255,122,60,0.34)"); grd.addColorStop(1, "rgba(255,122,60,0.02)");
-  ctx.fillStyle = grd; ctx.fill();
-  // line
-  ctx.beginPath();
-  for (var b = 0; b <= upto; b++) { var fx = PX(b), fy = PY(pts[b]); if (b === 0) ctx.moveTo(fx, fy); else ctx.lineTo(fx, fy); }
-  ctx.strokeStyle = "#ff8a4c"; ctx.lineWidth = 3.5; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
-  // tip dot
-  var tx = PX(upto), ty = PY(pts[upto]);
-  ctx.beginPath(); ctx.arc(tx, ty, 7, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill();
-  ctx.beginPath(); ctx.arc(tx, ty, 4, 0, Math.PI * 2); ctx.fillStyle = "#ff5130"; ctx.fill();
   // baseline
-  ctx.strokeStyle = "rgba(255,255,255,0.06)"; ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(242,239,226,0.08)"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(x, y + h); ctx.lineTo(x + w, y + h); ctx.stroke();
+  // HR behind (its own scale), speed in front
+  if (hasH) drawShareSeries(ctx, x, y, w, h, hr, progress, {
+    line: "#d4766a", width: 2.5, alpha: 0.8, area: null, dot: null });
+  if (hasK) drawShareSeries(ctx, x, y, w, h, kmh, progress, {
+    line: "#a8c8b0", width: 3.5, alpha: 1,
+    areaTop: "rgba(143,184,154,0.30)", areaBot: "rgba(143,184,154,0.02)", dot: "#cfe8d6" });
+  // tiny legend so the two lines read instantly
+  ctx.font = "600 16px " + SANS; ctx.textAlign = "left";
+  ctx.fillStyle = "#a8c8b0"; if (hasK) ctx.fillText("pace", x, y - 10);
+  ctx.fillStyle = "#d4766a"; if (hasH) ctx.fillText("heart rate", x + (hasK ? 64 : 0), y - 10);
+}
+function countFinite(a) { var c = 0; for (var i = 0; i < a.length; i++) if (isFinite(a[i]) && a[i] !== null) c++; return c; }
+function drawShareSeries(ctx, x, y, w, h, pts, progress, style) {
+  var min = Infinity, max = -Infinity, n = pts.length;
+  for (var i = 0; i < n; i++) { var v = pts[i]; if (isFinite(v) && v !== null) { if (v < min) min = v; if (v > max) max = v; } }
+  if (!isFinite(min)) return;
+  if (!(max > min)) max = min + 1;
+  var range = max - min, top = max + range * 0.15, bot = min - range * 0.25;
+  function PX(i2) { return x + (i2 / (n - 1)) * w; }
+  function PY(v2) { return y + h - ((v2 - bot) / (top - bot)) * h; }
+  var upto = Math.max(1, Math.min(n - 1, Math.floor(progress * (n - 1))));
+  if (style.areaTop) {
+    ctx.beginPath(); var st = false, lastX = x;
+    for (var a = 0; a <= upto; a++) {
+      var av = pts[a]; if (!isFinite(av) || av === null) continue;
+      var ax = PX(a), ay = PY(av);
+      if (!st) { ctx.moveTo(ax, y + h); ctx.lineTo(ax, ay); st = true; } else ctx.lineTo(ax, ay);
+      lastX = ax;
+    }
+    if (st) {
+      ctx.lineTo(lastX, y + h); ctx.closePath();
+      var grd = ctx.createLinearGradient(0, y, 0, y + h);
+      grd.addColorStop(0, style.areaTop); grd.addColorStop(1, style.areaBot);
+      ctx.fillStyle = grd; ctx.fill();
+    }
+  }
+  ctx.beginPath(); var started = false, tipX = null, tipY = null;
+  for (var b = 0; b <= upto; b++) {
+    var bv = pts[b]; if (!isFinite(bv) || bv === null) continue;
+    var fx = PX(b), fy = PY(bv);
+    if (!started) { ctx.moveTo(fx, fy); started = true; } else ctx.lineTo(fx, fy);
+    tipX = fx; tipY = fy;
+  }
+  ctx.globalAlpha = style.alpha;
+  ctx.strokeStyle = style.line; ctx.lineWidth = style.width;
+  ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.stroke();
+  ctx.globalAlpha = 1;
+  if (style.dot && tipX !== null) {
+    ctx.beginPath(); ctx.arc(tipX, tipY, 7, 0, Math.PI * 2); ctx.fillStyle = "#fff"; ctx.fill();
+    ctx.beginPath(); ctx.arc(tipX, tipY, 4, 0, Math.PI * 2); ctx.fillStyle = style.dot; ctx.fill();
+  }
 }
 
 function paintToCanvas(canvas, progress) {

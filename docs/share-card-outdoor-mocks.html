@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AARC — outdoor share card mocks</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 36px 28px 80px;
+    background: #101312; color: #d9ded9;
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  h1 { font-size: 22px; margin: 0 0 6px; color: #f2efe2; }
+  .intro { max-width: 60rem; color: #98a39a; margin-bottom: 8px; }
+  .note {
+    max-width: 60rem; background: #18201b; border: 1px solid #2a362e; border-radius: 10px;
+    padding: 12px 16px; margin: 18px 0 34px; color: #aebfb2; font-size: 13.5px;
+  }
+  .note b { color: #d8e4da; }
+  .grid { display: flex; flex-wrap: wrap; gap: 34px; align-items: flex-start; }
+  figure { margin: 0; width: 380px; }
+  figure svg { width: 100%; height: auto; border-radius: 14px; box-shadow: 0 14px 44px rgba(0,0,0,.5); display: block; }
+  figcaption { margin-top: 12px; font-size: 13.5px; color: #98a39a; }
+  figcaption b { color: #e6e9e2; display: block; font-size: 14.5px; margin-bottom: 2px; }
+  figcaption .req { color: #c9a36a; }
+  @media print {
+    body { background: #fff; color: #222; }
+    .note { background: #f4f4f0; border-color: #ddd; color: #444; }
+    figcaption, .intro { color: #444; }
+    figure svg { box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Outdoor run — share card mocks</h1>
+<p class="intro">Four directions for what the share card becomes when the run happened outside.
+All use the brand: pub-green, cream goblet logo, serif quote as the centrepiece. Same 4:5 portrait crop as the current card.</p>
+
+<div class="note">
+  <b>What outdoor data we have today vs. what each mock needs:</b> the event log currently carries
+  distance / pace / speed / heart rate samples — enough for mocks B and D right now. Mock A (route
+  silhouette) needs a coarse GPS polyline (~100 points, fuzzed start/end for privacy) added to the run
+  upload. Mock C (elevation) needs an altitude sample per metrics event. Both are small iOS-side additions.
+</div>
+
+<div class="grid">
+
+<!-- ============================================================ -->
+<!-- MOCK A — route silhouette hero -->
+<!-- ============================================================ -->
+<figure>
+<svg viewBox="0 0 540 675" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="gA" cx="16%" cy="-8%" r="90%">
+      <stop offset="0" stop-color="#4a6350" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#4a6350" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="routeGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#cfe8d6"/>
+      <stop offset="1" stop-color="#8fb89a"/>
+    </linearGradient>
+  </defs>
+  <rect width="540" height="675" fill="#0b0e0c"/>
+  <rect width="540" height="675" fill="url(#gA)"/>
+
+  <!-- header -->
+  <g transform="translate(38,30) scale(0.75)">
+    <rect x="1" y="1" width="38" height="38" rx="10.5" fill="#4a6350"/>
+    <g stroke="#f2efe2" stroke-linecap="round" fill="none" stroke-width="1.9">
+      <line x1="4.5" y1="14.5" x2="10" y2="14.5" stroke-opacity=".45"/>
+      <line x1="3.5" y1="19.5" x2="10.5" y2="19.5" stroke-opacity=".8"/>
+      <line x1="5.5" y1="24.5" x2="9.5" y2="24.5" stroke-opacity=".35"/>
+    </g>
+    <g transform="translate(24 20) rotate(6)">
+      <path fill="#f2efe2" d="M-8.2 -13 L8.2 -13 C8.2 -4.5 4.4 0.2 0 1.6 C-4.4 0.2 -8.2 -4.5 -8.2 -13 Z"/>
+      <rect x="-1.15" y="1" width="2.3" height="9.2" fill="#f2efe2"/>
+      <ellipse cx="0" cy="11.2" rx="5.6" ry="1.7" fill="#f2efe2"/>
+      <path fill="none" stroke="#4a6350" stroke-width="1.5" stroke-linecap="round"
+            d="M0 -7.2 a1.1 1.1 0 0 1 1.6 1.3 a2.3 2.3 0 0 1 -3.4 1.3 a3.5 3.5 0 0 1 1.2 -5.5 a4.7 4.7 0 0 1 4.4 6.3"/>
+    </g>
+  </g>
+  <text x="76" y="52" fill="#f2efe2" font-weight="800" font-size="19" font-family="-apple-system,Segoe UI,Roboto,sans-serif">AARC</text>
+  <text x="502" y="44" fill="#9eb8a5" font-weight="700" font-size="12" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">aarun.club</text>
+  <text x="502" y="58" fill="#7d8a80" font-size="9.5" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">Sat, Jun 13, 2026 · Shanghai</text>
+  <line x1="38" y1="72" x2="502" y2="72" stroke="#f2efe2" stroke-opacity=".1"/>
+
+  <!-- route silhouette = THE hero -->
+  <g transform="translate(110,96)">
+    <path d="M18 218 C-12 176 6 128 40 118 C84 105 92 62 134 48 C176 34 222 10 262 26 C300 41 312 88 290 122 C270 152 222 148 198 176 C176 202 188 232 156 246 C124 260 78 252 60 236 C50 227 38 240 18 218 Z"
+          fill="none" stroke="url(#routeGrad)" stroke-width="7" stroke-linejoin="round" stroke-linecap="round"/>
+    <!-- km ticks -->
+    <g fill="#0b0e0c" stroke="#8fb89a" stroke-width="2">
+      <circle cx="40" cy="118" r="6"/><circle cx="134" cy="48" r="6"/>
+      <circle cx="290" cy="122" r="6"/><circle cx="156" cy="246" r="6"/>
+    </g>
+    <g fill="#7d8a80" font-size="9" font-family="-apple-system,Segoe UI,Roboto,sans-serif">
+      <text x="28" y="106">1k</text><text x="124" y="36">2k</text>
+      <text x="300" y="116">3k</text><text x="164" y="260">4k</text>
+    </g>
+    <!-- start / end -->
+    <circle cx="18" cy="218" r="8" fill="#cfe8d6"/>
+    <circle cx="60" cy="236" r="8" fill="#0b0e0c" stroke="#cfe8d6" stroke-width="3"/>
+  </g>
+
+  <!-- KPI strip under route -->
+  <g font-family="-apple-system,Segoe UI,Roboto,sans-serif" text-anchor="middle">
+    <text x="105" y="420" fill="#f2efe2" font-weight="800" font-size="24">5.02 km</text>
+    <text x="105" y="438" fill="#8a978d" font-weight="700" font-size="9">DISTANCE</text>
+    <text x="215" y="420" fill="#f2efe2" font-weight="800" font-size="24">27m41s</text>
+    <text x="215" y="438" fill="#8a978d" font-weight="700" font-size="9">TIME</text>
+    <text x="325" y="420" fill="#f2efe2" font-weight="800" font-size="24">5:31/km</text>
+    <text x="325" y="438" fill="#8a978d" font-weight="700" font-size="9">PACE</text>
+    <text x="435" y="420" fill="#f2efe2" font-weight="800" font-size="24">158</text>
+    <text x="435" y="438" fill="#8a978d" font-weight="700" font-size="9">AVG HR</text>
+  </g>
+
+  <!-- quote -->
+  <text x="38" y="500" fill="#f4f2e8" font-style="italic" font-size="25" font-family="Georgia,serif">&#8220;Five kilometres and you only</text>
+  <text x="38" y="534" fill="#f4f2e8" font-style="italic" font-size="25" font-family="Georgia,serif">walked twice. For you, sunshine,</text>
+  <text x="38" y="568" fill="#f4f2e8" font-style="italic" font-size="25" font-family="Georgia,serif">that&#8217;s basically the Olympics.&#8221;</text>
+
+  <!-- footer -->
+  <text x="38" y="640" fill="#75816f" font-size="11" font-family="-apple-system,Segoe UI,Roboto,sans-serif">An AI running coach that talks back.</text>
+  <text x="502" y="640" fill="#9eb8a5" font-weight="700" font-size="11" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">aarun.club</text>
+</svg>
+<figcaption><b>A — Route silhouette hero</b>
+The GPS trace becomes the run's fingerprint — instantly says "I was out there". Start dot solid, finish ring hollow, km ticks. <span class="req">Needs: coarse GPS polyline in the upload (privacy-fuzzed ends).</span></figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<!-- MOCK B — km splits ladder -->
+<!-- ============================================================ -->
+<figure>
+<svg viewBox="0 0 540 675" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="gB" cx="16%" cy="-8%" r="90%">
+      <stop offset="0" stop-color="#4a6350" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#4a6350" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="540" height="675" fill="#0b0e0c"/>
+  <rect width="540" height="675" fill="url(#gB)"/>
+
+  <g transform="translate(38,30) scale(0.75)">
+    <rect x="1" y="1" width="38" height="38" rx="10.5" fill="#4a6350"/>
+    <g stroke="#f2efe2" stroke-linecap="round" fill="none" stroke-width="1.9">
+      <line x1="4.5" y1="14.5" x2="10" y2="14.5" stroke-opacity=".45"/>
+      <line x1="3.5" y1="19.5" x2="10.5" y2="19.5" stroke-opacity=".8"/>
+      <line x1="5.5" y1="24.5" x2="9.5" y2="24.5" stroke-opacity=".35"/>
+    </g>
+    <g transform="translate(24 20) rotate(6)">
+      <path fill="#f2efe2" d="M-8.2 -13 L8.2 -13 C8.2 -4.5 4.4 0.2 0 1.6 C-4.4 0.2 -8.2 -4.5 -8.2 -13 Z"/>
+      <rect x="-1.15" y="1" width="2.3" height="9.2" fill="#f2efe2"/>
+      <ellipse cx="0" cy="11.2" rx="5.6" ry="1.7" fill="#f2efe2"/>
+      <path fill="none" stroke="#4a6350" stroke-width="1.5" stroke-linecap="round"
+            d="M0 -7.2 a1.1 1.1 0 0 1 1.6 1.3 a2.3 2.3 0 0 1 -3.4 1.3 a3.5 3.5 0 0 1 1.2 -5.5 a4.7 4.7 0 0 1 4.4 6.3"/>
+    </g>
+  </g>
+  <text x="76" y="52" fill="#f2efe2" font-weight="800" font-size="19" font-family="-apple-system,Segoe UI,Roboto,sans-serif">AARC</text>
+  <text x="502" y="44" fill="#9eb8a5" font-weight="700" font-size="12" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">aarun.club</text>
+  <text x="502" y="58" fill="#7d8a80" font-size="9.5" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">Sat, Jun 13, 2026</text>
+  <line x1="38" y1="72" x2="502" y2="72" stroke="#f2efe2" stroke-opacity=".1"/>
+
+  <!-- KPI band on top -->
+  <g font-family="-apple-system,Segoe UI,Roboto,sans-serif" text-anchor="middle">
+    <text x="105" y="112" fill="#f2efe2" font-weight="800" font-size="23">5.02 km</text>
+    <text x="105" y="130" fill="#8a978d" font-weight="700" font-size="9">DISTANCE</text>
+    <text x="215" y="112" fill="#f2efe2" font-weight="800" font-size="23">27m41s</text>
+    <text x="215" y="130" fill="#8a978d" font-weight="700" font-size="9">TIME</text>
+    <text x="325" y="112" fill="#f2efe2" font-weight="800" font-size="23">5:31/km</text>
+    <text x="325" y="130" fill="#8a978d" font-weight="700" font-size="9">PACE</text>
+    <text x="435" y="112" fill="#f2efe2" font-weight="800" font-size="23">158</text>
+    <text x="435" y="130" fill="#8a978d" font-weight="700" font-size="9">AVG HR</text>
+  </g>
+
+  <!-- splits ladder: one bar per km, longer = slower; fastest highlighted -->
+  <g font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="11">
+    <text x="38" y="172" fill="#8a978d" font-weight="700" font-size="9">SPLITS</text>
+    <g>
+      <text x="38" y="196" fill="#aebfb2">1</text>
+      <rect x="60" y="186" width="318" height="12" rx="6" fill="#3c4f42"/>
+      <text x="390" y="196" fill="#aebfb2">5:38</text>
+    </g>
+    <g>
+      <text x="38" y="220" fill="#aebfb2">2</text>
+      <rect x="60" y="210" width="300" height="12" rx="6" fill="#3c4f42"/>
+      <text x="372" y="220" fill="#aebfb2">5:25</text>
+    </g>
+    <g>
+      <text x="38" y="244" fill="#cfe8d6" font-weight="700">3</text>
+      <rect x="60" y="234" width="282" height="12" rx="6" fill="#8fb89a"/>
+      <text x="354" y="244" fill="#cfe8d6" font-weight="700">5:11 &#9889;</text>
+    </g>
+    <g>
+      <text x="38" y="268" fill="#aebfb2">4</text>
+      <rect x="60" y="258" width="330" height="12" rx="6" fill="#3c4f42"/>
+      <text x="402" y="268" fill="#aebfb2">5:47</text>
+    </g>
+    <g>
+      <text x="38" y="292" fill="#aebfb2">5</text>
+      <rect x="60" y="282" width="312" height="12" rx="6" fill="#3c4f42"/>
+      <text x="384" y="292" fill="#aebfb2">5:33</text>
+    </g>
+  </g>
+
+  <!-- quote gets the rest -->
+  <text x="38" y="392" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">&#8220;Kilometre three was almost</text>
+  <text x="38" y="428" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">impressive. Shame about the</text>
+  <text x="38" y="464" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">other four, but let&#8217;s frame</text>
+  <text x="38" y="500" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">the one good one, eh?&#8221;</text>
+
+  <text x="38" y="640" fill="#75816f" font-size="11" font-family="-apple-system,Segoe UI,Roboto,sans-serif">An AI running coach that talks back.</text>
+  <text x="502" y="640" fill="#9eb8a5" font-weight="700" font-size="11" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">aarun.club</text>
+</svg>
+<figcaption><b>B — Km splits ladder</b>
+Runner-culture native: per-km bars (longer = slower), fastest split highlighted so the quote can roast or praise it. <span class="req">Possible today — splits derive from existing distance/pace samples.</span></figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<!-- MOCK C — elevation + pace strip -->
+<!-- ============================================================ -->
+<figure>
+<svg viewBox="0 0 540 675" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="gC" cx="16%" cy="-8%" r="90%">
+      <stop offset="0" stop-color="#4a6350" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#4a6350" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="hillGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5d7a64"/>
+      <stop offset="1" stop-color="#22301f" stop-opacity=".4"/>
+    </linearGradient>
+  </defs>
+  <rect width="540" height="675" fill="#0b0e0c"/>
+  <rect width="540" height="675" fill="url(#gC)"/>
+
+  <g transform="translate(38,30) scale(0.75)">
+    <rect x="1" y="1" width="38" height="38" rx="10.5" fill="#4a6350"/>
+    <g stroke="#f2efe2" stroke-linecap="round" fill="none" stroke-width="1.9">
+      <line x1="4.5" y1="14.5" x2="10" y2="14.5" stroke-opacity=".45"/>
+      <line x1="3.5" y1="19.5" x2="10.5" y2="19.5" stroke-opacity=".8"/>
+      <line x1="5.5" y1="24.5" x2="9.5" y2="24.5" stroke-opacity=".35"/>
+    </g>
+    <g transform="translate(24 20) rotate(6)">
+      <path fill="#f2efe2" d="M-8.2 -13 L8.2 -13 C8.2 -4.5 4.4 0.2 0 1.6 C-4.4 0.2 -8.2 -4.5 -8.2 -13 Z"/>
+      <rect x="-1.15" y="1" width="2.3" height="9.2" fill="#f2efe2"/>
+      <ellipse cx="0" cy="11.2" rx="5.6" ry="1.7" fill="#f2efe2"/>
+      <path fill="none" stroke="#4a6350" stroke-width="1.5" stroke-linecap="round"
+            d="M0 -7.2 a1.1 1.1 0 0 1 1.6 1.3 a2.3 2.3 0 0 1 -3.4 1.3 a3.5 3.5 0 0 1 1.2 -5.5 a4.7 4.7 0 0 1 4.4 6.3"/>
+    </g>
+  </g>
+  <text x="76" y="52" fill="#f2efe2" font-weight="800" font-size="19" font-family="-apple-system,Segoe UI,Roboto,sans-serif">AARC</text>
+  <text x="502" y="44" fill="#9eb8a5" font-weight="700" font-size="12" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">aarun.club</text>
+  <text x="502" y="58" fill="#7d8a80" font-size="9.5" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">Sat, Jun 13, 2026</text>
+  <line x1="38" y1="72" x2="502" y2="72" stroke="#f2efe2" stroke-opacity=".1"/>
+
+  <g font-family="-apple-system,Segoe UI,Roboto,sans-serif" text-anchor="middle">
+    <text x="105" y="112" fill="#f2efe2" font-weight="800" font-size="23">5.02 km</text>
+    <text x="105" y="130" fill="#8a978d" font-weight="700" font-size="9">DISTANCE</text>
+    <text x="215" y="112" fill="#f2efe2" font-weight="800" font-size="23">27m41s</text>
+    <text x="215" y="130" fill="#8a978d" font-weight="700" font-size="9">TIME</text>
+    <text x="325" y="112" fill="#f2efe2" font-weight="800" font-size="23">5:31/km</text>
+    <text x="325" y="130" fill="#8a978d" font-weight="700" font-size="9">PACE</text>
+    <text x="435" y="112" fill="#f2efe2" font-weight="800" font-size="23">+86 m</text>
+    <text x="435" y="130" fill="#8a978d" font-weight="700" font-size="9">CLIMB</text>
+  </g>
+
+  <!-- elevation profile as filled hills, pace line on top -->
+  <g transform="translate(38,160)">
+    <text x="0" y="0" fill="#8a978d" font-weight="700" font-size="9" font-family="-apple-system,Segoe UI,Roboto,sans-serif">ELEVATION &amp; PACE</text>
+    <path d="M0 96 L0 70 C40 64 60 40 96 38 C132 36 150 58 188 56 C226 54 240 22 282 20 C324 18 338 48 376 52 C414 56 430 70 464 74 L464 96 Z"
+          fill="url(#hillGrad)"/>
+    <path d="M0 60 C44 58 64 50 100 54 C140 59 158 44 196 46 C234 48 252 30 290 34 C330 38 348 56 386 58 C420 60 440 52 464 54"
+          fill="none" stroke="#cfe8d6" stroke-width="2.6" stroke-linecap="round"/>
+    <circle cx="282" cy="20" r="4" fill="#0b0e0c" stroke="#cfe8d6" stroke-width="2"/>
+    <text x="272" y="10" fill="#9eb8a5" font-size="9" font-family="-apple-system,Segoe UI,Roboto,sans-serif">crest · 41 m</text>
+  </g>
+
+  <!-- quote -->
+  <text x="38" y="372" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">&#8220;You took that hill like it owed</text>
+  <text x="38" y="408" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">you money. Then the descent</text>
+  <text x="38" y="444" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">took it all back, with interest,</text>
+  <text x="38" y="480" fill="#f4f2e8" font-style="italic" font-size="27" font-family="Georgia,serif">didn&#8217;t it?&#8221;</text>
+
+  <text x="38" y="640" fill="#75816f" font-size="11" font-family="-apple-system,Segoe UI,Roboto,sans-serif">An AI running coach that talks back.</text>
+  <text x="502" y="640" fill="#9eb8a5" font-weight="700" font-size="11" text-anchor="end" font-family="-apple-system,Segoe UI,Roboto,sans-serif">aarun.club</text>
+</svg>
+<figcaption><b>C — Elevation &amp; pace strip</b>
+Hills as filled silhouette, pace line riding over them, crest annotated — made for hilly routes where the climb is the story. <span class="req">Needs: altitude added to the metrics samples.</span></figcaption>
+</figure>
+
+<!-- ============================================================ -->
+<!-- MOCK D — quote-first minimal -->
+<!-- ============================================================ -->
+<figure>
+<svg viewBox="0 0 540 675" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="gD" cx="50%" cy="110%" r="110%">
+      <stop offset="0" stop-color="#4a6350" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#4a6350" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="540" height="675" fill="#0b0e0c"/>
+  <rect width="540" height="675" fill="url(#gD)"/>
+
+  <!-- centered logo on top -->
+  <g transform="translate(250,40) scale(1.0)">
+    <rect x="1" y="1" width="38" height="38" rx="10.5" fill="#4a6350"/>
+    <g stroke="#f2efe2" stroke-linecap="round" fill="none" stroke-width="1.9">
+      <line x1="4.5" y1="14.5" x2="10" y2="14.5" stroke-opacity=".45"/>
+      <line x1="3.5" y1="19.5" x2="10.5" y2="19.5" stroke-opacity=".8"/>
+      <line x1="5.5" y1="24.5" x2="9.5" y2="24.5" stroke-opacity=".35"/>
+    </g>
+    <g transform="translate(24 20) rotate(6)">
+      <path fill="#f2efe2" d="M-8.2 -13 L8.2 -13 C8.2 -4.5 4.4 0.2 0 1.6 C-4.4 0.2 -8.2 -4.5 -8.2 -13 Z"/>
+      <rect x="-1.15" y="1" width="2.3" height="9.2" fill="#f2efe2"/>
+      <ellipse cx="0" cy="11.2" rx="5.6" ry="1.7" fill="#f2efe2"/>
+      <path fill="none" stroke="#4a6350" stroke-width="1.5" stroke-linecap="round"
+            d="M0 -7.2 a1.1 1.1 0 0 1 1.6 1.3 a2.3 2.3 0 0 1 -3.4 1.3 a3.5 3.5 0 0 1 1.2 -5.5 a4.7 4.7 0 0 1 4.4 6.3"/>
+    </g>
+  </g>
+
+  <!-- giant centered quote -->
+  <g text-anchor="middle" font-family="Georgia,serif" font-style="italic" fill="#f4f2e8">
+    <text x="270" y="210" font-size="34">&#8220;Sub-5:30 average and</text>
+    <text x="270" y="256" font-size="34">you didn&#8217;t die. I&#8217;d call</text>
+    <text x="270" y="302" font-size="34">that a personality</text>
+    <text x="270" y="348" font-size="34">breakthrough, sunshine.&#8221;</text>
+  </g>
+  <text x="270" y="396" text-anchor="middle" fill="#9eb8a5" font-weight="700" font-size="12" letter-spacing="2" font-family="-apple-system,Segoe UI,Roboto,sans-serif">— HEARD AT KM 4 —</text>
+
+  <!-- mini sparkline divider -->
+  <path d="M120 452 C160 448 180 436 220 440 C260 444 280 430 320 434 C360 438 380 448 420 446"
+        fill="none" stroke="#8fb89a" stroke-width="2.4" stroke-linecap="round" opacity=".9"/>
+
+  <!-- KPI row -->
+  <g font-family="-apple-system,Segoe UI,Roboto,sans-serif" text-anchor="middle">
+    <text x="105" y="516" fill="#f2efe2" font-weight="800" font-size="23">5.02 km</text>
+    <text x="105" y="534" fill="#8a978d" font-weight="700" font-size="9">DISTANCE</text>
+    <text x="215" y="516" fill="#f2efe2" font-weight="800" font-size="23">27m41s</text>
+    <text x="215" y="534" fill="#8a978d" font-weight="700" font-size="9">TIME</text>
+    <text x="325" y="516" fill="#f2efe2" font-weight="800" font-size="23">5:31/km</text>
+    <text x="325" y="534" fill="#8a978d" font-weight="700" font-size="9">PACE</text>
+    <text x="435" y="516" fill="#f2efe2" font-weight="800" font-size="23">158</text>
+    <text x="435" y="534" fill="#8a978d" font-weight="700" font-size="9">AVG HR</text>
+  </g>
+
+  <text x="270" y="630" text-anchor="middle" fill="#9eb8a5" font-weight="700" font-size="13" font-family="-apple-system,Segoe UI,Roboto,sans-serif">aarun.club</text>
+  <text x="270" y="648" text-anchor="middle" fill="#75816f" font-size="10" font-family="-apple-system,Segoe UI,Roboto,sans-serif">An AI running coach that talks back.</text>
+</svg>
+<figcaption><b>D — Quote-first minimal</b>
+The Phi-Browser direction: giant centered quote, "heard at km 4" stamp, stats demoted to a single row, tiny sparkline as a divider. Works for every run, indoor or out. <span class="req">Possible today.</span></figcaption>
+</figure>
+
+</div>
+</body>
+</html>

@@ -70,7 +70,7 @@ export const LANDING_HTML = `<!doctype html>
   .brand { display: flex; align-items: center; gap: 11px; font-weight: 700; letter-spacing: -0.01em; }
   .brand .mark {
     width: 32px; height: 32px; display: block;
-    filter: drop-shadow(0 4px 14px #ff5a3640);
+    filter: drop-shadow(0 4px 14px #4a635060);
   }
   .brand .name { font-size: 17px; }
   .signin {
@@ -222,22 +222,23 @@ export const LANDING_HTML = `<!doctype html>
 <header class="nav">
   <div class="wrap">
     <div class="brand">
+      <!-- brand mark: the app icon — cream goblet + dizzy spiral on pub green,
+           with speed streaks because it's mid-run -->
       <svg class="mark" viewBox="0 0 40 40" width="32" height="32" aria-hidden="true">
-        <defs>
-          <linearGradient id="aarcLg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#ff8a4c"/>
-            <stop offset="1" stop-color="#ff4f2e"/>
-          </linearGradient>
-        </defs>
-        <rect x="1.5" y="1.5" width="37" height="37" rx="11" fill="url(#aarcLg)"/>
-        <rect x="1.5" y="1.5" width="37" height="37" rx="11" fill="none" stroke="#fff" stroke-opacity=".18"/>
-        <g stroke="#fff" stroke-linecap="round" fill="none">
-          <line x1="6.5" y1="15" x2="12.5" y2="15" stroke-width="2.1" stroke-opacity=".5"/>
-          <line x1="5.5" y1="20.5" x2="13.5" y2="20.5" stroke-width="2.1" stroke-opacity=".72"/>
-          <line x1="7.5" y1="26" x2="11.5" y2="26" stroke-width="2.1" stroke-opacity=".4"/>
+        <rect x="1" y="1" width="38" height="38" rx="10.5" fill="#4a6350"/>
+        <rect x="1" y="1" width="38" height="38" rx="10.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+        <g stroke="#f2efe2" stroke-linecap="round" fill="none" stroke-width="1.9">
+          <line x1="4.5" y1="14.5" x2="10" y2="14.5" stroke-opacity=".45"/>
+          <line x1="3.5" y1="19.5" x2="10.5" y2="19.5" stroke-opacity=".8"/>
+          <line x1="5.5" y1="24.5" x2="9.5" y2="24.5" stroke-opacity=".35"/>
         </g>
-        <path d="M15.5 29.5 L23 11.5 L30.5 29.5" fill="none" stroke="#fff" stroke-width="3.3" stroke-linejoin="round" stroke-linecap="round"/>
-        <line x1="19" y1="23.4" x2="27" y2="23.4" stroke="#fff" stroke-width="2.9" stroke-linecap="round"/>
+        <g transform="translate(24 20) rotate(6)">
+          <path fill="#f2efe2" d="M-8.2 -13 L8.2 -13 C8.2 -4.5 4.4 0.2 0 1.6 C-4.4 0.2 -8.2 -4.5 -8.2 -13 Z"/>
+          <rect x="-1.15" y="1" width="2.3" height="9.2" fill="#f2efe2"/>
+          <ellipse cx="0" cy="11.2" rx="5.6" ry="1.7" fill="#f2efe2"/>
+          <path fill="none" stroke="#4a6350" stroke-width="1.5" stroke-linecap="round"
+                d="M0 -7.2 a1.1 1.1 0 0 1 1.6 1.3 a2.3 2.3 0 0 1 -3.4 1.3 a3.5 3.5 0 0 1 1.2 -5.5 a4.7 4.7 0 0 1 4.4 6.3"/>
+        </g>
       </svg>
       <span class="name">AARC</span>
     </div>
@@ -814,7 +815,9 @@ if (overlay && scene && "backdropFilter" in document.body.style) {
 <script>
 // Waitlist capture — posts {email, source} to /api/waitlist and reports inline.
 (function () {
-  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  // NB: double-escaped — this JS lives inside a TS template literal, where a
+  // single \\s would silently become the letter "s" and break the regex.
+  var EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/;
   var forms = document.querySelectorAll(".wl-form");
   for (var i = 0; i < forms.length; i++) wire(forms[i]);
 
