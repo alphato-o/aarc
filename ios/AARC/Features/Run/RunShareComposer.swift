@@ -83,7 +83,7 @@ struct RunShareComposer: View {
                 ("Avg HR", s.avgHR.map { "\(Int($0))" } ?? "\u{2014}"),
             ],
             speed: s.speedSeries, hr: s.hrSeries,
-            quote: q.text, who: q.who, aspect: aspect)
+            quote: q.text, who: q.who, heardAtKm: nil, aspect: aspect)
     }
 
     private func previewScale(_ m: ShareCardModel) -> CGFloat {

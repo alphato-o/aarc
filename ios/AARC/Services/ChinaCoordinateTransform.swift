@@ -57,6 +57,10 @@ enum ChinaCoordinateTransform {
     private static let a: Double = 6378245.0
     private static let ee: Double = 0.00669342162296594323
 
+    /// Public probe: is this WGS-84 coordinate in mainland China? Used to
+    /// pick the local-script locale for geocoding (zh-Hans).
+    static func isMainlandChina(_ c: CLLocationCoordinate2D) -> Bool { isInsideChina(c) }
+
     private static func isInsideChina(_ c: CLLocationCoordinate2D) -> Bool {
         guard mainlandBox.latMin <= c.latitude, c.latitude <= mainlandBox.latMax,
               mainlandBox.lonMin <= c.longitude, c.longitude <= mainlandBox.lonMax

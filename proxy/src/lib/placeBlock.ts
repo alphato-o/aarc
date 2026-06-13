@@ -22,4 +22,5 @@ export function pushPlaceBlock(lines: string[], place: PlaceInfo | undefined): v
         lines.push(`- route so far: ${place.route}`);
     }
     lines.push("Ground the line in one of these specifics when it sharpens the joke — name the actual place. Don't force it into every line, and never recite the list.");
+    lines.push("Names may be in the LOCAL language (e.g. Chinese) — say them AS GIVEN, in that language, mid-sentence. Do not translate or transliterate them; voicing the real local name is the point.");
 }

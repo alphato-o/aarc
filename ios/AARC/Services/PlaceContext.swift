@@ -305,34 +305,64 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
     }
 
     private func reverseGeocode(_ loc: CLLocation) async -> CLPlacemark? {
-        try? await geocoder.reverseGeocodeLocation(loc).first
+        // Force the LOCAL script in mainland China (zh-Hans) so the names
+        // are the real ones the runner sees on signs — and so 11Labs reads
+        // 东大桥路 natively instead of mangling "Dongdaqiao Road".
+        let inChina = ChinaCoordinateTransform.isMainlandChina(loc.coordinate)
+        let locale = inChina ? Locale(identifier: "zh_Hans_CN") : nil
+        return try? await geocoder.reverseGeocodeLocation(loc, preferredLocale: locale).first
     }
 
+    /// Categories searched as natural-language terms — the points-of-interest
+    /// request returns nothing in mainland China (AutoNavi backend), so we
+    /// query terms via MKLocalSearch and merge. Hotels first by design.
+    private static let searchTerms: [(term: String, category: String, hotel: Bool)] = [
+        ("hotel", "hotel", true), ("restaurant", "restaurant", false),
+        ("bar", "bar", false), ("cafe", "cafe", false),
+        ("park", "park", false), ("gym", "gym", false),
+    ]
+
     private func nearbyPOIs(_ loc: CLLocation) async -> [POIPin] {
-        // MapKit's POI space is GCJ-02 inside mainland China; the raw
-        // WGS-84 fix must be shifted or results land ~500 m away. The
-        // coordinates that come BACK are in that same display space, so
-        // the pins plot directly on a MapKit map.
+        // MapKit's POI space is GCJ-02 inside mainland China; shift the
+        // search centre or results land ~500 m off. Returned coordinates
+        // are in that same display space, so pins plot directly on the map.
         let center = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
-        let request = MKLocalPointsOfInterestRequest(center: center, radius: 280)
-        request.pointOfInterestFilter = MKPointOfInterestFilter(including: Self.categories)
-        guard let response = try? await MKLocalSearch(request: request).start() else { return [] }
         let centerLoc = CLLocation(latitude: center.latitude, longitude: center.longitude)
-        let pins: [POIPin] = response.mapItems.compactMap { item in
-            guard let name = item.name, let itemLoc = item.placemark.location else { return nil }
-            let isHotel = item.pointOfInterestCategory == .hotel
-            return POIPin(
-                name: name,
-                category: Self.label(item.pointOfInterestCategory),
-                coordinate: itemLoc.coordinate,
-                meters: Int(itemLoc.distance(from: centerLoc)),
-                isHotel: isHotel
-            )
+        let region = MKCoordinateRegion(center: center,
+                                        latitudinalMeters: 700, longitudinalMeters: 700)
+        // Fire the term searches concurrently.
+        let groups = await withTaskGroup(of: [POIPin].self) { group -> [POIPin] in
+            for t in Self.searchTerms {
+                group.addTask { await Self.search(term: t, region: region, center: centerLoc) }
+            }
+            var all: [POIPin] = []
+            for await pins in group { all.append(contentsOf: pins) }
+            return all
         }
-        return pins
+        // Dedupe by name, keep nearest, hotels first then by distance.
+        var byName: [String: POIPin] = [:]
+        for p in groups where p.meters <= 400 {
+            if let e = byName[p.name], e.meters <= p.meters { continue }
+            byName[p.name] = p
+        }
+        return byName.values
             .sorted { ($0.isHotel ? 0 : 1, $0.meters) < ($1.isHotel ? 0 : 1, $1.meters) }
-            .prefix(6)
-            .map { $0 }
+            .prefix(6).map { $0 }
+    }
+
+    private static func search(term: (term: String, category: String, hotel: Bool),
+                               region: MKCoordinateRegion, center: CLLocation) async -> [POIPin] {
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = term.term
+        req.region = region
+        req.resultTypes = .pointOfInterest
+        guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
+        return resp.mapItems.compactMap { item in
+            guard let name = item.name, let l = item.placemark.location else { return nil }
+            return POIPin(name: name, category: term.category,
+                          coordinate: l.coordinate, meters: Int(l.distance(from: center)),
+                          isHotel: term.hotel)
+        }
     }
 
     private static func label(_ category: MKPointOfInterestCategory?) -> String {
