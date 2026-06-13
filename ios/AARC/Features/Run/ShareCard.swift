@@ -70,13 +70,15 @@ struct ShareCardView: View {
     private var routeBody: some View {
         // Compact map (rounded), quote gets the bulk, KPIs pinned above the
         // footer with a clear gap — no overlap.
-        let mapTop = topY + 20
+        let mapTop = topY + 28
         let mapH = model.mapImage!.size.height
         let mapBot = mapTop + mapH
         let footY = H - 56
-        let kpiTop = footY - 96
-        let qTop = mapBot + 40
-        let qBot = kpiTop - 36
+        let kpiTop = footY - 110
+        // Generous breathing room above + below the quote so the card isn't
+        // cramped between the map and the stats.
+        let qTop = mapBot + 70
+        let qBot = kpiTop - 64
         let q = "\u{201C}\(model.quote)\u{201D}"
         return ZStack(alignment: .topLeading) {
             background
@@ -238,16 +240,19 @@ struct ShareCardView: View {
     /// rendered wrapping.
     static func fittedSerifSize(_ text: String, boxW: CGFloat, boxH: CGFloat, maxSize: CGFloat) -> CGFloat {
         var size = maxSize
-        while size >= 26 {
+        // Floor low (12) so a long line ALWAYS shrinks to fit and shows in
+        // full — never truncates. The big share card rarely needs to go small;
+        // the small in-run overview box does.
+        while size >= 12 {
             let font = UIFont(name: "Georgia-Italic", size: size) ?? .italicSystemFont(ofSize: size)
             let r = (text as NSString).boundingRect(
                 with: CGSize(width: boxW, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: [.font: font], context: nil)
             if r.height <= boxH { return size }
-            size -= 2
+            size -= 1
         }
-        return 26
+        return 12
     }
 }
 

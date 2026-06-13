@@ -75,14 +75,15 @@ struct StaticFitQuote: View {
     let text: String
     var body: some View {
         GeometryReader { geo in
+            // Measure and render at the SAME width so the fit is honest.
+            let w = geo.size.width
             let size = ShareCardView.fittedSerifSize(
-                "\u{201C}\(text)\u{201D}",
-                boxW: geo.size.width * 0.94, boxH: geo.size.height, maxSize: 30)
+                "\u{201C}\(text)\u{201D}", boxW: w, boxH: geo.size.height, maxSize: 28)
             Text("\u{201C}\(text)\u{201D}")
                 .font(.custom("Georgia-Italic", size: size))
                 .foregroundStyle(Color(red: 0.957, green: 0.949, blue: 0.910))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .frame(width: w, height: geo.size.height, alignment: .center)
         }
     }
 }
@@ -104,7 +105,16 @@ struct RollingKaraoke: View {
             let total = max(1, lines.reduce(0) { $0 + $1.count })
             let activeWord = min(total - 1, Int(progress * Double(total)))
             let activeLine = lineIndex(of: activeWord, in: lines)
-            VStack(alignment: .leading, spacing: lineH * 0.22) {
+            let viewH = geo.size.height
+            let contentH = CGFloat(lines.count) * lineH
+            // Keep the active line at the viewport's MIDDLE, but clamp so the
+            // start stays pinned to the top and the end pinned to the bottom —
+            // never scroll blank past either edge, so surrounding text is
+            // always visible. If it all fits, top-align (offset 0).
+            let centred = viewH / 2 - (CGFloat(activeLine) + 0.5) * lineH
+            let minOffset = min(0, viewH - contentH)   // most-scrolled (end at bottom)
+            let offset = contentH <= viewH ? 0 : max(minOffset, min(0, centred))
+            VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, lineWords in
                     HStack(alignment: .firstTextBaseline, spacing: fontSize * 0.26) {
                         ForEach(lineWords, id: \.idx) { w in
@@ -112,14 +122,12 @@ struct RollingKaraoke: View {
                         }
                         Spacer(minLength: 0)
                     }
+                    .frame(height: lineH, alignment: .leading)   // exact line advance
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Pin the active line near the TOP and scroll up as it advances:
-            // at t=0 the first line sits at the top (offset 0); never scroll
-            // past the start. Lyrics-style roll-up, not a centred jump.
-            .offset(y: -max(0, CGFloat(activeLine)) * lineH)
-            .animation(.easeInOut(duration: 0.35), value: activeLine)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .offset(y: offset)
+            .animation(.easeInOut(duration: 0.4), value: activeLine)
         }
         .frame(maxHeight: .infinity, alignment: .top)
     }
