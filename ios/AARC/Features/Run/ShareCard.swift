@@ -12,6 +12,13 @@ struct ShareCardModel {
     var who: String        // "ricky" | "jessica" | ""
     var heardAtKm: Double?  // "HEARD AT KM x" stamp, when known
     var aspect: CGFloat    // width / height (0.8 portrait, 1 square)
+    // Route layout (outdoor): a baked base-map image + colored trail segments
+    // in that image's pixel space. When set, the card shows the map as the
+    // hero and draws the trail up to `progress` (so the video animates it).
+    var mapImage: UIImage? = nil
+    var mapSegments: [ShareMap.Segment] = []
+    var mapStart: CGPoint? = nil
+    var mapFinish: CGPoint? = nil
 
     static let portrait: CGFloat = 1080.0 / 1350.0
     static let square: CGFloat = 1.0
@@ -45,6 +52,59 @@ struct ShareCardView: View {
     private var quoteBottom: CGFloat { stampY - 60 }
 
     var body: some View {
+        if model.mapImage != nil { routeBody } else { quoteBody }
+    }
+
+    // MARK: - Route layout (outdoor): map hero + trail + compact quote
+
+    private var routeBody: some View {
+        let mapH = model.mapImage!.size.height
+        let mapTop = topY + 22
+        let mapBot = mapTop + mapH
+        let kpiYr = mapBot + 60
+        let qTop = kpiYr + 60
+        let qBot = (H - 56) - 30
+        return ZStack(alignment: .topLeading) {
+            background
+            header
+            // map hero + progressive colored trail
+            ZStack(alignment: .topLeading) {
+                Image(uiImage: model.mapImage!).resizable()
+                    .frame(width: W, height: mapH)
+                Canvas { ctx, _ in
+                    let upto = max(1, Int(Double(model.mapSegments.count) * min(progress, 1)))
+                    for i in 0..<min(upto, model.mapSegments.count) {
+                        let s = model.mapSegments[i]
+                        var p = Path(); p.move(to: s.a); p.addLine(to: s.b)
+                        ctx.stroke(p, with: .color(s.color), style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
+                    }
+                    if let st = model.mapStart {
+                        ctx.fill(Path(ellipseIn: CGRect(x: st.x - 9, y: st.y - 9, width: 18, height: 18)),
+                                 with: .color(Color(red: 0.81, green: 0.91, blue: 0.84)))
+                    }
+                }
+                .frame(width: W, height: mapH)
+            }
+            .frame(width: W, height: mapH)
+            .clipped()
+            .position(x: W / 2, y: mapTop + mapH / 2)
+
+            kpiRow.frame(width: W - P * 2).position(x: W / 2, y: kpiYr + 30)
+            // compact quote under the stats
+            KaraokeQuote(text: "\u{201C}\(model.quote)\u{201D}", progress: progress,
+                         fontSize: ShareCardView.fittedSerifSize("\u{201C}\(model.quote)\u{201D}",
+                            boxW: (W - P * 2) * 0.86, boxH: qBot - qTop, maxSize: 48))
+                .frame(width: W - P * 2, height: qBot - qTop)
+                .position(x: W / 2, y: (qTop + qBot) / 2)
+            footer
+        }
+        .frame(width: W, height: H)
+        .environment(\.colorScheme, .dark)
+    }
+
+    // MARK: - Quote layout (default / treadmill)
+
+    private var quoteBody: some View {
         ZStack(alignment: .topLeading) {
             background
             header

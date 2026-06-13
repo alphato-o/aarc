@@ -17,6 +17,14 @@ struct RunShareComposer: View {
     @State private var status = ""
     @State private var shareItems: [Any] = []
     @State private var showShare = false
+    // Route layout (outdoor): the baked map snapshot + colored trail.
+    @State private var layout: Layout = .quote
+    @State private var mapMode: RunMapView.ColorMode = .pace
+    @State private var mapResult: ShareMap.Result?
+    @State private var mapBuilding = false
+    private enum Layout: String { case quote, route }
+
+    private var isOutdoor: Bool { (store.summary?.isOutdoor ?? false) && (store.summary?.trail.count ?? 0) > 1 }
 
     @State private var preview: UIImage?
 
@@ -38,6 +46,7 @@ struct RunShareComposer: View {
                             .aspectRatio(aspect, contentMode: .fit)
                             .overlay(ProgressView())
                     }
+                    if isOutdoor { layoutPicker }
                     quotePicker
                     formatPicker
                     actions
@@ -52,9 +61,11 @@ struct RunShareComposer: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .sheet(isPresented: $showShare) { ActivityView(items: shareItems) }
             .onAppear { regenPreview() }
-            .onChange(of: aspect) { _, _ in regenPreview() }
+            .onChange(of: aspect) { _, _ in if layout == .route { buildMapIfNeeded() } else { regenPreview() } }
             .onChange(of: quoteIdx) { _, _ in regenPreview() }
             .onChange(of: store.finalRoast) { _, _ in regenPreview() }
+            .onChange(of: layout) { _, l in if l == .route { buildMapIfNeeded() } else { regenPreview() } }
+            .onChange(of: mapMode) { _, _ in buildMapIfNeeded() }
         }
         .presentationDetents([.large])
     }
@@ -101,7 +112,11 @@ struct RunShareComposer: View {
                 ("Avg HR", s.avgHR.map { "\(Int($0))" } ?? "\u{2014}"),
             ],
             speed: s.speedSeries, hr: s.hrSeries,
-            quote: q.text, who: q.who, heardAtKm: nil, aspect: aspect)
+            quote: q.text, who: q.who, heardAtKm: nil, aspect: aspect,
+            mapImage: layout == .route ? mapResult?.image : nil,
+            mapSegments: layout == .route ? (mapResult?.segments ?? []) : [],
+            mapStart: layout == .route ? mapResult?.start : nil,
+            mapFinish: layout == .route ? mapResult?.finish : nil)
     }
 
     // MARK: controls
@@ -116,11 +131,42 @@ struct RunShareComposer: View {
         }
     }
 
+    private var layoutPicker: some View {
+        VStack(spacing: 8) {
+            Picker("Layout", selection: $layout) {
+                Text("Quote").tag(Layout.quote)
+                Text("Route map").tag(Layout.route)
+            }.pickerStyle(.segmented)
+            if layout == .route {
+                Picker("Trail color", selection: $mapMode) {
+                    Text("Pace").tag(RunMapView.ColorMode.pace)
+                    Text("HR").tag(RunMapView.ColorMode.hr)
+                }.pickerStyle(.segmented)
+                if mapBuilding { Text("Rendering map\u{2026}").font(.caption2).foregroundStyle(.secondary) }
+            }
+        }
+    }
+
     private var formatPicker: some View {
         Picker("Format", selection: $aspect) {
             Text("Portrait").tag(ShareCardModel.portrait)
             Text("Square").tag(ShareCardModel.square)
         }.pickerStyle(.segmented)
+    }
+
+    /// Build the map snapshot (async) when the route layout / color / format
+    /// changes, then refresh the preview.
+    private func buildMapIfNeeded() {
+        guard layout == .route, isOutdoor, let s = store.summary else { return }
+        mapBuilding = true
+        Task {
+            let cardH = 1080 / aspect
+            let res = await ShareMap.render(points: s.trail, mode: mapMode,
+                                            width: 1080, height: (cardH * 0.46).rounded())
+            mapResult = res
+            mapBuilding = false
+            regenPreview()
+        }
     }
 
     private var actions: some View {
