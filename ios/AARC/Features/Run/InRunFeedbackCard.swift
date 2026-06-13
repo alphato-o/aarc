@@ -23,7 +23,7 @@ struct InRunFeedbackCard: View {
             TimelineView(.animation(minimumInterval: 0.06)) { tl in
                 let elapsed = tl.date.timeIntervalSince(line.startedAt)
                 let progress = line.isPlaying ? min(elapsed / speakDur, 0.999) : 1
-                RollingKaraoke(text: line.text, progress: progress)
+                RollingKaraoke(text: line.text.strippingAudioTags, progress: progress)
                     .frame(maxWidth: .infinity)
             }
             .frame(height: 168)

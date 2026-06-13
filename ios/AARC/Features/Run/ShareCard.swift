@@ -2,6 +2,16 @@ import SwiftUI
 import Charts
 import UIKit
 
+extension String {
+    /// Strip ElevenLabs audio tags ([moans], [breathy], …) for DISPLAY only —
+    /// the spoken text keeps them so v3 still performs the sounds.
+    var strippingAudioTags: String {
+        replacingOccurrences(of: "\\[[^\\]]*\\]", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\\s{2,}", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// Data for one share card — built from a whole run or a single hearted line.
 struct ShareCardModel {
     var date: String

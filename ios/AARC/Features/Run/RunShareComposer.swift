@@ -112,7 +112,7 @@ struct RunShareComposer: View {
                 ("Avg HR", s.avgHR.map { "\(Int($0))" } ?? "\u{2014}"),
             ],
             speed: s.speedSeries, hr: s.hrSeries,
-            quote: q.text, who: q.who, heardAtKm: nil, aspect: aspect,
+            quote: q.text.strippingAudioTags, who: q.who, heardAtKm: nil, aspect: aspect,
             mapImage: layout == .route ? mapResult?.image : nil,
             mapSegments: layout == .route ? (mapResult?.segments ?? []) : [],
             mapStart: layout == .route ? mapResult?.start : nil,
