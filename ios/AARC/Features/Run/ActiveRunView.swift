@@ -84,26 +84,22 @@ struct ActiveRunView: View {
             statusStrip
             cockpit
             runMapCard
-            // While a coach line is speaking, the chart slot becomes the
-            // big readable karaoke feedback card; it reverts to the live
-            // chart a few seconds after the line ends (currentLine clears).
-            ZStack {
-                if let line = subtitleStore.currentLine {
-                    InRunFeedbackCard(line: line) { subtitleStore.toggleLike() }
-                        .transition(.opacity)
-                        .id(line.id)
-                } else {
-                    liveChart.transition(.opacity)
-                }
+            // While a coach line is speaking, the karaoke feedback card takes
+            // over the chart + music slots (one bounded, readable widget); the
+            // chart and music return a few seconds after the line ends.
+            if let line = subtitleStore.currentLine {
+                InRunFeedbackCard(line: line) { subtitleStore.toggleLike() }
+                    .id(line.id)
+                    .transition(.opacity)
+            } else {
+                liveChart.transition(.opacity)
+                mediaCommand
+                    .frame(height: 180)
+                    .padding(.top, 6)
             }
-            .animation(.easeInOut(duration: 0.35), value: subtitleStore.currentLine?.id)
-            // Music command stays put in the bottom slot now — feedback no
-            // longer hijacks it.
-            mediaCommand
-                .frame(height: 180)
-                .padding(.top, 6)
             endLink
         }
+        .animation(.easeInOut(duration: 0.3), value: subtitleStore.currentLine?.id)
         .padding(.horizontal, 20)
         .padding(.top, 4)  // breathing room under the iOS clock / Dynamic Island
     }
