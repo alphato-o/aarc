@@ -332,12 +332,19 @@ final class ScriptEngine {
         let text = nextVariantText(for: message)
         RunEventLog.shared.record("script.dispatch", String(text.prefix(80)),
                                   data: ["trigger": message.triggerSpec.humanDescription])
+        // ONLY true markers (km loop / halfway / near-finish / finish) get
+        // .milestone — they must land on the marker, so they may preempt.
+        // One-shot scheduled "surprise" flavor lines are just banter: keep
+        // them .coaching so they NEVER cut off Jessica or a coach line (the
+        // "cyclist" surprise was barging over Jessica because it was tagged
+        // milestone). The factual announcement above is still milestone.
+        let linePriority = Self.isMilestoneTrigger(message.triggerSpec) ? VoicePriority.milestone : .coaching
         // Tag with a segment id so Jessica's reaction (if she reacts) is
         // bound to this line as an atomic pair in the queue.
         let segment = UUID()
         Speaker.shared.speak(
             text,
-            priority: .milestone,
+            priority: linePriority,
             source: "script:\(message.id)",
             segmentId: segment
         )
@@ -347,10 +354,20 @@ final class ScriptEngine {
         Conversation.shared.rickySpoke(
             text: text,
             source: "script:\(message.id)",
-            priority: .milestone,
+            priority: linePriority,
             segmentId: segment,
             metrics: metrics
         )
+    }
+
+    /// True milestones (must land on the marker → may preempt). One-shot
+    /// scheduled surprises are NOT milestones.
+    private static func isMilestoneTrigger(_ t: TriggerSpec) -> Bool {
+        switch t.type {
+        case .halfway, .nearFinish, .finish: return true
+        case .distance: return t.everyMeters != nil   // per-km loop = milestone; atMeters one-shot = surprise
+        case .time: return t.everySeconds != nil       // interval = milestone; atSeconds one-shot = surprise
+        }
     }
 
     private func recordDispatch(text: String) {
