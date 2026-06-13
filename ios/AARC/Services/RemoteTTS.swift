@@ -466,9 +466,14 @@ final class RemoteTTS: NSObject {
             NetworkActivityMonitor.shared.finish(net, bytes: data.count, detail: "HTTP \(http.statusCode) via \(tag)")
             return data
         } catch {
-            // URLSession transport error (timeout, connection lost) — record
-            // it if not already recorded by the guards above.
-            NetworkActivityMonitor.shared.fail(net, "\(error.localizedDescription) via \(tag)")
+            // Hedge loser (the other endpoint won the race) — cancellation
+            // is expected and healthy, not a gateway failure. Record it
+            // neutrally so the inspector doesn't flag the gateway as down.
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                NetworkActivityMonitor.shared.cancel(net, "cancelled via \(tag)")
+            } else {
+                NetworkActivityMonitor.shared.fail(net, "\(error.localizedDescription) via \(tag)")
+            }
             throw error
         }
     }

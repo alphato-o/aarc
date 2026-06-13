@@ -446,6 +446,7 @@ struct ControlRoomView: View {
         case "failed":   return .failed
         case "cached":   return .cached
         case "received": return .received
+        case "cancelled": return .cancelled
         default:         return .received
         }
     }
@@ -835,6 +836,7 @@ struct ControlRoomView: View {
             case .received: return ("RECV", .green)
             case .failed:   return ("FAIL", .red)
             case .cached:   return ("CACHE", .blue)
+            case .cancelled: return ("HEDGE", .secondary)
             }
         }()
         if phase == .awaiting {

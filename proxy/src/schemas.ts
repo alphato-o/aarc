@@ -176,7 +176,7 @@ export const DynamicLineRequestSchema = z.object({
         stationarySeconds: z.number().nonnegative().optional(),
         place: PlaceSchema.optional(),
     }),
-    recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
+    recentDispatched: z.array(z.string().min(1).max(1200)).max(10).optional(),
     customNote: z.string().max(300).optional(),
     /// Short, blunt bullets about the runner the coach can weave into
     /// roasts. Hand-edited in the iOS Settings → Personal Trolls panel.
@@ -238,7 +238,7 @@ export const MusicCommentRequestSchema = z.object({
         runType: z.enum(["outdoor", "treadmill"]),
         place: PlaceSchema.optional(),
     }),
-    recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
+    recentDispatched: z.array(z.string().min(1).max(1200)).max(10).optional(),
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
     likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
 });
@@ -263,7 +263,7 @@ export interface MusicCommentResponse {
 export const ReactLineRequestSchema = z.object({
     personalityId: z.string().default("jessica"),
     /// The line the primary coach JUST spoke — the thing she reacts to.
-    partnerLine: z.string().min(1).max(500),
+    partnerLine: z.string().min(1).max(1200),
     /// Where his line came from ("script:every_km", "coach:stationary",
     /// "coach:music_riff", …) — lets her calibrate tone to the moment.
     partnerSource: z.string().max(64).optional(),
@@ -277,7 +277,7 @@ export const ReactLineRequestSchema = z.object({
         place: PlaceSchema.optional(),
     }),
     /// Recent exchange (both voices) so she doesn't repeat and can build on it.
-    recentDispatched: z.array(z.string().min(1).max(500)).max(10).optional(),
+    recentDispatched: z.array(z.string().min(1).max(1200)).max(10).optional(),
     personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
     likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
     /// How long Jessica's reply should run. Drives both the system-prompt

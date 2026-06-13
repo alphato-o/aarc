@@ -19,6 +19,7 @@ final class NetworkActivityMonitor {
         case received    // response in
         case failed
         case cached      // served from the local cache — no network at all
+        case cancelled   // hedge loser — the other endpoint answered first; NOT an error
     }
 
     struct Entry: Identifiable, Sendable {
@@ -83,6 +84,15 @@ final class NetworkActivityMonitor {
     /// Request failed.
     func fail(_ id: UUID, _ error: String) {
         update(id) { $0.phase = .failed; $0.endedAt = Date(); $0.detail = String(error.prefix(120)) }
+        persist(id)
+        decFlight(id)
+    }
+
+    /// Hedge loser: the other endpoint answered first so this attempt was
+    /// cancelled. Expected and healthy — recorded neutrally, never as an
+    /// error, so the inspector doesn't cry wolf about the gateway.
+    func cancel(_ id: UUID, _ note: String = "") {
+        update(id) { $0.phase = .cancelled; $0.endedAt = Date(); $0.detail = note.isEmpty ? "cancelled" : String(note.prefix(120)) }
         persist(id)
         decFlight(id)
     }

@@ -27,10 +27,12 @@ struct WatchActiveRunView: View {
         .alert("End run?", isPresented: $showEndConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("End", role: .destructive) {
-                Task {
-                    _ = await host.endRun()
-                    dismiss()
-                }
+                // Dismiss INSTANTLY so the tap registers. The HealthKit
+                // teardown (endCollection/finishWorkout/finishRoute) is
+                // slow and used to freeze the screen for a beat, reading
+                // as a missed tap. Run it in the background after dismiss.
+                dismiss()
+                Task { _ = await host.endRun() }
             }
         } message: {
             Text(host.currentRunIsTestData
