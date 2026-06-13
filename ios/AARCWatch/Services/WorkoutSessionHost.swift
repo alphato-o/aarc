@@ -65,6 +65,20 @@ final class WorkoutSessionHost: NSObject {
     var currentRunIsTestData: Bool = true
     var currentRunType: RunType = .outdoor
 
+    /// Raw GPS trail for the on-watch route map (WGS-84; the watch map is a
+    /// self-relative Canvas drawing, so datum is irrelevant). Downsampled.
+    var routeTrail: [CLLocationCoordinate2D] = []
+    private func appendTrail(_ locs: [CLLocation]) {
+        for l in locs {
+            if let last = routeTrail.last {
+                let d = CLLocation(latitude: last.latitude, longitude: last.longitude).distance(from: l)
+                if d < 10 { continue }
+            }
+            routeTrail.append(l.coordinate)
+        }
+        if routeTrail.count > 600 { routeTrail.removeFirst(routeTrail.count - 600) }
+    }
+
     // Diagnostics (visible on the active-run view's debug section).
     /// When the workout-builder delegate last fired with new samples.
     var lastSampleEventAt: Date?
@@ -349,9 +363,13 @@ final class WorkoutSessionHost: NSObject {
         WatchBreadcrumbs.shared.drop("beginCollection ok")
 
         if locationType == .outdoor {
+            self.routeTrail = []
             self.routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
             self.location = LocationProvider { [weak self] locs in
-                Task { @MainActor in self?.routeBuilder?.insertRouteData(locs) { _, _ in } }
+                Task { @MainActor in
+                    self?.routeBuilder?.insertRouteData(locs) { _, _ in }
+                    self?.appendTrail(locs)
+                }
             }
             self.location?.start()
         }

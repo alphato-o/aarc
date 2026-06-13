@@ -198,6 +198,15 @@ export const APP_HTML = `<!doctype html>
   #pstatus { color: var(--amber); font-size: 11px; white-space: nowrap; }
 
   /* telemetry log */
+  #mapwrap { display: flex; flex-direction: column; background: var(--panel2); border-bottom: 1px solid var(--line); }
+  #mapbar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid var(--line); }
+  #mapbar .lbl { color: var(--textFaint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  #mapbar .seg button { background: var(--panel); color: var(--textDim); border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 10px; font: 600 11px/1 inherit; cursor: pointer; }
+  #mapbar .seg button.on { background: var(--select); color: #07101c; border-color: var(--select); }
+  #runmap { height: 320px; width: 100%; position: relative; background: #0c1014; }
+  #runmap .maplibregl-ctrl-attrib { font-size: 9px; opacity: .5; }
+  .map-tint { position: absolute; inset: 0; background: rgba(74,99,80,0.18); mix-blend-mode: color; pointer-events: none; z-index: 2; }
   #logwrap { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--panel2); }
   #logbar { display: flex; align-items: center; gap: 6px; padding: 6px 12px;
     border-bottom: 1px solid var(--line); flex-wrap: wrap; }
@@ -433,6 +442,15 @@ export const APP_HTML = `<!doctype html>
           <div id="psub">Click a speech pill on the chart, or a speech row in the log.</div>
         </div>
         <span id="pstatus"></span>
+      </div>
+      <div id="mapwrap" style="display:none">
+        <div id="mapbar">
+          <span class="lbl">Route</span>
+          <span class="seg" id="maptoggle">
+            <button data-mc="pace" class="on">Pace</button><button data-mc="hr">HR</button>
+          </span>
+        </div>
+        <div id="runmap"></div>
       </div>
       <div id="logwrap">
         <div id="logbar"><span class="lbl">Events</span></div>
@@ -824,6 +842,7 @@ function selectRun(id) {
       "run " + id + " \\u00b7 " + events.length + " events \\u00b7 " + (fmtDur(state.dur) || "");
     var hasData = events.length > 0;
     document.getElementById("sharebtn").style.display = hasData ? "block" : "none";
+    renderRunMap();
     document.getElementById("chartempty").style.display = hasData ? "none" : "flex";
     document.getElementById("chartempty").textContent = hasData ? "" : "No events in this run";
     renderFilm();
@@ -2807,6 +2826,142 @@ document.getElementById("sharequote").addEventListener("change", function () {
 document.getElementById("sharetext").addEventListener("input", renderSharePreview);
 document.getElementById("shareimg").addEventListener("click", downloadShareImage);
 document.getElementById("sharevid").addEventListener("click", recordShareVideo);
+
+// =======================================================================
+// RUN MAP (MapLibre) — the GPS trail on a real street map, coloured by
+// pace or heart rate, in sync with the iOS app. Lazy-loads MapLibre from
+// CDN the first time an outdoor run is opened. Trail comes from logged
+// gps events (WGS-84); POI pins from place.context poic.
+// =======================================================================
+var mapState = { map: null, mode: "pace", libLoading: false, libReady: false };
+
+function extractTrail() {
+  var pts = [];
+  state.events.forEach(function (ev) {
+    if (ev.type !== "gps") return;
+    var d = ev.data || {};
+    var lat = num(d.lat), lon = num(d.lon);
+    if (isFinite(lat) && isFinite(lon)) {
+      pts.push({ lat: lat, lon: lon, kmh: num(d.kmh), hr: num(d.hr) });
+    }
+  });
+  return pts;
+}
+function extractMapPOIs() {
+  // last place.context with a non-empty poic wins
+  var poic = "";
+  state.events.forEach(function (ev) {
+    if (ev.type !== "place.context") return;
+    var p = (ev.data || {}).poic;
+    if (p) poic = p;
+  });
+  if (!poic) return [];
+  return poic.split(";").map(function (s) {
+    var f = s.split("|");
+    if (f.length < 4) return null;
+    return { name: f[0], lat: num(f[1]), lon: num(f[2]), hotel: f[3] === "1" };
+  }).filter(function (x) { return x && isFinite(x.lat) && isFinite(x.lon); });
+}
+function segColor(v, lo, hi, mode) {
+  if (!(v > 0) || hi <= lo) return "#a8c8b0";
+  var t = (v - lo) / (hi - lo);
+  var deg = mode === "pace" ? 120 * t : 223 * (1 - t);   // pace: red→green; hr: blue→red
+  return "hsl(" + Math.round(deg) + ",80%,55%)";
+}
+function trailGeoJSON(pts, mode) {
+  var vals = pts.map(function (p) { return mode === "pace" ? p.kmh : p.hr; }).filter(function (v) { return v > 0; });
+  var lo = Math.min.apply(null, vals.length ? vals : [0]);
+  var hi = Math.max.apply(null, vals.length ? vals : [1]);
+  var feats = [];
+  for (var i = 1; i < pts.length; i++) {
+    var v = (mode === "pace" ? pts[i].kmh : pts[i].hr) || 0;
+    feats.push({ type: "Feature", properties: { color: segColor(v, lo, hi, mode) },
+      geometry: { type: "LineString", coordinates: [[pts[i-1].lon, pts[i-1].lat], [pts[i].lon, pts[i].lat]] } });
+  }
+  return { type: "FeatureCollection", features: feats };
+}
+function ensureMapLibre(cb) {
+  if (mapState.libReady) { cb(); return; }
+  if (mapState.libLoading) { setTimeout(function () { ensureMapLibre(cb); }, 200); return; }
+  mapState.libLoading = true;
+  var css = document.createElement("link");
+  css.rel = "stylesheet"; css.href = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css";
+  document.head.appendChild(css);
+  var js = document.createElement("script");
+  js.src = "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js";
+  js.onload = function () { mapState.libReady = true; cb(); };
+  js.onerror = function () { document.getElementById("mapwrap").style.display = "none"; };
+  document.head.appendChild(js);
+}
+function renderRunMap() {
+  var pts = extractTrail();
+  var wrap = document.getElementById("mapwrap");
+  if (pts.length < 2) { wrap.style.display = "none"; return; }
+  wrap.style.display = "flex";
+  ensureMapLibre(function () { drawRunMap(pts); });
+}
+function drawRunMap(pts) {
+  var pois = extractMapPOIs();
+  var lats = pts.map(function (p) { return p.lat; }), lons = pts.map(function (p) { return p.lon; });
+  var bounds = [[Math.min.apply(null, lons), Math.min.apply(null, lats)],
+                [Math.max.apply(null, lons), Math.max.apply(null, lats)]];
+  if (!mapState.map) {
+    mapState.map = new maplibregl.Map({
+      container: "runmap",
+      style: { version: 8,
+        sources: { osm: { type: "raster", tileSize: 256,
+          tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+          attribution: "\\u00a9 OpenStreetMap" } },
+        layers: [{ id: "osm", type: "raster", source: "osm",
+          paint: { "raster-saturation": -0.5, "raster-brightness-max": 0.85 } }] },
+      attributionControl: false
+    });
+    var tint = document.createElement("div"); tint.className = "map-tint";
+    document.getElementById("runmap").appendChild(tint);
+    mapState.map.on("load", function () { paintTrail(pts, pois, bounds); });
+  } else {
+    paintTrail(pts, pois, bounds);
+  }
+}
+function paintTrail(pts, pois, bounds) {
+  var m = mapState.map;
+  var data = trailGeoJSON(pts, mapState.mode);
+  if (m.getSource("trail")) { m.getSource("trail").setData(data); }
+  else {
+    m.addSource("trail", { type: "geojson", data: data });
+    m.addLayer({ id: "trail", type: "line", source: "trail",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-width": 5, "line-color": ["get", "color"] } });
+  }
+  // start dot
+  if (!m.getSource("start")) {
+    m.addSource("start", { type: "geojson", data: { type: "Feature",
+      geometry: { type: "Point", coordinates: [pts[0].lon, pts[0].lat] }, properties: {} } });
+    m.addLayer({ id: "start", type: "circle", source: "start",
+      paint: { "circle-radius": 6, "circle-color": "#cfe8d6", "circle-stroke-width": 2, "circle-stroke-color": "#0b0e0c" } });
+  }
+  // POI markers (rebuild)
+  (mapState.markers || []).forEach(function (mk) { mk.remove(); });
+  mapState.markers = pois.map(function (p) {
+    var el = document.createElement("div");
+    el.style.cssText = "width:13px;height:13px;border-radius:50%;border:2px solid #0b0e0c;background:" +
+      (p.hotel ? "#ef6da8" : "#39c5b0") + ";box-shadow:0 0 0 1px " + (p.hotel ? "#ef6da8" : "#39c5b0");
+    el.title = p.name;
+    return new maplibregl.Marker({ element: el }).setLngLat([p.lon, p.lat])
+      .setPopup(new maplibregl.Popup({ offset: 10 }).setText(p.name)).addTo(m);
+  });
+  try { m.fitBounds(bounds, { padding: 36, duration: 0, maxZoom: 16 }); } catch (e) {}
+}
+document.querySelectorAll("#maptoggle button").forEach(function (b) {
+  b.addEventListener("click", function () {
+    document.querySelectorAll("#maptoggle button").forEach(function (x) { x.classList.remove("on"); });
+    b.classList.add("on");
+    mapState.mode = b.getAttribute("data-mc");
+    if (mapState.map && mapState.map.getSource("trail")) {
+      mapState.map.getSource("trail").setData(trailGeoJSON(extractTrail(), mapState.mode));
+    }
+  });
+});
 
 window.addEventListener("resize", scheduleRender);
 loadRuns();

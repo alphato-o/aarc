@@ -35,7 +35,7 @@ final class RunSummaryStore {
         var hrSeries: [Double]         // bpm per 100m bucket
         var splits: [Double]           // per-km seconds
         // map (outdoor) — display space, ready to plot
-        var trail: [CLLocationCoordinate2D]
+        var trail: [PlaceContext.TrailPoint]
         var pois: [PlaceContext.POIPin]
         var plannedRoute: [CLLocationCoordinate2D]
         var routeDescription: String?
@@ -101,7 +101,7 @@ final class RunSummaryStore {
             speedSeries: speed,
             hrSeries: hr,
             splits: Self.splits(from: samples),
-            trail: isOutdoor ? place.displayTrail : [],
+            trail: isOutdoor ? place.trail : [],
             pois: isOutdoor ? place.poiPins : [],
             plannedRoute: isOutdoor ? RunSimulator.shared.displayRouteCoords : [],
             routeDescription: place.routeDescriptionNow,

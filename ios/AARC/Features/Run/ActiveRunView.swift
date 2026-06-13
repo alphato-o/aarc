@@ -129,13 +129,14 @@ struct ActiveRunView: View {
     @ViewBuilder
     private var runMapCard: some View {
         let place = PlaceContext.shared
-        if place.isActive, !place.displayTrail.isEmpty || !RunSimulator.shared.displayRouteCoords.isEmpty {
+        if place.isActive, !place.trail.isEmpty || !RunSimulator.shared.displayRouteCoords.isEmpty {
             RunMapView(
-                trail: place.displayTrail,
+                points: place.trail,
                 current: place.displayCurrent,
                 pois: place.poiPins,
                 plannedRoute: RunSimulator.shared.displayRouteCoords,
-                follow: true
+                follow: true,
+                showsColorToggle: true
             )
             .frame(height: 190)
             .clipShape(RoundedRectangle(cornerRadius: 18))

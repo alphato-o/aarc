@@ -13,13 +13,17 @@ struct WatchActiveRunView: View {
 
     @State private var selectedPage: Page = .metrics
     @State private var showEndConfirm = false
+    @State private var showSummary = false
 
-    private enum Page: Hashable { case controls, metrics, diagnostics }
+    private enum Page: Hashable { case controls, metrics, map, diagnostics }
 
     var body: some View {
         TabView(selection: $selectedPage) {
             controlsPage.tag(Page.controls)
             metricsPage.tag(Page.metrics)
+            if host.currentRunType == .outdoor {
+                mapPage.tag(Page.map)
+            }
             diagnosticsPage.tag(Page.diagnostics)
         }
         .tabViewStyle(.page)
@@ -27,17 +31,38 @@ struct WatchActiveRunView: View {
         .alert("End run?", isPresented: $showEndConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("End", role: .destructive) {
-                // Dismiss INSTANTLY so the tap registers. The HealthKit
-                // teardown (endCollection/finishWorkout/finishRoute) is
-                // slow and used to freeze the screen for a beat, reading
-                // as a missed tap. Run it in the background after dismiss.
-                dismiss()
+                // Show the post-run summary INSTANTLY (it reads in-memory
+                // data, no wait). The slow HealthKit teardown runs in the
+                // background so the tap never feels dropped.
+                showSummary = true
                 Task { _ = await host.endRun() }
             }
         } message: {
             Text(host.currentRunIsTestData
                  ? "This is a test run. It will be tagged in Apple Health for easy cleanup."
                  : "This run will be permanently saved to Apple Health.")
+        }
+        .fullScreenCover(isPresented: $showSummary, onDismiss: { dismiss() }) {
+            WatchRunSummary(trail: host.routeTrail, metrics: host.liveMetrics) {
+                showSummary = false
+            }
+        }
+    }
+
+    // MARK: - Map (outdoor only)
+
+    private var mapPage: some View {
+        ZStack(alignment: .bottomLeading) {
+            if host.routeTrail.isEmpty {
+                ContentUnavailableView("Finding you\u{2026}", systemImage: "location.magnifyingglass")
+            } else {
+                WatchRouteMap(trail: host.routeTrail, live: true).ignoresSafeArea()
+            }
+            Text("\(String(format: "%.2f", host.liveMetrics.distanceMeters / 1000)) km")
+                .font(.caption.bold().monospacedDigit())
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .background(.black.opacity(0.5), in: Capsule())
+                .padding(8)
         }
     }
 

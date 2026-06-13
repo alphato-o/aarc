@@ -158,9 +158,10 @@ struct PostRunSummaryView: View {
     private func mapCard(_ s: RunSummaryStore.Summary) -> some View {
         card("ROUTE") {
             VStack(alignment: .leading, spacing: 8) {
-                RunMapView(trail: s.trail, current: s.trail.last,
-                           pois: s.pois, plannedRoute: s.plannedRoute, follow: false)
-                    .frame(height: 220)
+                RunMapView(points: s.trail, current: s.trail.last?.coord,
+                           pois: s.pois, plannedRoute: s.plannedRoute,
+                           follow: false, showsColorToggle: true)
+                    .frame(height: 240)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 if let route = s.routeDescription {
                     Text(route).font(.caption).foregroundStyle(.teal)

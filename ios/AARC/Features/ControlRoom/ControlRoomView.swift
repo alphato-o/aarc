@@ -159,15 +159,16 @@ struct ControlRoomView: View {
                         .font(.caption2)
                         .foregroundStyle(place.llmInfo != nil ? .teal : .secondary)
                 }
-                if !place.displayTrail.isEmpty || !simulator.displayRouteCoords.isEmpty {
+                if !place.trail.isEmpty || !simulator.displayRouteCoords.isEmpty {
                     RunMapView(
-                        trail: place.displayTrail,
+                        points: place.trail,
                         current: place.displayCurrent,
                         pois: place.poiPins,
                         plannedRoute: simulator.displayRouteCoords,
-                        follow: true
+                        follow: true,
+                        showsColorToggle: true
                     )
-                    .frame(height: 200)
+                    .frame(height: 220)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 } else if !simulator.routeStatus.isEmpty {
                     Text(simulator.routeStatus)

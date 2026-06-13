@@ -65,12 +65,24 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
 
     // MARK: - Map state (all in Apple-Maps display space, ready to plot)
 
+    /// One trail vertex with the performance at that point, so the map can
+    /// hue the line by pace or heart rate (NRC-style). Coord is display space.
+    struct TrailPoint: Sendable {
+        let coord: CLLocationCoordinate2D
+        let kmh: Double?
+        let hr: Double?
+    }
+
     /// Where the runner is right now (display space). nil until first fix.
     private(set) var displayCurrent: CLLocationCoordinate2D?
-    /// The path travelled so far (display space), downsampled for drawing.
-    private(set) var displayTrail: [CLLocationCoordinate2D] = []
+    /// The path travelled so far with per-point metrics (display space).
+    private(set) var trail: [TrailPoint] = []
+    /// Just the coordinates — kept for callers that only need the line.
+    var displayTrail: [CLLocationCoordinate2D] { trail.map(\.coord) }
     /// Most recent nearby POIs as map pins (hotels first).
     private(set) var poiPins: [POIPin] = []
+    /// Metres since the last `gps` event was logged (web-map trail).
+    private var lastGpsLogAt: CLLocation?
     /// Simulated mode: fixes come from RunSimulator's synthetic route via
     /// `ingestSimulated` instead of CLLocationManager — the rest of the
     /// pipeline (geocode, POI, route shape, LLM payloads) runs unchanged,
@@ -181,7 +193,7 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         lastFix = nil
         lastFixAt = nil
         routeShape.reset()
-        displayCurrent = nil; displayTrail = []; poiPins = []
+        displayCurrent = nil; trail = []; poiPins = []; lastGpsLogAt = nil
         if manager.authorizationStatus == .notDetermined {
             manager.requestWhenInUseAuthorization()
         }
@@ -215,7 +227,7 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         lastFix = nil
         lastFixAt = nil
         routeShape.reset()
-        displayCurrent = nil; displayTrail = []; poiPins = []
+        displayCurrent = nil; trail = []; poiPins = []; lastGpsLogAt = nil
         log.info("[place] SIMULATED sampling started")
     }
 
@@ -259,17 +271,31 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         guard isActive else { return }
         // Every fix feeds the route geometry; geocoding/POI below throttles.
         routeShape.add(loc)
-        // Map state: current position + trail, in display space.
+        // Map state: current position + metric-tagged trail, in display space.
         let disp = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
         displayCurrent = disp
-        if let last = displayTrail.last {
+        let m = LiveMetricsConsumer.shared.latest
+        let kmh: Double? = m?.currentPaceSecPerKm.map { $0 > 0 ? 3600 / $0 : 0 }
+        let pt = TrailPoint(coord: disp, kmh: kmh, hr: m?.currentHeartRate)
+        if let last = trail.last?.coord {
             let d = CLLocation(latitude: last.latitude, longitude: last.longitude)
                 .distance(from: CLLocation(latitude: disp.latitude, longitude: disp.longitude))
-            if d > 8 { displayTrail.append(disp) }
+            if d > 8 { trail.append(pt) }
         } else {
-            displayTrail.append(disp)
+            trail.append(pt)
         }
-        if displayTrail.count > 800 { displayTrail.removeFirst(displayTrail.count - 800) }
+        if trail.count > 1200 { trail.removeFirst(trail.count - 1200) }
+        // Log the raw WGS-84 fix every ~20m for the web dashboard map, which
+        // renders on WGS-84 OSM tiles (NOT GCJ — that's the iOS-map datum).
+        let logged = lastGpsLogAt.map { loc.distance(from: $0) > 20 } ?? true
+        if logged {
+            lastGpsLogAt = loc
+            RunEventLog.shared.record("gps", "",
+                data: ["lat": String(format: "%.6f", loc.coordinate.latitude),
+                       "lon": String(format: "%.6f", loc.coordinate.longitude),
+                       "kmh": kmh.map { String(format: "%.1f", $0) } ?? "",
+                       "hr": m?.currentHeartRate.map { String(Int($0)) } ?? ""])
+        }
         guard !refreshing else { return }
         let movedEnough = lastFix.map { loc.distance(from: $0) > 300 } ?? true
         let waitedEnough = lastFixAt.map { Date().timeIntervalSince($0) > 120 } ?? true
@@ -299,8 +325,16 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         )
         snapshot = snap
         let where_ = [snap.road, snap.area].compactMap { $0 }.joined(separator: ", ")
+        // POI coords for the WEB map (MapLibre on WGS-84 OSM tiles) — the pin
+        // coords from MapKit are GCJ-02, so invert them back to WGS-84 here.
+        // Format: "name|wgsLat|wgsLon|hotel" per pin, semicolon-joined.
+        let poic = pins.prefix(6).map { p -> String in
+            let w = ChinaCoordinateTransform.wgsCoordinate(fromDisplay: p.coordinate)
+            return "\(p.name.replacingOccurrences(of: "|", with: " "))|\(String(format: "%.6f", w.latitude))|\(String(format: "%.6f", w.longitude))|\(p.isHotel ? 1 : 0)"
+        }.joined(separator: ";")
         RunEventLog.shared.record("place.context", where_.isEmpty ? "(unnamed)" : where_,
                                   data: ["pois": labels.joined(separator: " | "),
+                                         "poic": poic,
                                          "route": routeShape.routeDescription ?? ""])
     }
 
