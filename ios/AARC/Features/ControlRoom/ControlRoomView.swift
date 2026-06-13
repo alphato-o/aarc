@@ -113,6 +113,10 @@ struct ControlRoomView: View {
                     .font(.caption.bold())
                     .foregroundStyle(simulator.paused ? .yellow : .pink)
             }
+            if !simulator.autoEventLabel.isEmpty {
+                Text(simulator.autoEventLabel)
+                    .font(.caption2).foregroundStyle(.teal)
+            }
             HStack(spacing: 8) {
                 Text("Pace").font(.caption2).foregroundStyle(.secondary)
                 Button { simulator.paceSecPerKm = min(900, simulator.paceSecPerKm + 15) } label: { Image(systemName: "minus") }

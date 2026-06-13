@@ -130,6 +130,20 @@ final class RunSimulator {
     // Synthetic HR model.
     var targetHeartRate: Double = 150
 
+    /// Autonomous realism: deliberate pace wander, cardiac drift, and
+    /// street-life events (crossings pause you, alleys slow you, open
+    /// stretches let you surge) so the trail/HR vary like a real run and
+    /// the place pipeline + colored map get a proper workout. The operator
+    /// controls still set the baseline; this rides on top.
+    var autoVary = true
+    private var paceWander: Double = 0
+    private var autoEventUntil: TimeInterval = 0
+    private var nextEventAt: TimeInterval = 30
+    private enum AutoEvent { case none, crossing, alley, surge }
+    private var autoEvent: AutoEvent = .none
+    /// Human-readable current event for the Control Room.
+    private(set) var autoEventLabel: String = ""
+
     // MARK: - Synthetic state
 
     private(set) var simElapsed: TimeInterval = 0
@@ -169,6 +183,8 @@ final class RunSimulator {
         isActive = true
         simRoute = nil
         routeStatus = ""
+        paceWander = 0; autoEvent = .none; autoEventLabel = ""
+        autoEventUntil = 0; nextEventAt = 30
 
         LiveMetricsConsumer.shared.pendingRunType = runType
         LiveMetricsConsumer.shared.pendingPersonalityId = personalityId
@@ -241,30 +257,68 @@ final class RunSimulator {
         guard !paused else { publish(); return }
 
         let dt = dtReal * max(0.25, speedMultiplier)
-        let stationary = simElapsed < stationaryUntil
         simElapsed += dt
+        updateAutoEvents()
 
-        // Distance advances unless we're "standing still".
-        let surging = simElapsed < surgeUntil
-        let pace = surging ? paceSecPerKm * 0.78 : paceSecPerKm   // surge = faster
+        // Standing still: a manual inject OR an autonomous street crossing.
+        let stationary = simElapsed < stationaryUntil || autoEvent == .crossing
+        // Effective pace = baseline × event factor × wander. Surge (manual or
+        // auto) speeds up (lower sec/km); alley slows down.
+        var factor = 1.0
+        if simElapsed < surgeUntil || autoEvent == .surge { factor *= 0.80 }
+        if autoEvent == .alley { factor *= 1.28 }
+        factor *= (1 + paceWander)
+        let pace = max(120, paceSecPerKm * factor)
         if !stationary {
-            simDistance += (1000.0 / max(60, pace)) * dt
+            simDistance += (1000.0 / pace) * dt
         }
 
-        // HR drifts toward target, jumps on a spike, eases when stationary.
-        let hrTarget = stationary ? 95 : (simElapsed < hrSpikeUntil ? targetHeartRate + 35 : targetHeartRate)
+        // HR: cardiac drift upward over the run (+~0.4 bpm/min), a floor when
+        // stationary, a bump on a spike or when pushing the pace.
+        let drift = min(18, simElapsed / 60 * 0.4)
+        var hrTarget = targetHeartRate + drift
+        if stationary { hrTarget = 95 + drift * 0.5 }
+        else if simElapsed < hrSpikeUntil { hrTarget += 35 }
+        else if factor < 0.9 { hrTarget += 10 }      // working the surge
+        else if autoEvent == .alley { hrTarget -= 6 } // easing through the alley
         smoothedHR += (hrTarget - smoothedHR) * min(1, dt / 12)
 
-        publish(stationaryNow: stationary, surging: surging)
+        publish(stationaryNow: stationary, curPace: stationary ? nil : pace)
     }
 
-    private func publish(stationaryNow: Bool = false, surging: Bool = false) {
-        let curPace: Double? = stationaryNow ? nil : (surging ? paceSecPerKm * 0.78 : paceSecPerKm)
+    /// Schedule + advance autonomous street-life events.
+    private func updateAutoEvents() {
+        guard autoVary else { autoEvent = .none; autoEventLabel = ""; return }
+        // Gentle random-walk on pace (±~15%), mean-reverting.
+        paceWander += Double.random(in: -0.04...0.04) - paceWander * 0.08
+        paceWander = max(-0.16, min(0.16, paceWander))
+        if simElapsed >= autoEventUntil {
+            if autoEvent != .none {
+                autoEvent = .none; autoEventLabel = ""
+                nextEventAt = simElapsed + Double.random(in: 45...110)
+            } else if simElapsed >= nextEventAt {
+                let r = Double.random(in: 0..<1)
+                if r < 0.42 {
+                    autoEvent = .crossing; autoEventLabel = "waiting to cross"
+                    autoEventUntil = simElapsed + Double.random(in: 5...14)
+                } else if r < 0.7 {
+                    autoEvent = .alley; autoEventLabel = "narrow alley — easing"
+                    autoEventUntil = simElapsed + Double.random(in: 20...45)
+                } else {
+                    autoEvent = .surge; autoEventLabel = "open stretch — pushing"
+                    autoEventUntil = simElapsed + Double.random(in: 15...30)
+                }
+            }
+        }
+    }
+
+    private func publish(stationaryNow: Bool = false, curPace: Double? = nil, surging: Bool = false) {
+        let publishedPace: Double? = stationaryNow ? nil : (curPace ?? paceSecPerKm)
         let avg = simDistance > 0 ? simElapsed / (simDistance / 1000) : 0
         let metrics = LiveMetrics(
             elapsed: simElapsed,
             distanceMeters: simDistance,
-            currentPaceSecPerKm: curPace,
+            currentPaceSecPerKm: publishedPace,
             avgPaceSecPerKm: avg,
             currentHeartRate: smoothedHR,
             energyKcal: simDistance * 0.06,
