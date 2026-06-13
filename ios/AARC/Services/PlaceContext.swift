@@ -421,9 +421,37 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
             if let e = byName[p.name], e.meters <= p.meters { continue }
             byName[p.name] = p
         }
-        return byName.values
+        let top = byName.values
             .sorted { ($0.isHotel ? 0 : 1, $0.meters) < ($1.isHotel ? 0 : 1, $1.meters) }
             .prefix(6).map { $0 }
+        // Localize NON-hotel names to the local script (parks/landmarks
+        // transliterate badly; hotels keep their English brand — "Park Hyatt"
+        // reads fine). Best-effort reverse-geocode in zh; keep English if no
+        // local name surfaces.
+        guard ChinaCoordinateTransform.isMainlandChina(loc.coordinate) else { return top }
+        var out: [POIPin] = []
+        for p in top {
+            if p.isHotel { out.append(p); continue }
+            out.append(await localizedPOI(p))
+        }
+        return out
+    }
+
+    /// Reverse-geocode a POI's point in zh and adopt the local-script name if
+    /// one surfaces (areasOfInterest names the park/landmark). The pin coord is
+    /// display-space (GCJ); invert to WGS-84 for the geocoder.
+    private func localizedPOI(_ pin: POIPin) async -> POIPin {
+        let wgs = ChinaCoordinateTransform.wgsCoordinate(fromDisplay: pin.coordinate)
+        let loc = CLLocation(latitude: wgs.latitude, longitude: wgs.longitude)
+        guard let pm = try? await CLGeocoder().reverseGeocodeLocation(
+            loc, preferredLocale: Locale(identifier: "zh_Hans_CN")).first else { return pin }
+        let candidate = pm.areasOfInterest?.first ?? pm.name
+        if let name = candidate,
+           name.range(of: "\\p{Han}", options: .regularExpression) != nil {
+            return POIPin(name: name, category: pin.category, coordinate: pin.coordinate,
+                          meters: pin.meters, isHotel: false)
+        }
+        return pin
     }
 
     /// Keep only places worth a coach line: hotels must be prestige-tier;

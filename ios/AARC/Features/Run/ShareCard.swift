@@ -68,44 +68,47 @@ struct ShareCardView: View {
     // MARK: - Route layout (outdoor): map hero + trail + compact quote
 
     private var routeBody: some View {
+        // Compact map (rounded), quote gets the bulk, KPIs pinned above the
+        // footer with a clear gap — no overlap.
+        let mapTop = topY + 20
         let mapH = model.mapImage!.size.height
-        let mapTop = topY + 22
         let mapBot = mapTop + mapH
-        let kpiYr = mapBot + 60
-        let qTop = kpiYr + 60
-        let qBot = (H - 56) - 30
+        let footY = H - 56
+        let kpiTop = footY - 96
+        let qTop = mapBot + 40
+        let qBot = kpiTop - 36
+        let q = "\u{201C}\(model.quote)\u{201D}"
         return ZStack(alignment: .topLeading) {
             background
             header
-            // map hero + progressive colored trail
             ZStack(alignment: .topLeading) {
-                Image(uiImage: model.mapImage!).resizable()
-                    .frame(width: W, height: mapH)
+                Image(uiImage: model.mapImage!).resizable().frame(width: W - P * 2, height: mapH)
                 Canvas { ctx, _ in
                     let upto = max(1, Int(Double(model.mapSegments.count) * min(progress, 1)))
                     for i in 0..<min(upto, model.mapSegments.count) {
                         let s = model.mapSegments[i]
                         var p = Path(); p.move(to: s.a); p.addLine(to: s.b)
-                        ctx.stroke(p, with: .color(s.color), style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round))
+                        ctx.stroke(p, with: .color(s.color), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
                     }
                     if let st = model.mapStart {
-                        ctx.fill(Path(ellipseIn: CGRect(x: st.x - 9, y: st.y - 9, width: 18, height: 18)),
+                        ctx.fill(Path(ellipseIn: CGRect(x: st.x - 8, y: st.y - 8, width: 16, height: 16)),
                                  with: .color(Color(red: 0.81, green: 0.91, blue: 0.84)))
                     }
                 }
-                .frame(width: W, height: mapH)
+                .frame(width: W - P * 2, height: mapH)
             }
-            .frame(width: W, height: mapH)
-            .clipped()
+            .frame(width: W - P * 2, height: mapH)
+            .clipShape(RoundedRectangle(cornerRadius: 18))
             .position(x: W / 2, y: mapTop + mapH / 2)
 
-            kpiRow.frame(width: W - P * 2).position(x: W / 2, y: kpiYr + 30)
-            // compact quote under the stats
-            KaraokeQuote(text: "\u{201C}\(model.quote)\u{201D}", progress: progress,
-                         fontSize: ShareCardView.fittedSerifSize("\u{201C}\(model.quote)\u{201D}",
-                            boxW: (W - P * 2) * 0.86, boxH: qBot - qTop, maxSize: 48))
+            // quote — fitted strictly into the gap between map and KPIs
+            KaraokeQuote(text: q, progress: progress,
+                         fontSize: ShareCardView.fittedSerifSize(q, boxW: (W - P * 2) * 0.86,
+                                                                 boxH: qBot - qTop, maxSize: H > 1200 ? 58 : 48))
                 .frame(width: W - P * 2, height: qBot - qTop)
                 .position(x: W / 2, y: (qTop + qBot) / 2)
+
+            kpiRow.frame(width: W - P * 2).position(x: W / 2, y: kpiTop + 30)
             footer
         }
         .frame(width: W, height: H)

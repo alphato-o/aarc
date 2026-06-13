@@ -100,15 +100,19 @@ struct LiveRunChart: View {
             // heights read independently even where they overlap. HR is
             // watch-only — empty on phone-only treadmill, so the chart
             // reads as clean speed-only bars there.
+            // HR as a real waveform LINE over the speed bars — bars all
+            // slammed the top rail and carried no shape. A smoothed line
+            // rises and falls so HR drift / surges actually read.
             ForEach(samples, id: \.bucketIndex) { sample in
                 if let hr = sample.heartRate, Self.plausibleHR.contains(hr) {
-                    BarMark(
+                    LineMark(
                         x: .value("Distance", sample.distanceKm),
                         y: .value("HR", normalize(hr, in: hrRange)),
-                        width: .fixed(hrBarWidth)
+                        series: .value("s", "hr")
                     )
-                    .foregroundStyle(hrAccent.opacity(0.95))
-                    .cornerRadius(1)
+                    .foregroundStyle(hrAccent)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    .interpolationMethod(.catmullRom)
                 }
             }
 
@@ -282,8 +286,16 @@ struct LiveRunChart: View {
         var values = samples.compactMap(\.heartRate)
         if let live = liveHeartRateBPM, live > 0 { values.append(live) }
         values = values.filter { Self.plausibleHR.contains($0) }
-        guard let lo = values.min(), let hi = values.max() else { return (100, 160) }
-        let pad = max(4, (hi - lo) * 0.15)
+        guard values.count > 2 else {
+            if let lo = values.min(), let hi = values.max() { return (max(30, lo - 6), hi + 6) }
+            return (100, 160)
+        }
+        // 5th/95th percentile so one stray warmup/glitch reading doesn't drag
+        // the floor down and squash the bulk of the waveform into the top.
+        let s = values.sorted()
+        let lo = s[Int(Double(s.count) * 0.05)]
+        let hi = s[min(s.count - 1, Int(Double(s.count) * 0.95))]
+        let pad = max(4, (hi - lo) * 0.18)
         return (max(30, lo - pad), hi + pad)
     }
 

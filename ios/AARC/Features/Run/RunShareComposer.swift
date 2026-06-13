@@ -161,8 +161,9 @@ struct RunShareComposer: View {
         mapBuilding = true
         Task {
             let cardH = 1080 / aspect
+            // Smaller map (~32% of card) so the quote is the hero.
             let res = await ShareMap.render(points: s.trail, mode: mapMode,
-                                            width: 1080, height: (cardH * 0.46).rounded())
+                                            width: 1080 - 152, height: (cardH * 0.32).rounded())
             mapResult = res
             mapBuilding = false
             regenPreview()

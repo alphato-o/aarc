@@ -84,19 +84,23 @@ struct ActiveRunView: View {
             statusStrip
             cockpit
             runMapCard
-            // While a coach line is speaking, the karaoke feedback card takes
-            // over the chart + music slots (one bounded, readable widget); the
-            // chart and music return a few seconds after the line ends.
-            if let line = subtitleStore.currentLine {
-                InRunFeedbackCard(line: line) { subtitleStore.toggleLike() }
-                    .id(line.id)
+            // Swap zone: takes ALL remaining space, so its size is identical
+            // whether it holds [chart + thin music] or the karaoke card — the
+            // map/cockpit above and End below never shift when they swap.
+            ZStack {
+                if let line = subtitleStore.currentLine {
+                    InRunFeedbackCard(line: line) { subtitleStore.toggleLike() }
+                        .id(line.id)
+                        .transition(.opacity)
+                } else {
+                    VStack(spacing: 8) {
+                        liveChart                       // fills the slack
+                        mediaCommand                    // thin 64pt row
+                    }
                     .transition(.opacity)
-            } else {
-                liveChart.transition(.opacity)
-                mediaCommand
-                    .frame(height: 180)
-                    .padding(.top, 6)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             endLink
         }
         .animation(.easeInOut(duration: 0.3), value: subtitleStore.currentLine?.id)
@@ -270,41 +274,38 @@ struct ActiveRunView: View {
 
     // MARK: - C. Media command
 
+    /// Thin one-line transport: art + title/artist on the LEFT, prev/play/next
+    /// on the RIGHT — all on a single compact row. The chart gets the space.
     private var mediaCommand: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
-                albumThumb
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(nowPlaying.track?.title ?? "Nothing playing")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(nowPlaying.track?.artist ?? "Open Spotify to control playback")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.65))
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 4)
+        HStack(spacing: 10) {
+            albumThumb
+            VStack(alignment: .leading, spacing: 1) {
+                Text(nowPlaying.track?.title ?? "Nothing playing")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                Text(nowPlaying.track?.artist ?? "Open Spotify to control")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.6)).lineLimit(1)
             }
-
-            progressBar
-            Spacer(minLength: 0)
-            controls
-
-            if let err = nowPlaying.lastControlError {
-                Text(err)
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
-                    .lineLimit(2)
+            Spacer(minLength: 6)
+            Button { Task { await nowPlaying.previous() } } label: {
+                Image(systemName: "backward.fill").font(.body).foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 40, height: 40)
+            }
+            Button { Task { await nowPlaying.togglePlayPause() } } label: {
+                Image(systemName: nowPlaying.track?.isPlaying == true ? "pause.fill" : "play.fill")
+                    .font(.system(size: 16, weight: .bold)).foregroundStyle(.black)
+                    .frame(width: 40, height: 40)
+                    .background(LinearGradient(colors: [Color(red: 1.0, green: 0.55, blue: 0.85),
+                        Color(red: 0.45, green: 1.0, blue: 0.85)], startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
+            }.disabled(nowPlaying.track == nil)
+            Button { Task { await nowPlaying.next() } } label: {
+                Image(systemName: "forward.fill").font(.body).foregroundStyle(.white.opacity(0.85))
+                    .frame(width: 40, height: 40)
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18)
-                .stroke(.white.opacity(0.10), lineWidth: 1)
-        )
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(height: 64)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.10), lineWidth: 1))
     }
 
     @ViewBuilder
@@ -313,15 +314,15 @@ struct ActiveRunView: View {
             Image(uiImage: img)
                 .resizable()
                 .aspectRatio(contentMode: .fill)
-                .frame(width: 56, height: 56)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 9))
         } else {
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: 9)
                 .fill(.white.opacity(0.08))
-                .frame(width: 56, height: 56)
+                .frame(width: 44, height: 44)
                 .overlay(
                     Image(systemName: "music.note")
-                        .font(.title3)
+                        .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.4))
                 )
         }

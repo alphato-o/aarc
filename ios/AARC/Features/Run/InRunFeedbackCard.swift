@@ -39,25 +39,51 @@ struct InRunFeedbackCard: View {
                 Text(who).font(.caption.bold()).foregroundStyle(accent)
                 Spacer()
             }
-            TimelineView(.animation(minimumInterval: 0.06)) { tl in
-                // Roll against the REAL audio time when we have it, so the
-                // highlight's END lands with the audio's end. Fall back to the
-                // char estimate only before playback duration is known.
-                let dur = (tts.playbackDuration ?? estDur)
-                let start = tts.playbackStartedAt ?? line.startedAt
-                let elapsed = tl.date.timeIntervalSince(start)
-                let progress = line.isPlaying ? min(elapsed / max(dur, 0.5), 0.999) : 1
-                RollingKaraoke(text: line.text.strippingAudioTags, progress: progress)
-                    .frame(maxWidth: .infinity)
+            Group {
+                if line.isPlaying {
+                    TimelineView(.animation(minimumInterval: 0.06)) { tl in
+                        // Roll against the REAL audio time so the highlight's
+                        // END lands with the audio's end (char estimate ran long).
+                        let dur = (tts.playbackDuration ?? estDur)
+                        let start = tts.playbackStartedAt ?? line.startedAt
+                        let elapsed = tl.date.timeIntervalSince(start)
+                        let progress = min(elapsed / max(dur, 0.5), 0.999)
+                        RollingKaraoke(text: line.text.strippingAudioTags, progress: progress)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else {
+                    // Audio done → show the WHOLE line, font auto-fit to the
+                    // box, static (no scroll/highlight) so it's readable while
+                    // you decide on the heart — no end-of-line "dance".
+                    StaticFitQuote(text: line.text.strippingAudioTags)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
             .frame(maxHeight: .infinity)
             .clipped()
         }
         .padding(16)
-        .frame(maxWidth: .infinity)
-        .frame(height: 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(accent.opacity(0.3), lineWidth: 1))
+    }
+}
+
+/// The whole line, centred, font shrunk to fit its box — shown once the audio
+/// finishes so the runner can read it all and decide on the heart.
+struct StaticFitQuote: View {
+    let text: String
+    var body: some View {
+        GeometryReader { geo in
+            let size = ShareCardView.fittedSerifSize(
+                "\u{201C}\(text)\u{201D}",
+                boxW: geo.size.width * 0.94, boxH: geo.size.height, maxSize: 30)
+            Text("\u{201C}\(text)\u{201D}")
+                .font(.custom("Georgia-Italic", size: size))
+                .foregroundStyle(Color(red: 0.957, green: 0.949, blue: 0.910))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        }
     }
 }
 
@@ -89,10 +115,13 @@ struct RollingKaraoke: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Keep the active line centred in the viewport.
-            .offset(y: geo.size.height / 2 - (CGFloat(activeLine) + 0.5) * lineH)
+            // Pin the active line near the TOP and scroll up as it advances:
+            // at t=0 the first line sits at the top (offset 0); never scroll
+            // past the start. Lyrics-style roll-up, not a centred jump.
+            .offset(y: -max(0, CGFloat(activeLine)) * lineH)
             .animation(.easeInOut(duration: 0.35), value: activeLine)
         }
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     private func glow(_ idx: Int, active: Int) -> Double {
