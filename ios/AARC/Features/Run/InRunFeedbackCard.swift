@@ -10,34 +10,48 @@ struct InRunFeedbackCard: View {
     let line: LiveSubtitleStore.Line
     var onHeart: () -> Void
 
+    @State private var tts = RemoteTTS.shared
+
     private var who: String { line.voice == .jessica ? "JESSICA" : "RICKY" }
     private var accent: Color { line.voice == .jessica ? .pink : .orange }
-    private var speakDur: Double { max(2, line.estimatedTotalDwell - 6) }
+    /// Fallback estimate; only used until the real audio duration is known.
+    private var estDur: Double { max(2, line.estimatedTotalDwell - 6) }
 
     var body: some View {
         VStack(spacing: 12) {
+            // Full-width heart on top — a fat target, no aiming mid-stride.
+            Button(action: onHeart) {
+                HStack(spacing: 8) {
+                    Image(systemName: line.liked ? "heart.fill" : "heart")
+                        .font(.system(size: 22, weight: .semibold))
+                    Text(line.liked ? "Loved" : "Love this line")
+                        .font(.subheadline.bold())
+                }
+                .foregroundStyle(line.liked ? .pink : .white.opacity(0.9))
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(line.liked ? Color.pink.opacity(0.18) : .white.opacity(0.08),
+                            in: RoundedRectangle(cornerRadius: 14))
+            }
+            .buttonStyle(.plain)
+
             HStack {
                 Text(who).font(.caption.bold()).foregroundStyle(accent)
                 Spacer()
             }
             TimelineView(.animation(minimumInterval: 0.06)) { tl in
-                let elapsed = tl.date.timeIntervalSince(line.startedAt)
-                let progress = line.isPlaying ? min(elapsed / speakDur, 0.999) : 1
+                // Roll against the REAL audio time when we have it, so the
+                // highlight's END lands with the audio's end. Fall back to the
+                // char estimate only before playback duration is known.
+                let dur = (tts.playbackDuration ?? estDur)
+                let start = tts.playbackStartedAt ?? line.startedAt
+                let elapsed = tl.date.timeIntervalSince(start)
+                let progress = line.isPlaying ? min(elapsed / max(dur, 0.5), 0.999) : 1
                 RollingKaraoke(text: line.text.strippingAudioTags, progress: progress)
                     .frame(maxWidth: .infinity)
             }
-            .frame(height: 168)
+            .frame(maxHeight: .infinity)
             .clipped()
-
-            // Big, easy-to-hit heart.
-            Button(action: onHeart) {
-                Image(systemName: line.liked ? "heart.fill" : "heart")
-                    .font(.system(size: 30, weight: .semibold))
-                    .foregroundStyle(line.liked ? .pink : .white.opacity(0.85))
-                    .frame(width: 76, height: 64)
-                    .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
-            }
-            .buttonStyle(.plain)
         }
         .padding(16)
         .frame(maxWidth: .infinity)
@@ -53,7 +67,7 @@ struct InRunFeedbackCard: View {
 struct RollingKaraoke: View {
     let text: String
     let progress: Double
-    var fontSize: CGFloat = 26
+    var fontSize: CGFloat = 21
 
     private let cream = Color(red: 0.957, green: 0.949, blue: 0.910)
     private var lineH: CGFloat { fontSize * 1.42 }
@@ -92,6 +106,8 @@ struct RollingKaraoke: View {
         let read = g < 0
         Text(w)
             .font(.custom("Georgia-Italic", size: fontSize))
+            .lineLimit(1)
+            .fixedSize()                       // never truncate a word to "wor…"
             .foregroundStyle(cream.opacity(read ? 1 : 0.34 + 0.66 * g))
             .padding(.horizontal, 0.08 * fontSize)
             .background(Color(red: 0.56, green: 0.72, blue: 0.60).opacity(0.22 * max(0, g)),

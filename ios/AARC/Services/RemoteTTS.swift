@@ -54,6 +54,21 @@ final class RemoteTTS: NSObject {
     private(set) var synthStartedAt: Date?
     /// What actually voiced the last line: "ElevenLabs" or "Apple (fallback)".
     private(set) var lastBackend: String?
+
+    /// True audio duration + start of the line currently playing — lets the
+    /// in-run karaoke roll the highlight against REAL playback time so its end
+    /// aligns exactly with the audio (the char-count estimate ran ~30% long).
+    /// nil when nothing is playing.
+    private(set) var playbackDuration: TimeInterval?
+    private(set) var playbackStartedAt: Date?
+    func beginPlaybackTiming(duration: TimeInterval) {
+        playbackDuration = duration > 0 ? duration : nil
+        playbackStartedAt = .now
+    }
+    func clearPlaybackTiming() {
+        playbackDuration = nil
+        playbackStartedAt = nil
+    }
     /// Fetch latency of the last non-cached synth, in milliseconds.
     private(set) var lastLatencyMs: Int?
     /// Character count of the last line — latency on v3 scales with this.
@@ -197,6 +212,7 @@ final class RemoteTTS: NSObject {
 
     private func playViaEngine(url: URL, onStart: (@MainActor @Sendable () -> Void)?) async throws {
         let file = try AVAudioFile(forReading: url)
+        let dur = Double(file.length) / file.processingFormat.sampleRate
         try ensureEngineStarted()
         if playerNode.isPlaying { playerNode.stop() }
 
@@ -209,6 +225,7 @@ final class RemoteTTS: NSObject {
             ) { [weak self] _ in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
+                    self.clearPlaybackTiming()
                     if let cont = self.playbackContinuation {
                         self.playbackContinuation = nil
                         cont.resume()
@@ -218,6 +235,7 @@ final class RemoteTTS: NSObject {
             playerNode.play()
             // Audio is producing samples within ~10ms of .play() — for
             // user perception this is the "start of speaking" moment.
+            self.beginPlaybackTiming(duration: dur)
             onStart?()
         }
     }
@@ -255,6 +273,7 @@ final class RemoteTTS: NSObject {
             p.play()
             // Same reasoning as the engine path — audio starts within
             // a frame or two of .play().
+            self.beginPlaybackTiming(duration: p.duration)
             onStart?()
         }
     }
@@ -270,6 +289,7 @@ final class RemoteTTS: NSObject {
         if playerNode.isPlaying { playerNode.stop() }
         fallbackPlayer?.stop()
         fallbackPlayer = nil
+        clearPlaybackTiming()
         if let cont = playbackContinuation {
             playbackContinuation = nil
             cont.resume()

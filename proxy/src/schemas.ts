@@ -1,5 +1,23 @@
 import { z } from "zod";
 
+/// A "soft" string array for anti-repeat / context / persona fields: it
+/// TRUNCATES to (maxItems, maxLen) instead of REJECTING the whole request.
+/// These fields are advisory — a caller sending one too many, or one too
+/// long, should degrade gracefully, never 400 the line. (Tight `.max()`
+/// caps here were the repeated source of Jessica's avalanche 400s.) Keep
+/// the limits generous AND non-fatal.
+const softStrings = (maxItems: number, maxLen: number) =>
+    z.preprocess(
+        (v) =>
+            Array.isArray(v)
+                ? v
+                      .filter((x) => typeof x === "string" && x.trim().length > 0)
+                      .slice(0, maxItems)
+                      .map((x) => (x as string).slice(0, maxLen))
+                : undefined,
+        z.array(z.string()).optional(),
+    );
+
 // ---------------------------------------------------------------------------
 // Inbound: what the iOS client posts to /generate-script
 // ---------------------------------------------------------------------------
@@ -24,7 +42,7 @@ export const GenerateScriptRequestSchema = z
         /// Heart-liked lines from past runs. Sent as VIBE-ONLY
         /// calibration; the prompt is strict about never copying any
         /// of them verbatim. Capped to ~12 most-recent on the client.
-        likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
+        likedLineExamples: softStrings(30, 1600),
     })
     .superRefine((data, ctx) => {
         if (data.planKind === "distance" && data.distanceKm === undefined) {
@@ -136,11 +154,15 @@ export interface GenerateScriptResponse {
 /// ("The PuLi (hotel, 140m)"), and the geometric pattern of the route so
 /// far ("circling the same ~400m loop, on lap 3 now"). Names only — raw
 /// coordinates never reach the proxy.
+const softString = (maxLen: number) =>
+    z.preprocess((v) => (typeof v === "string" ? v.slice(0, maxLen) : undefined),
+                 z.string().optional());
+
 export const PlaceSchema = z.object({
-    road: z.string().max(120).optional(),
-    area: z.string().max(120).optional(),
-    pois: z.array(z.string().max(160)).max(8).optional(),
-    route: z.string().max(200).optional(),
+    road: softString(160),
+    area: softString(160),
+    pois: softStrings(12, 200),
+    route: softString(240),
 });
 
 export type PlaceInfo = z.infer<typeof PlaceSchema>;
@@ -176,18 +198,18 @@ export const DynamicLineRequestSchema = z.object({
         stationarySeconds: z.number().nonnegative().optional(),
         place: PlaceSchema.optional(),
     }),
-    recentDispatched: z.array(z.string().min(1).max(1200)).max(10).optional(),
+    recentDispatched: softStrings(32, 1600),
     customNote: z.string().max(300).optional(),
     /// Short, blunt bullets about the runner the coach can weave into
     /// roasts. Hand-edited in the iOS Settings → Personal Trolls panel.
     /// Specifically NOT training-history user_memory — that's a
     /// different field (Phase 2). These are persona-fuel: "FydeOS has
     /// 10 users", "Won't be Sam Altman", etc.
-    personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
+    personalNotes: softStrings(40, 600),
     /// Heart-liked lines from past runs — vibe-only calibration. The
     /// prompt forbids verbatim copy of any of these; they're texture
     /// references, not material.
-    likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
+    likedLineExamples: softStrings(30, 1600),
 });
 
 export type DynamicLineRequest = z.infer<typeof DynamicLineRequestSchema>;
@@ -238,9 +260,9 @@ export const MusicCommentRequestSchema = z.object({
         runType: z.enum(["outdoor", "treadmill"]),
         place: PlaceSchema.optional(),
     }),
-    recentDispatched: z.array(z.string().min(1).max(1200)).max(10).optional(),
-    personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
-    likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
+    recentDispatched: softStrings(32, 1600),
+    personalNotes: softStrings(40, 600),
+    likedLineExamples: softStrings(30, 1600),
 });
 
 export type MusicCommentRequest = z.infer<typeof MusicCommentRequestSchema>;
@@ -277,9 +299,9 @@ export const ReactLineRequestSchema = z.object({
         place: PlaceSchema.optional(),
     }),
     /// Recent exchange (both voices) so she doesn't repeat and can build on it.
-    recentDispatched: z.array(z.string().min(1).max(1200)).max(10).optional(),
-    personalNotes: z.array(z.string().min(1).max(400)).max(20).optional(),
-    likedLineExamples: z.array(z.string().min(1).max(1000)).max(20).optional(),
+    recentDispatched: softStrings(32, 1600),
+    personalNotes: softStrings(40, 600),
+    likedLineExamples: softStrings(30, 1600),
     /// How long Jessica's reply should run. Drives both the system-prompt
     /// length profile and maxTokens server-side:
     ///   "quip"      — one short sentence (<=140 chars, ~6-10s audio)

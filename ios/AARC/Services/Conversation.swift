@@ -90,10 +90,11 @@ final class Conversation {
     private func antiRepeatContext() -> [String] {
         var recent = ScriptEngine.shared.recentDispatchedLines
         recent.append(contentsOf: recentJessica)
-        // Jessica's indulgent lines run 500-650 chars; defend the proxy's
-        // per-entry cap so one long line can't 400 the whole request (the
-        // bug that silently killed her after her first long reply).
-        return Array(recent.suffix(14)).map { String($0.prefix(1100)) }
+        // Clamp BOTH count and per-entry length to stay under the proxy caps
+        // (array ≤16, each ≤1200). The array-count overflow (>10 old cap)
+        // 400'd Jessica ~9 min in once enough lines accumulated; suffix(12)
+        // + the raised 16 cap leave headroom either way.
+        return Array(recent.suffix(12)).map { String($0.prefix(1100)) }
     }
 
     private func rememberJessica(_ line: String) {
