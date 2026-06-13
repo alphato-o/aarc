@@ -418,6 +418,7 @@ export const APP_HTML = `<!doctype html>
           <span><i style="background:var(--hr)"></i>HR</span>
           <span><i style="background:var(--jessica)"></i>jessica</span>
           <span><i style="background:var(--ricky)"></i>ricky</span>
+          <span style="color:#ffd23f">&#9829; hearted</span>
           <span class="dbgonly"><i style="background:var(--amber)"></i>11Labs</span>
           <span class="dbgonly"><i style="background:var(--llm)"></i>LLM</span>
         </div>
@@ -1268,8 +1269,21 @@ function metricAt(t) {
 // VOICES lane: one bar per spoken line, its WIDTH = how long it took to say
 // (estimated from text length, ~14 chars/sec). Jessica on top, Ricky below.
 // Hover shows the full quote; click selects + replays the audio.
+// Texts the runner hearted during the run: speech.liked minus any later
+// speech.unliked. Matched to speech bars by exact text.
+function likedTextSet() {
+  var liked = {};
+  state.events.forEach(function (ev) {
+    var t = String(ev.detail || "");
+    if (ev.type === "speech.liked") liked[t] = true;
+    else if (ev.type === "speech.unliked") delete liked[t];
+  });
+  return liked;
+}
+
 function drawVoiceBars(X, g, plotW) {
   var subH = HEAT_H / 2;
+  var liked = likedTextSet();
   chart.appendChild(el("rect", { x: PAD_L, y: g.heatTop, width: plotW, height: HEAT_H, fill: "#0c0f14", stroke: C.axis, "stroke-opacity": 0.5 }));
   chart.appendChild(el("line", { x1: PAD_L, y1: g.heatTop + subH, x2: PAD_L + plotW, y2: g.heatTop + subH, stroke: "#0b0e13", "stroke-opacity": 0.6 }));
   var jl = el("text", { x: PAD_L + 3, y: g.heatTop + 10, fill: C.jessica, "font-size": 8, "pointer-events": "none", opacity: 0.65 });
@@ -1290,14 +1304,21 @@ function drawVoiceBars(X, g, plotW) {
     var w = Math.max(cx1 - cx0, 4);
     var rowY = (isJess ? g.heatTop : g.heatTop + subH) + 3, barH = subH - 6;
     var sel = state.selected === idx, col = isJess ? C.jessica : C.ricky;
+    var isLiked = liked[text] === true;
     var bar = el("rect", { x: cx0, y: rowY, width: w, height: barH, rx: 3,
-      fill: col, "fill-opacity": sel ? 1 : 0.78, stroke: sel ? C.select : "none", "stroke-width": 2,
+      fill: col, "fill-opacity": sel ? 1 : (isLiked ? 0.95 : 0.78),
+      stroke: sel ? C.select : (isLiked ? "#ffd23f" : "none"), "stroke-width": isLiked && !sel ? 2 : 2,
       style: "cursor:pointer" });
-    var tipHead = who + " \\u00b7 " + fmtClock(ev.t) + " \\u00b7 ~" + Math.round(dur) + "s";
+    var tipHead = (isLiked ? "\\u2665 " : "") + who + " \\u00b7 " + fmtClock(ev.t) + " \\u00b7 ~" + Math.round(dur) + "s";
     bar.addEventListener("pointerenter", function (e) { showVoiceTip(e, tipHead, text); });
     bar.addEventListener("pointermove", positionVoiceTip);
     bar.addEventListener("pointerleave", hideVoiceTip);
     clickable(bar, idx); chart.appendChild(bar);
+    if (isLiked && cx1 + 12 < plotRight) {
+      // gold heart just past the bar end, centred in the row
+      var heart = el("text", { x: cx1 + 3, y: rowY + barH - 3, "font-size": 11, "pointer-events": "none", fill: "#ffd23f" });
+      heart.textContent = "\\u2665"; chart.appendChild(heart);
+    }
     if (w > 44) {
       var maxChars = Math.max(4, Math.floor((w - 8) / 5));
       var label = text.length > maxChars ? text.slice(0, maxChars - 1) + "\\u2026" : text;
