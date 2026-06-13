@@ -40,6 +40,12 @@ final class RunSummaryStore {
         var plannedRoute: [CLLocationCoordinate2D]
         var routeDescription: String?
         var hearted: [HeartedLine]
+        var planTotalMeters: Double?      // the distance goal, if any
+        /// Metres run beyond a distance goal (0 if none / under goal).
+        var overageMeters: Double {
+            guard let g = planTotalMeters, g > 0, distanceMeters > g else { return 0 }
+            return distanceMeters - g
+        }
     }
 
     private(set) var summary: Summary?
@@ -99,7 +105,8 @@ final class RunSummaryStore {
             pois: isOutdoor ? place.poiPins : [],
             plannedRoute: isOutdoor ? RunSimulator.shared.displayRouteCoords : [],
             routeDescription: place.routeDescriptionNow,
-            hearted: liked
+            hearted: liked,
+            planTotalMeters: ScriptPreviewStore.shared.currentPlan.totalMeters
         )
         finalRoast = nil
         finalRoastFailed = false
@@ -200,7 +207,11 @@ final class RunSummaryStore {
         if s.avgPaceSecPerKm > 0 { parts.append("avg pace \(fmtPace(s.avgPaceSecPerKm))/km") }
         if let hr = s.avgHR { parts.append("avg HR \(Int(hr))") }
         if let route = s.routeDescription { parts.append("route: \(route)") }
-        return parts.joined(separator: ", ") + "."
+        var note = parts.joined(separator: ", ") + "."
+        if s.overageMeters > 200, let g = s.planTotalMeters {
+            note += " They blew PAST their \(String(format: "%.1f", g/1000))km goal by \(String(format: "%.1f", s.overageMeters/1000))km before stopping — acknowledge the overachieving."
+        }
+        return note
     }
 
     static func fmtDur(_ sec: Double) -> String {

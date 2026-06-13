@@ -33,6 +33,13 @@ enum MilestoneAnnouncement {
             if let every = trigger.everyMeters, every > 0 {
                 let epoch = Int(distanceMeters / every)
                 let crossedMeters = Double(epoch) * every
+                // Past the goal on a distance plan: every extra km is "bonus"
+                // — the run keeps going until the runner taps stop. Suffix is
+                // deterministic per N so the cache stays warm.
+                if let total = plan.totalMeters, crossedMeters > total + 1 {
+                    let past = crossedMeters - total
+                    return "\(distanceText(meters: crossedMeters)). That's \(distanceText(meters: past)) past your goal."
+                }
                 return distanceText(meters: crossedMeters)
             }
             // One-shot distance trigger (a "surprise roast" the model
@@ -72,6 +79,14 @@ enum MilestoneAnnouncement {
             return "Nearly there."
 
         case .finish:
+            // Goal reached — but the run does NOT stop here. Frame the goal
+            // as a checkpoint, not an end; everything past it is bonus.
+            if let total = plan.totalMeters {
+                return "That's your goal \u{2014} \(distanceText(meters: total)). But we don't stop here. Keep running; tap stop when you've had enough."
+            }
+            if plan.totalSeconds != nil {
+                return "That's your time. But the clock keeps running until you tap stop."
+            }
             return "Run complete."
         }
     }

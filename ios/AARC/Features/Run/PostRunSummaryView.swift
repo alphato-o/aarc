@@ -27,6 +27,13 @@ struct PostRunSummaryView: View {
         ScrollView {
             VStack(spacing: 18) {
                 header(s)
+                if s.overageMeters > 200, let g = s.planTotalMeters {
+                    Text("\u{1F3C1} \(String(format: "%.1f", g/1000)) km goal smashed \u{2014} +\(String(format: "%.1f", s.overageMeters/1000)) km bonus")
+                        .font(.subheadline.bold()).foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(.orange.opacity(0.12), in: Capsule())
+                }
                 verdictCard
                 statsGrid(s)
                 if !s.speedSeries.isEmpty || !s.hrSeries.isEmpty { chartCard(s) }
