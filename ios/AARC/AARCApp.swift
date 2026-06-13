@@ -72,6 +72,8 @@ struct AARCApp: App {
                     RunHistoryBackfill.backfillAll()
                     // Endpoint failover probe loop (CF Worker ↔ US gateway).
                     EndpointManager.shared.startProbing()
+                    // Pull the dashboard-edited personal-troll facts.
+                    PersonalContextStore.shared.refreshFromServer()
                 }
                 // Dashboard QR sign-in: the iPhone Camera app reads the
                 // QR on the web dashboard and opens aarc://dash-auth?...,

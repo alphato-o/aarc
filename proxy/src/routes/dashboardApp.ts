@@ -92,6 +92,9 @@ export const APP_HTML = `<!doctype html>
   .dbgtoggle { display: inline-flex; align-items: center; gap: 5px; color: var(--textDim);
     font: 600 11px/1 inherit; cursor: pointer; user-select: none; }
   .dbgtoggle input { accent-color: var(--select); cursor: pointer; }
+  .trollbtn { background: var(--panel2); color: var(--textDim); border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 11px; font: 600 11px/1 inherit; cursor: pointer; }
+  .trollbtn:hover { color: var(--textHi); border-color: var(--select); }
 
   #layout { display: flex; height: calc(100% - 46px); }
 
@@ -411,8 +414,24 @@ export const APP_HTML = `<!doctype html>
   <label class="dbgtoggle" id="dbgtoggle" title="Show network + pipeline diagnostics lanes">
     <input type="checkbox" id="dbgchk"> Debug
   </label>
+  <button class="trollbtn" id="trollbtn" title="Edit the personal-troll facts the coaches use">&#9998; Trolls</button>
   <span class="hint">wheel = zoom &middot; drag = pan</span>
 </header>
+<div class="modal" id="trollmodal">
+  <div class="modal-card" style="grid-template-columns:1fr; max-width:680px;">
+    <div class="modal-ctl" style="border:0;">
+      <button class="share-close" id="trollclose" title="Close">&times;</button>
+      <h2>Personal troll facts</h2>
+      <div class="sub">One per line. Short, blunt, specific. The coaches weave these into roasts &mdash; facts, not phrasings. Saved to the cloud; the phone picks them up on next launch.</div>
+      <textarea id="trolltext" style="min-height:340px; font:13px/1.5 ui-monospace,Menlo,monospace;"></textarea>
+      <div class="share-actions">
+        <button id="trollsave">Save</button>
+        <button class="alt" id="trollreload">Reload</button>
+      </div>
+      <div class="share-status" id="trollstatus"></div>
+    </div>
+  </div>
+</div>
 <div id="layout">
   <nav id="runs"><div class="empty">Loading runs&hellip;</div></nav>
   <main id="center">
@@ -2962,6 +2981,41 @@ document.querySelectorAll("#maptoggle button").forEach(function (b) {
     }
   });
 });
+
+// --- personal-troll editor -------------------------------------------
+function openTrolls() {
+  document.getElementById("trollmodal").classList.add("open");
+  loadTrolls();
+}
+function loadTrolls() {
+  var st = document.getElementById("trollstatus");
+  st.textContent = "Loading\\u2026"; st.className = "share-status";
+  fetch("/api/personal-notes").then(function (r) { return r.json(); }).then(function (j) {
+    if (j && j.ok) {
+      document.getElementById("trolltext").value = j.body || "";
+      st.textContent = j.updatedAt ? "Last saved " + j.updatedAt.slice(0, 10) : "Empty";
+    } else { st.textContent = "Failed to load"; st.className = "share-status err"; }
+  }).catch(function () { st.textContent = "Network error"; st.className = "share-status err"; });
+}
+function saveTrolls() {
+  var st = document.getElementById("trollstatus");
+  st.textContent = "Saving\\u2026"; st.className = "share-status";
+  fetch("/api/personal-notes", { method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ body: document.getElementById("trolltext").value }) })
+    .then(function (r) { return r.json(); }).then(function (j) {
+      if (j && j.ok) { st.textContent = "Saved \\u2713 \\u00b7 phone picks it up next launch"; }
+      else { st.textContent = "Save failed"; st.className = "share-status err"; }
+    }).catch(function () { st.textContent = "Network error"; st.className = "share-status err"; });
+}
+document.getElementById("trollbtn").addEventListener("click", openTrolls);
+document.getElementById("trollclose").addEventListener("click", function () {
+  document.getElementById("trollmodal").classList.remove("open");
+});
+document.getElementById("trollmodal").addEventListener("click", function (e) {
+  if (e.target === this) this.classList.remove("open");
+});
+document.getElementById("trollsave").addEventListener("click", saveTrolls);
+document.getElementById("trollreload").addEventListener("click", loadTrolls);
 
 window.addEventListener("resize", scheduleRender);
 loadRuns();

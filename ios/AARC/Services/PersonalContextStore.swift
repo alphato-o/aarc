@@ -28,6 +28,43 @@ final class PersonalContextStore {
         self.rawText = stored.isEmpty ? Self.defaultBio : stored
     }
 
+    /// Pull the canonical bullets from the cloud (edited on the dashboard)
+    /// and cache them locally. The phone is now a read-through cache of the
+    /// server copy; call at launch. Best-effort — keeps the cached text if
+    /// the network is down or the device token isn't set.
+    func refreshFromServer() {
+        guard let token = Bundle.main.object(forInfoDictionaryKey: "AARCDeviceToken") as? String,
+              !token.isEmpty else { return }
+        Task { @MainActor in
+            var req = URLRequest(url: Config.apiBaseURL.appendingPathComponent("api/personal-notes"))
+            req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+            req.timeoutInterval = 12
+            guard let (data, resp) = try? await URLSession.shared.data(for: req),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let body = obj["body"] as? String else { return }
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Empty server copy → seed it from the local default so the
+            // dashboard editor starts from the real bio, not a blank box.
+            if trimmed.isEmpty { self.pushToServer(token: token) }
+            else if trimmed != self.rawText { self.rawText = trimmed }
+        }
+    }
+
+    /// One-time seed of the server from the local text (when the cloud copy
+    /// is still empty). Keeps the dashboard editor pre-populated.
+    private func pushToServer(token: String) {
+        Task { @MainActor in
+            var req = URLRequest(url: Config.apiBaseURL.appendingPathComponent("api/personal-notes"))
+            req.httpMethod = "PUT"
+            req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+            req.setValue("application/json", forHTTPHeaderField: "content-type")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["body": self.rawText])
+            req.timeoutInterval = 12
+            _ = try? await URLSession.shared.data(for: req)
+        }
+    }
+
     /// All non-empty bullets, in author order. Not what we send to the
     /// proxy — see `bullets` for the per-run rotated subset and
     /// `allBullets` if you genuinely need everything (e.g. Settings UI).

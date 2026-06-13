@@ -17,6 +17,7 @@ import {
 import { dashHandler, dashAuthPollHandler, dashAuthApproveHandler } from "./routes/dashboard";
 import { landingHandler } from "./routes/landing";
 import { waitlistSubmitHandler, waitlistListHandler } from "./routes/waitlist";
+import { personalNotesGetHandler, personalNotesPutHandler } from "./routes/personalNotes";
 import { captureException } from "./lib/sentry";
 
 interface Env {
@@ -108,6 +109,11 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
 
     if (request.method === "POST" && url.pathname === "/api/waitlist") {
         return waitlistSubmitHandler(request, env);
+    }
+
+    if (url.pathname === "/api/personal-notes") {
+        if (request.method === "GET") return personalNotesGetHandler(request, env);
+        if (request.method === "PUT") return personalNotesPutHandler(request, env);
     }
 
     if (request.method === "POST") {
