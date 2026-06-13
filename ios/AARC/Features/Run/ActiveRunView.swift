@@ -84,11 +84,23 @@ struct ActiveRunView: View {
             statusStrip
             cockpit
             runMapCard
-            liveChart
-            // Extra breathing room above the music / subtitle widget so
-            // it visually separates from the chart card. VStack spacing
-            // alone read as cramped on real hardware.
-            bottomWidget
+            // While a coach line is speaking, the chart slot becomes the
+            // big readable karaoke feedback card; it reverts to the live
+            // chart a few seconds after the line ends (currentLine clears).
+            ZStack {
+                if let line = subtitleStore.currentLine {
+                    InRunFeedbackCard(line: line) { subtitleStore.toggleLike() }
+                        .transition(.opacity)
+                        .id(line.id)
+                } else {
+                    liveChart.transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.35), value: subtitleStore.currentLine?.id)
+            // Music command stays put in the bottom slot now — feedback no
+            // longer hijacks it.
+            mediaCommand
+                .frame(height: 180)
                 .padding(.top, 6)
             endLink
         }
@@ -96,32 +108,6 @@ struct ActiveRunView: View {
         .padding(.top, 4)  // breathing room under the iOS clock / Dynamic Island
     }
 
-    /// Bottom slot — normally the music command (album art + track +
-    /// transport). While the coach is speaking (and for the few-second
-    /// dwell window after), the slot transforms into the subtitle bar
-    /// so the runner can see the line and react with the heart button.
-    ///
-    /// Fixed height so the chart above never reshuffles on swap. Both
-    /// subviews fill the same 180pt-high frame; only the content
-    /// inside the rounded card changes.
-    private var bottomWidget: some View {
-        ZStack {
-            if let line = subtitleStore.currentLine {
-                LiveSubtitleBar(line: line) {
-                    subtitleStore.toggleLike()
-                }
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .move(edge: .bottom)),
-                    removal: .opacity
-                ))
-                .id(line.id)
-            } else {
-                mediaCommand
-                    .transition(.opacity)
-            }
-        }
-        .frame(height: 180)
-    }
 
     /// Live route map — outdoor runs only, once we have a trail (or a
     /// simulated planned route). POIs the runner passes are pinned;

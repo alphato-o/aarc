@@ -1166,7 +1166,26 @@ function render() {
   var speedTop = Math.max(Math.ceil((maxKmh * 1.18) / 2) * 2, 6);
   if (speedTop > SPEED_MAX_KMH) speedTop = SPEED_MAX_KMH;
   function Yspeed(kmh) { return g.plotBot - (kmh / speedTop) * PLOT_H; }
-  function Yhr(hr) { return g.plotBot - (hr / HR_AXIS_MAX) * PLOT_H; }
+  // HR axis: data-driven (was pinned at 200, squashing a real 95-bpm run into
+  // the bottom third and reading as a flat capped line). Hug the actual
+  // min/max with headroom + round to tidy ticks.
+  var hrLo = Infinity, hrHi = -Infinity;
+  state.metrics.forEach(function (r) {
+    if (isFinite(r.hr)) { if (r.hr < hrLo) hrLo = r.hr; if (r.hr > hrHi) hrHi = r.hr; }
+  });
+  var hrBot = 60, hrTop = 200;
+  if (isFinite(hrLo) && isFinite(hrHi) && hrHi >= hrLo) {
+    var pad = Math.max(5, (hrHi - hrLo) * 0.18);
+    hrBot = Math.max(30, Math.floor((hrLo - pad) / 10) * 10);
+    hrTop = Math.min(220, Math.ceil((hrHi + pad) / 10) * 10);
+    if (hrTop - hrBot < 20) hrTop = hrBot + 20;
+  }
+  function Yhr(hr) { return g.plotBot - ((hr - hrBot) / (hrTop - hrBot)) * PLOT_H; }
+  function hrTicks() {
+    var ticks = [], step = (hrTop - hrBot) <= 60 ? 10 : 20;
+    for (var v = hrBot; v <= hrTop + 0.1; v += step) ticks.push(v);
+    return ticks;
+  }
 
   // ---- speed area gradient def ----
   var defs = el("defs", {});
@@ -1185,7 +1204,7 @@ function render() {
     var sl = el("text", { x: PAD_L - 6, y: gy + 3, fill: C.speed, "font-size": 10, "text-anchor": "end", "pointer-events": "none" });
     sl.textContent = String(sv); chart.appendChild(sl);
   }
-  [0, 50, 100, 150, 200].forEach(function (hv) {
+  hrTicks().forEach(function (hv) {
     var hy = Yhr(hv);
     var hl = el("text", { x: PAD_L + plotW + 6, y: hy + 3, fill: C.hr, "font-size": 10, "text-anchor": "start", "pointer-events": "none" });
     hl.textContent = String(hv); chart.appendChild(hl);
