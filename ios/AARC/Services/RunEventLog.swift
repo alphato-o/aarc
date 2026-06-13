@@ -412,7 +412,7 @@ final class RunEventLog {
         attempts: Int,
         spacing: Duration
     ) async -> Bool {
-        let base = await MainActor.run { Config.apiBaseURL }
+        let base = await MainActor.run { Config.cloudBaseURL }
         var request = URLRequest(url: base.appendingPathComponent("ingest-run"))
         request.httpMethod = "POST"
         request.setValue(runId.uuidString, forHTTPHeaderField: "X-Run-Id")
@@ -452,7 +452,7 @@ final class RunEventLog {
     nonisolated private static func uploadRunAudio(runId: UUID) async {
         guard UserDefaults.standard.bool(forKey: audioEnabledKey) else { return }
         guard let token = deviceToken, !token.isEmpty else { return }
-        let audioBase = await MainActor.run { Config.apiBaseURL }
+        let audioBase = await MainActor.run { Config.cloudBaseURL }
         let fm = FileManager.default
         let dir = audioDirectory(for: runId)
         guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }

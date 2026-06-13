@@ -19,7 +19,7 @@ enum CloudRunSync {
     private static func post(_ runId: UUID, _ action: String) {
         guard let token = deviceToken, !token.isEmpty else { return }
         Task { @MainActor in
-            let url = Config.apiBaseURL
+            let url = Config.cloudBaseURL
                 .appendingPathComponent("api/runs/\(runId.uuidString)/\(action)")
             var req = URLRequest(url: url)
             req.httpMethod = "POST"

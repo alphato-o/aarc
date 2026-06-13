@@ -36,7 +36,7 @@ final class PersonalContextStore {
         guard let token = Bundle.main.object(forInfoDictionaryKey: "AARCDeviceToken") as? String,
               !token.isEmpty else { return }
         Task { @MainActor in
-            var req = URLRequest(url: Config.apiBaseURL.appendingPathComponent("api/personal-notes"))
+            var req = URLRequest(url: Config.cloudBaseURL.appendingPathComponent("api/personal-notes"))
             req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
             req.timeoutInterval = 12
             guard let (data, resp) = try? await URLSession.shared.data(for: req),
@@ -55,7 +55,7 @@ final class PersonalContextStore {
     /// is still empty). Keeps the dashboard editor pre-populated.
     private func pushToServer(token: String) {
         Task { @MainActor in
-            var req = URLRequest(url: Config.apiBaseURL.appendingPathComponent("api/personal-notes"))
+            var req = URLRequest(url: Config.cloudBaseURL.appendingPathComponent("api/personal-notes"))
             req.httpMethod = "PUT"
             req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
             req.setValue("application/json", forHTTPHeaderField: "content-type")

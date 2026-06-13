@@ -59,6 +59,17 @@ final class EndpointManager {
     }
     var currentName: String { endpoints.first { $0.id == currentId }?.name ?? "?" }
 
+    /// The Cloudflare Worker URL, regardless of failover state — for D1/R2
+    /// routes that ONLY exist on Cloudflare (ingest, dashboard sync, etc.).
+    /// Honors the dev override like `current` does.
+    var cloudflareURL: URL {
+        if let override = ProcessInfo.processInfo.environment["AARC_API_BASE_URL"],
+           let url = URL(string: override) {
+            return url
+        }
+        return endpoints.first { $0.id == "cf" }?.url ?? endpoints[0].url
+    }
+
     /// Snapshot of the active endpoint (for transports that need the id,
     /// e.g. hedged requests reporting outcomes per endpoint).
     var currentEndpoint: Endpoint { endpoints.first { $0.id == currentId } ?? endpoints[0] }
