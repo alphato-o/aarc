@@ -168,6 +168,11 @@ final class LiveMetricsConsumer {
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
 
+        // Snapshot everything the post-run summary needs WHILE it's still
+        // live (chart samples, route + POIs, hearted lines) and kick off
+        // the closing roast — before we tear the engines down below.
+        RunSummaryStore.shared.capture()
+
         // Wind down the script engine — the "finish" trigger should
         // already have fired during a normal run. If the user ended
         // early, any unspoken lines just go quiet.

@@ -127,12 +127,19 @@ final class LiveSubtitleStore {
         guard let line = currentLine else { return }
         if line.liked {
             LikedLinesStore.shared.unlike(text: line.text)
+            // Record against the run so the dashboard un-highlights it and
+            // the post-run summary drops it from the hearted list.
+            RunEventLog.shared.record("speech.unliked", line.text,
+                                      data: ["voice": line.voice.personalityId])
         } else {
             LikedLinesStore.shared.like(
                 text: line.text,
                 source: line.source,
                 personalityId: line.voice.personalityId
             )
+            RunEventLog.shared.record("speech.liked", line.text,
+                                      data: ["voice": line.voice.personalityId,
+                                             "source": line.source ?? ""])
         }
         currentLine?.liked.toggle()
     }

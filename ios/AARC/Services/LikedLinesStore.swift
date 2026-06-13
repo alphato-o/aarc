@@ -85,6 +85,13 @@ final class LikedLinesStore {
             .map { String($0.text.prefix(950)) }
     }
 
+    /// Lines hearted at or after `date`, oldest→newest — the set the
+    /// post-run summary shows for the just-finished run. Still-hearted
+    /// only (an un-heart removes the entry), which is the right semantics.
+    func likedSince(_ date: Date) -> [LikedLine] {
+        lines.filter { $0.likedAt >= date }.sorted { $0.likedAt < $1.likedAt }
+    }
+
     // MARK: - Persistence
 
     private func load() {

@@ -22,6 +22,7 @@ struct RunHomeView: View {
     @State private var planStore = ScriptPreviewStore.shared
     @State private var liveConsumer = LiveMetricsConsumer.shared
     @State private var phoneSession = PhoneSession.shared
+    @State private var summaryStore = RunSummaryStore.shared
     @AppStorage("aarc.trackingSource") private var trackingSourceRaw: String = TrackingSource.watch.rawValue
 
     private var trackingSource: TrackingSource {
@@ -45,6 +46,12 @@ struct RunHomeView: View {
                 )) {
                     ActiveRunView()
                         .environment(liveConsumer)
+                }
+                .fullScreenCover(isPresented: Binding(
+                    get: { summaryStore.isPresenting && !liveConsumer.isRunActive },
+                    set: { if !$0 { summaryStore.dismiss() } }
+                )) {
+                    PostRunSummaryView()
                 }
         }
     }
