@@ -32,8 +32,45 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         var asOf: Date
     }
 
+    /// A named place near the runner, with a map-plottable coordinate.
+    /// `coordinate` is already in Apple-Maps display space (GCJ-02 inside
+    /// mainland China) — it came straight out of an MKLocalSearch — so it
+    /// drops onto a MapKit map with no further transform.
+    struct POIPin: Identifiable, Sendable {
+        let id = UUID()
+        let name: String
+        let category: String        // "hotel", "bar", "park", …
+        let coordinate: CLLocationCoordinate2D
+        let meters: Int
+        let isHotel: Bool
+        /// SF Symbol for the map marker.
+        var symbol: String {
+            switch category {
+            case "hotel": return "bed.double.fill"
+            case "bar", "brewery", "winery": return "wineglass.fill"
+            case "restaurant": return "fork.knife"
+            case "cafe", "bakery": return "cup.and.saucer.fill"
+            case "park": return "tree.fill"
+            case "gym": return "figure.run"
+            case "stadium": return "sportscourt.fill"
+            case "theatre": return "theatermasks.fill"
+            case "museum": return "building.columns.fill"
+            default: return "mappin"
+            }
+        }
+    }
+
     private(set) var snapshot: Snapshot?
     private(set) var isActive = false
+
+    // MARK: - Map state (all in Apple-Maps display space, ready to plot)
+
+    /// Where the runner is right now (display space). nil until first fix.
+    private(set) var displayCurrent: CLLocationCoordinate2D?
+    /// The path travelled so far (display space), downsampled for drawing.
+    private(set) var displayTrail: [CLLocationCoordinate2D] = []
+    /// Most recent nearby POIs as map pins (hotels first).
+    private(set) var poiPins: [POIPin] = []
     /// Simulated mode: fixes come from RunSimulator's synthetic route via
     /// `ingestSimulated` instead of CLLocationManager — the rest of the
     /// pipeline (geocode, POI, route shape, LLM payloads) runs unchanged,
@@ -144,6 +181,7 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         lastFix = nil
         lastFixAt = nil
         routeShape.reset()
+        displayCurrent = nil; displayTrail = []; poiPins = []
         if manager.authorizationStatus == .notDetermined {
             manager.requestWhenInUseAuthorization()
         }
@@ -177,6 +215,7 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         lastFix = nil
         lastFixAt = nil
         routeShape.reset()
+        displayCurrent = nil; displayTrail = []; poiPins = []
         log.info("[place] SIMULATED sampling started")
     }
 
@@ -220,6 +259,17 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         guard isActive else { return }
         // Every fix feeds the route geometry; geocoding/POI below throttles.
         routeShape.add(loc)
+        // Map state: current position + trail, in display space.
+        let disp = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
+        displayCurrent = disp
+        if let last = displayTrail.last {
+            let d = CLLocation(latitude: last.latitude, longitude: last.longitude)
+                .distance(from: CLLocation(latitude: disp.latitude, longitude: disp.longitude))
+            if d > 8 { displayTrail.append(disp) }
+        } else {
+            displayTrail.append(disp)
+        }
+        if displayTrail.count > 800 { displayTrail.removeFirst(displayTrail.count - 800) }
         guard !refreshing else { return }
         let movedEnough = lastFix.map { loc.distance(from: $0) > 300 } ?? true
         let waitedEnough = lastFixAt.map { Date().timeIntervalSince($0) > 120 } ?? true
@@ -235,20 +285,22 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
 
     private func refresh(at loc: CLLocation) async {
         async let placemarkTask = self.reverseGeocode(loc)
-        async let poisTask = self.nearbyPOIs(loc)
+        async let pinsTask = self.nearbyPOIs(loc)
         let placemark = await placemarkTask
-        let pois = await poisTask
+        let pins = await pinsTask
         guard isActive else { return }
+        poiPins = pins
+        let labels = pins.map { "\($0.name) (\($0.category), \($0.meters)m)" }
         let snap = Snapshot(
             road: placemark?.thoroughfare,
             area: placemark?.subLocality ?? placemark?.locality,
-            pois: pois,
+            pois: labels,
             asOf: Date()
         )
         snapshot = snap
         let where_ = [snap.road, snap.area].compactMap { $0 }.joined(separator: ", ")
         RunEventLog.shared.record("place.context", where_.isEmpty ? "(unnamed)" : where_,
-                                  data: ["pois": pois.joined(separator: " | "),
+                                  data: ["pois": labels.joined(separator: " | "),
                                          "route": routeShape.routeDescription ?? ""])
     }
 
@@ -256,29 +308,31 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         try? await geocoder.reverseGeocodeLocation(loc).first
     }
 
-    private func nearbyPOIs(_ loc: CLLocation) async -> [String] {
+    private func nearbyPOIs(_ loc: CLLocation) async -> [POIPin] {
         // MapKit's POI space is GCJ-02 inside mainland China; the raw
-        // WGS-84 fix must be shifted or results land ~500 m away.
+        // WGS-84 fix must be shifted or results land ~500 m away. The
+        // coordinates that come BACK are in that same display space, so
+        // the pins plot directly on a MapKit map.
         let center = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
         let request = MKLocalPointsOfInterestRequest(center: center, radius: 280)
         request.pointOfInterestFilter = MKPointOfInterestFilter(including: Self.categories)
         guard let response = try? await MKLocalSearch(request: request).start() else { return [] }
         let centerLoc = CLLocation(latitude: center.latitude, longitude: center.longitude)
-        struct Ranked { let label: String; let hotelRank: Int; let meters: Int }
-        let ranked: [Ranked] = response.mapItems.compactMap { item in
+        let pins: [POIPin] = response.mapItems.compactMap { item in
             guard let name = item.name, let itemLoc = item.placemark.location else { return nil }
-            let meters = Int(itemLoc.distance(from: centerLoc))
-            let cat = Self.label(item.pointOfInterestCategory)
-            return Ranked(
-                label: "\(name) (\(cat), \(meters)m)",
-                hotelRank: item.pointOfInterestCategory == .hotel ? 0 : 1,
-                meters: meters
+            let isHotel = item.pointOfInterestCategory == .hotel
+            return POIPin(
+                name: name,
+                category: Self.label(item.pointOfInterestCategory),
+                coordinate: itemLoc.coordinate,
+                meters: Int(itemLoc.distance(from: centerLoc)),
+                isHotel: isHotel
             )
         }
-        return ranked
-            .sorted { ($0.hotelRank, $0.meters) < ($1.hotelRank, $1.meters) }
-            .prefix(5)
-            .map(\.label)
+        return pins
+            .sorted { ($0.isHotel ? 0 : 1, $0.meters) < ($1.isHotel ? 0 : 1, $1.meters) }
+            .prefix(6)
+            .map { $0 }
     }
 
     private static func label(_ category: MKPointOfInterestCategory?) -> String {

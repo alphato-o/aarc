@@ -83,6 +83,7 @@ struct ActiveRunView: View {
         VStack(spacing: 10) {
             statusStrip
             cockpit
+            runMapCard
             liveChart
             // Extra breathing room above the music / subtitle widget so
             // it visually separates from the chart card. VStack spacing
@@ -120,6 +121,28 @@ struct ActiveRunView: View {
             }
         }
         .frame(height: 180)
+    }
+
+    /// Live route map — outdoor runs only, once we have a trail (or a
+    /// simulated planned route). POIs the runner passes are pinned;
+    /// hotels stand out pink.
+    @ViewBuilder
+    private var runMapCard: some View {
+        let place = PlaceContext.shared
+        if place.isActive, !place.displayTrail.isEmpty || !RunSimulator.shared.displayRouteCoords.isEmpty {
+            RunMapView(
+                trail: place.displayTrail,
+                current: place.displayCurrent,
+                pois: place.poiPins,
+                plannedRoute: RunSimulator.shared.displayRouteCoords,
+                follow: true
+            )
+            .frame(height: 190)
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.08), lineWidth: 1)
+            )
+        }
     }
 
     /// Slim status indicator strip. No interactive controls here — they

@@ -148,6 +148,13 @@ final class RunSimulator {
     /// Where the route started — surfaces in the Control Room panel.
     private(set) var routeStatus: String = ""
 
+    /// The planned synthetic route in Apple-Maps display space, for the
+    /// map overlay. Empty until the route is plotted (or for treadmill).
+    var displayRouteCoords: [CLLocationCoordinate2D] {
+        guard let r = simRoute else { return [] }
+        return r.coords.map(ChinaCoordinateTransform.displayCoordinate)
+    }
+
     private init() {}
 
     // MARK: - Lifecycle

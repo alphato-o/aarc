@@ -151,7 +151,7 @@ struct ControlRoomView: View {
         let place = PlaceContext.shared
         if place.isActive {
             Divider()
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack {
                     Text("PLACE").font(.caption2.bold()).foregroundStyle(.teal)
                     Spacer()
@@ -159,16 +159,33 @@ struct ControlRoomView: View {
                         .font(.caption2)
                         .foregroundStyle(place.llmInfo != nil ? .teal : .secondary)
                 }
-                if !simulator.routeStatus.isEmpty {
+                if !place.displayTrail.isEmpty || !simulator.displayRouteCoords.isEmpty {
+                    RunMapView(
+                        trail: place.displayTrail,
+                        current: place.displayCurrent,
+                        pois: place.poiPins,
+                        plannedRoute: simulator.displayRouteCoords,
+                        follow: true
+                    )
+                    .frame(height: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                } else if !simulator.routeStatus.isEmpty {
                     Text(simulator.routeStatus)
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 if let s = place.snapshot {
                     Text([s.road, s.area].compactMap { $0 }.joined(separator: ", "))
                         .font(.caption.bold())
-                    ForEach(s.pois.prefix(3), id: \.self) { poi in
-                        Text(poi).font(.caption2).foregroundStyle(.secondary)
-                            .lineLimit(1)
+                }
+                ForEach(place.poiPins.prefix(4)) { poi in
+                    HStack(spacing: 6) {
+                        Image(systemName: poi.symbol)
+                            .font(.caption2)
+                            .foregroundStyle(poi.isHotel ? .pink : .teal)
+                            .frame(width: 14)
+                        Text(poi.name).font(.caption2).lineLimit(1)
+                        Spacer()
+                        Text("\(poi.meters)m").font(.caption2).foregroundStyle(.secondary)
                     }
                 }
                 if let route = place.routeDescriptionNow {

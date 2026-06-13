@@ -46,6 +46,14 @@ struct VoiceItem: Identifiable, Sendable {
     /// gen→audible latency and feed the Director's lookahead. nil for
     /// scripted / cached / reaction lines.
     let decisionAt: Date?
+    /// When set, this short line is spoken (same voice) IMMEDIATELY before
+    /// `text`, gapless, in the same slot. Used to glue a recovery cue
+    /// ("oops — where was I…") onto a line that got cut by a milestone,
+    /// so the resumed line doesn't just restart cold. Cached per voice.
+    let resumePrefix: String?
+    /// True if this item is itself a resumed line — guards against a
+    /// resume getting cut and resumed again (no stacked prefixes).
+    let isResumed: Bool
 
     init(
         id: UUID = UUID(),
@@ -58,7 +66,9 @@ struct VoiceItem: Identifiable, Sendable {
         preferRemoteVoiceOverride: Bool? = nil,
         voiceId: String? = nil,
         segmentId: UUID? = nil,
-        decisionAt: Date? = nil
+        decisionAt: Date? = nil,
+        resumePrefix: String? = nil,
+        isResumed: Bool = false
     ) {
         self.id = id
         self.text = text
@@ -71,11 +81,24 @@ struct VoiceItem: Identifiable, Sendable {
         self.voiceId = voiceId
         self.segmentId = segmentId
         self.decisionAt = decisionAt
+        self.resumePrefix = resumePrefix
+        self.isResumed = isResumed
     }
 
     func isStale(at now: Date = .now) -> Bool {
         guard let expiresAfter else { return false }
         return now.timeIntervalSince(createdAt) > expiresAfter
+    }
+}
+
+extension VoiceFeedbackQueue {
+    /// The voice-flavoured recovery cue spoken before a resumed line.
+    /// Constant per voice so RemoteTTS caches it once and replays free.
+    static func resumePrefix(forVoiceId voiceId: String?) -> String {
+        if voiceId == RemoteTTS.jessicaVoiceId {
+            return "Mmh \u{2014} where was I? Someone cut me off. Oh, I remember now\u{2026}"
+        }
+        return "Oops \u{2014} where was I? Got cut off there. Oh, I remember now\u{2026}"
     }
 }
 
@@ -193,6 +216,25 @@ final class VoiceFeedbackQueue {
             currentlyPlaying = nil
             // Push the milestone to the front of the queue, then drain.
             pending.insert(item, at: 0)
+            // Don't let a cut line just vanish: re-queue it right behind the
+            // milestone with a gapless "oops, where was I" recovery cue, so
+            // the runner actually hears the thought that got guillotined.
+            // Resumes aren't themselves resumed (no stacked prefixes), and
+            // we don't bother resuming a line already near its expiry.
+            if !cur.isResumed, !cur.isStale() {
+                let resume = VoiceItem(
+                    text: cur.text,
+                    priority: cur.priority,
+                    source: cur.source + ".resumed",
+                    expiresAfter: cur.expiresAfter,
+                    voiceId: cur.voiceId,
+                    resumePrefix: Self.resumePrefix(forVoiceId: cur.voiceId),
+                    isResumed: true
+                )
+                pending.insert(resume, at: 1)   // right after the milestone
+                RunEventLog.shared.record("voice.resume", String(cur.text.prefix(80)),
+                                          data: ["source": resume.source])
+            }
             gapTask?.cancel()
             kickNext()
             return
@@ -299,7 +341,7 @@ final class VoiceFeedbackQueue {
         // bypass — they have to land on the marker. This is what gives the
         // run its "DJ speaks, then music breathes, then the next voice"
         // rhythm instead of voices stacking back-to-back.
-        if next.priority < .milestone {
+        if next.priority < .milestone, !next.isResumed {
             let waited = secondsSinceLastVoice
             let remaining = minMusicGapSeconds - waited
             if remaining > 0.3 {
@@ -377,6 +419,18 @@ final class VoiceFeedbackQueue {
                 await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId)
             }
             if Task.isCancelled { return }
+
+            // Gapless recovery cue: a resumed line speaks its "oops, where
+            // was I" prefix first, in the same voice, in this same slot —
+            // no music gap between the cue and the resumed thought.
+            if let prefix = item.resumePrefix {
+                await Speaker.shared.playSync(
+                    text: prefix,
+                    voiceId: item.voiceId,
+                    preferRemoteOverride: item.preferRemoteVoiceOverride
+                )
+                if Task.isCancelled { return }
+            }
 
             await Speaker.shared.playSync(
                 text: item.text,
