@@ -71,8 +71,8 @@ final class Conversation {
     /// music + a few Ricky jokes carry the pumped opening) shrinking late
     /// (frequent — Jessica's vivid fuel for the painful back half). Picked by
     /// `currentCooldown()` off RunDirector.progressFraction.
-    private let earlyCooldown: TimeInterval = 85
-    private let lateCooldown: TimeInterval = 26
+    private let earlyCooldown: TimeInterval = 150
+    private let lateCooldown: TimeInterval = 72
     /// Length gates (reuse the proxy's lengthMode contract).
     private let indulgentRoomFloor: TimeInterval = 70
     private let minGapBetweenIndulgent: TimeInterval = 240

@@ -146,7 +146,7 @@ final class VoiceFeedbackQueue {
     /// the old always-on duck, was what suppressed the music for half a
     /// minute). km splits / finish (.milestone) are exempt entirely — they
     /// preempt. ~6s ≈ a couple of bars. Tunable.
-    let minMusicGapSeconds: TimeInterval = 6
+    let minMusicGapSeconds: TimeInterval = 22
 
     /// Seconds of music since the last line ended. Large when nothing has
     /// played yet (so the opener never waits). Read by ContextualCoach /

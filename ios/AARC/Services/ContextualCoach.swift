@@ -46,11 +46,13 @@ final class ContextualCoach {
     private let quietStretchSilenceSeconds: TimeInterval = 240
 
     private let cooldownByTrigger: [AIClient.DynamicLineTrigger: TimeInterval] = [
-        .hrSpike: 180,
-        .paceDrop: 300,
-        .paceSurge: 300,
-        .quietStretch: 240,
-        .stationary: 90,  // short — if they're still standing still, troll again
+        // Thinned out so the run breathes (less chatter, lower LLM/TTS cost,
+        // more music). Was 180/300/300/240/90.
+        .hrSpike: 360,
+        .paceDrop: 480,
+        .paceSurge: 480,
+        .quietStretch: 420,
+        .stationary: 150,  // still trolls a stop, just not on a hair-trigger
     ]
 
     /// Don't even start firing reactive lines until the runner has been
@@ -101,7 +103,7 @@ final class ContextualCoach {
     private var lastMusicRiffAt: Date?
     /// Shorter than the 6-min cooldown of the original song-title-only
     /// riff because lyric-driven riffs are more interesting per dispatch.
-    private let musicRiffCooldown: TimeInterval = 150
+    private let musicRiffCooldown: TimeInterval = 300
     /// Backoff between music probes when the last probe didn't yield a
     /// usable lyric (instrumental track, unsupported language, lyrics
     /// not found, audio not from Spotify, etc.). Short enough to catch
