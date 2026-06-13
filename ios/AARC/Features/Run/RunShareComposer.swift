@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Photos
 
 /// Share composer presented from the post-run summary. Previews the card,
 /// lets the runner pick the centrepiece quote + format, and exports an image
@@ -17,17 +18,25 @@ struct RunShareComposer: View {
     @State private var shareItems: [Any] = []
     @State private var showShare = false
 
+    @State private var preview: UIImage?
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    if let model = model {
-                        ShareCardView(model: model)
-                            .scaleEffect(previewScale(model), anchor: .top)
-                            .frame(width: UIScreen.main.bounds.width - 40,
-                                   height: (UIScreen.main.bounds.width - 40) / model.aspect)
+                    // True WYSIWYG: show the exact rendered card image, not a
+                    // scaled live view (scaleEffect kept the 1080pt layout
+                    // bounds and rendered blank/clipped — the "wonky preview").
+                    if let preview {
+                        Image(uiImage: preview)
+                            .resizable().scaledToFit()
+                            .frame(maxWidth: .infinity)
                             .clipShape(RoundedRectangle(cornerRadius: 14))
                             .shadow(radius: 12)
+                    } else {
+                        RoundedRectangle(cornerRadius: 14).fill(.black.opacity(0.3))
+                            .aspectRatio(aspect, contentMode: .fit)
+                            .overlay(ProgressView())
                     }
                     quotePicker
                     formatPicker
@@ -42,8 +51,17 @@ struct RunShareComposer: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .sheet(isPresented: $showShare) { ActivityView(items: shareItems) }
+            .onAppear { regenPreview() }
+            .onChange(of: aspect) { _, _ in regenPreview() }
+            .onChange(of: quoteIdx) { _, _ in regenPreview() }
+            .onChange(of: store.finalRoast) { _, _ in regenPreview() }
         }
         .presentationDetents([.large])
+    }
+
+    private func regenPreview() {
+        guard let m = model else { return }
+        preview = ShareExport.image(m)
     }
 
     // MARK: model
@@ -86,10 +104,6 @@ struct RunShareComposer: View {
             quote: q.text, who: q.who, heardAtKm: nil, aspect: aspect)
     }
 
-    private func previewScale(_ m: ShareCardModel) -> CGFloat {
-        (UIScreen.main.bounds.width - 40) / 1080
-    }
-
     // MARK: controls
 
     @ViewBuilder private var quotePicker: some View {
@@ -110,13 +124,23 @@ struct RunShareComposer: View {
     }
 
     private var actions: some View {
-        HStack(spacing: 12) {
-            Button { shareImage() } label: {
-                Label("Image", systemImage: "photo").frame(maxWidth: .infinity)
-            }.buttonStyle(.borderedProminent).tint(.orange)
-            Button { Task { await shareVideo() } } label: {
-                Label("Video", systemImage: "play.rectangle.fill").frame(maxWidth: .infinity)
-            }.buttonStyle(.bordered).tint(.orange)
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                Button { shareImage() } label: {
+                    Label("Share image", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
+                }.buttonStyle(.borderedProminent).tint(.orange)
+                Button { Task { await shareVideo() } } label: {
+                    Label("Share video", systemImage: "play.rectangle.fill").frame(maxWidth: .infinity)
+                }.buttonStyle(.bordered).tint(.orange)
+            }
+            HStack(spacing: 12) {
+                Button { saveImageToPhotos() } label: {
+                    Label("Save image", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity)
+                }.buttonStyle(.bordered)
+                Button { Task { await saveVideoToPhotos() } } label: {
+                    Label("Save video", systemImage: "arrow.down.to.line").frame(maxWidth: .infinity)
+                }.buttonStyle(.bordered)
+            }
         }
         .controlSize(.large)
         .disabled(busy)
@@ -150,6 +174,64 @@ struct RunShareComposer: View {
         } catch {
             busy = false; status = "Video render failed."
         }
+    }
+
+    // MARK: save to Photos (add-only — we only ever write)
+
+    private func saveImageToPhotos() {
+        guard let m = model, let img = ShareExport.image(m) else { return }
+        Task {
+            let ok = await PhotoSaver.save(image: img)
+            status = ok ? "Saved to Photos \u{2713}" : "Photos access denied."
+        }
+    }
+
+    private func saveVideoToPhotos() async {
+        guard let m = model else { return }
+        let q = selectedQuote
+        guard let voiceId = q.voiceId else { status = "No voice audio for this line."; return }
+        busy = true; status = "Rendering voice video\u{2026}"
+        await RemoteTTS.shared.prefetch(q.text, voiceId: voiceId)
+        let key = AudioCache.key(voiceId: voiceId, text: q.text)
+        guard let audioURL = await AudioCache.shared.url(forKey: key) else {
+            busy = false; status = "Couldn\u{2019}t load the voice audio."; return
+        }
+        do {
+            let url = try await ShareExport.video(model: m, audioURL: audioURL)
+            let ok = await PhotoSaver.save(videoURL: url)
+            busy = false; status = ok ? "Saved to Photos \u{2713}" : "Photos access denied."
+        } catch {
+            busy = false; status = "Video render failed."
+        }
+    }
+}
+
+/// Add-only Photos writes — request `.addOnly` authorization (no read).
+enum PhotoSaver {
+    static func save(image: UIImage) async -> Bool {
+        guard await authorized() else { return false }
+        return await withCheckedContinuation { cont in
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }) { ok, _ in cont.resume(returning: ok) }
+        }
+    }
+    static func save(videoURL: URL) async -> Bool {
+        guard await authorized() else { return false }
+        return await withCheckedContinuation { cont in
+            PHPhotoLibrary.shared().performChanges({
+                PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: videoURL)
+            }) { ok, _ in cont.resume(returning: ok) }
+        }
+    }
+    private static func authorized() async -> Bool {
+        let s = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+        if s == .authorized || s == .limited { return true }
+        if s == .notDetermined {
+            let granted = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            return granted == .authorized || granted == .limited
+        }
+        return false
     }
 }
 

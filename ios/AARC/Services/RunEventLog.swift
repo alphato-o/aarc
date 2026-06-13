@@ -379,8 +379,15 @@ final class RunEventLog {
             return
         }
         let ok = await postRunBody(runId: runId, body: body, token: token, attempts: attempts, spacing: spacing)
-        if ok { removePending(runId) }
+        if ok {
+            removePending(runId)
+            await MainActor.run { RunEventLog.syncedRunId = runId }
+        }
     }
+
+    /// The most recently cloud-synced run id — the post-run summary waits on
+    /// this (alongside the closing roast) before it stops "preparing".
+    @MainActor static var syncedRunId: UUID?
 
     /// Upload an arbitrary JSONL event stream as a run to `/ingest-run`.
     /// Reusable entry point (used by `RunHistoryBackfill` to push

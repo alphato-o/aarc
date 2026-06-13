@@ -45,7 +45,9 @@
 	<string>AARC reads motion data to confirm step count and cadence on indoor (treadmill) runs.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>AARC transcribes your voice notes on-device so it can pass the text to the AI companion for a reply.</string>
-	<key>NSSupportsLiveActivities</key>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+		<string>AARC saves your run share cards and videos to your photo library. It only ever adds — it never reads your photos.</string>
+		<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIBackgroundModes</key>
 	<array>

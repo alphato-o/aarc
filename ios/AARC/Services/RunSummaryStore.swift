@@ -54,6 +54,14 @@ final class RunSummaryStore {
     private(set) var finalRoastWho: String = "ricky"
     private(set) var finalRoastFailed = false
 
+    /// `.preparing` shows the interstitial; `.ready` reveals the full summary
+    /// once the closing roast is in AND the run has synced to the cloud (or we
+    /// hit the timeout). So the voice can play the instant the summary appears.
+    enum Phase { case preparing, ready }
+    private(set) var phase: Phase = .preparing
+    private(set) var roastReady = false
+    private(set) var synced = false
+
     var isPresenting: Bool { summary != nil }
 
     /// Build the summary from live state at run end. Safe to read
@@ -110,13 +118,39 @@ final class RunSummaryStore {
         )
         finalRoast = nil
         finalRoastFailed = false
+        phase = .preparing
+        roastReady = false
+        synced = false
         Task { await self.generateFinalRoast() }
+        Task { await self.awaitReadiness(runId: runId) }
+    }
+
+    /// Hold the interstitial until BOTH the closing roast is in and the run
+    /// has synced to the cloud — but never longer than 60s, so a stuck
+    /// upstream or upload can't trap the runner on the spinner.
+    private func awaitReadiness(runId: UUID) async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+        while ContinuousClock.now < deadline {
+            roastReady = finalRoast != nil || finalRoastFailed
+            synced = (RunEventLog.syncedRunId == runId)
+            if roastReady && synced { break }
+            try? await Task.sleep(for: .milliseconds(300))
+            if summary?.runId != runId { return }   // dismissed / superseded
+        }
+        guard summary?.runId == runId else { return }
+        phase = .ready
+        // Play the closer the moment the summary reveals (if it arrived).
+        if let text = finalRoast {
+            let voiceId = finalRoastWho == "jessica" ? RemoteTTS.jessicaVoiceId : RemoteTTS.voiceId
+            await Speaker.shared.playSync(text: text, voiceId: voiceId)
+        }
     }
 
     func dismiss() {
         summary = nil
         finalRoast = nil
         finalRoastFailed = false
+        phase = .preparing
         Speaker.shared.stopActiveBackend()
     }
 
@@ -191,9 +225,8 @@ final class RunSummaryStore {
             guard summary?.runId == s.runId else { return }
             finalRoastWho = who
             finalRoast = result.text
-            // Speak it — the run's done, the music's off, this is the closer.
-            let voiceId = useJessica ? RemoteTTS.jessicaVoiceId : RemoteTTS.voiceId
-            await Speaker.shared.playSync(text: result.text, voiceId: voiceId)
+            // Playback happens when the summary reveals (awaitReadiness),
+            // so the voice starts exactly as the screen appears — no double-play.
         } catch {
             guard summary?.runId == s.runId else { return }
             finalRoastFailed = true

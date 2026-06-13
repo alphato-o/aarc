@@ -18,6 +18,11 @@ struct RunMapView: View {
     var plannedRoute: [CLLocationCoordinate2D] = []
     var follow: Bool = false
     var showsColorToggle: Bool = false
+    /// Strip the map back as far as MapKit allows: muted emphasis (faint
+    /// roads, minimal labels) + heavier green wash, the route as the only
+    /// thing that pops. Used post-run. (MapKit can't fully remove road
+    /// labels like Nike's custom tiles — this is the closest stock can get.)
+    var minimalChrome: Bool = false
 
     enum ColorMode: String { case pace, hr }
     @State private var mode: ColorMode = .pace
@@ -52,9 +57,11 @@ struct RunMapView: View {
                     }
                 }
             }
-            .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
+            .mapStyle(.standard(elevation: .flat,
+                                emphasis: minimalChrome ? .muted : .automatic,
+                                pointsOfInterest: .excludingAll, showsTraffic: false))
             // On-brand green wash — can't recolor Apple's tiles, so tint over them.
-            Color(red: 0.29, green: 0.39, blue: 0.31).opacity(0.18)
+            Color(red: 0.29, green: 0.39, blue: 0.31).opacity(minimalChrome ? 0.30 : 0.18)
                 .blendMode(.color).allowsHitTesting(false)
 
             if showsColorToggle {

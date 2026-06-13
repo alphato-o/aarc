@@ -99,8 +99,11 @@ struct ShareCardView: View {
     private var quoteBlock: some View {
         let boxW = W - P * 2
         let boxH = quoteBottom - quoteTop
+        // Measure against a tighter width — the karaoke flow adds per-word
+        // padding + inter-word spacing the plain bounding-rect doesn't model,
+        // so this keeps the fitted size conservative (no vertical clipping).
         let size = Self.fittedSerifSize("\u{201C}\(model.quote)\u{201D}",
-                                        boxW: boxW, boxH: boxH,
+                                        boxW: boxW * 0.86, boxH: boxH,
                                         maxSize: H > 1200 ? 80 : 64)
         return KaraokeQuote(text: "\u{201C}\(model.quote)\u{201D}", progress: progress, fontSize: size)
             .frame(width: boxW, height: boxH)
@@ -204,15 +207,21 @@ struct KaraokeQuote: View {
 
     @ViewBuilder private func wordView(_ w: String, glow g: Double) -> some View {
         let read = g < 0
+        let lit = max(0, g)
         let cream = Color(red: 0.957, green: 0.949, blue: 0.910)
+        // CONSTANT padding for every word so the highlight pill can fade in
+        // without changing the word's width — otherwise the whole paragraph
+        // reflows and "dances" as the highlight sweeps across. Only opacity,
+        // fill and shadow animate; layout (size, weight, spacing) is fixed.
         Text(w)
             .font(.custom("Georgia-Italic", size: fontSize))
             .foregroundStyle(cream.opacity(read ? 1 : 0.40 + 0.60 * g))
-            .padding(.horizontal, g > 0.04 ? 0.1 * fontSize : 0)
-            .background(g > 0.04 ? Color(red: 0.56, green: 0.72, blue: 0.60).opacity(0.18 * g) : .clear,
+            .padding(.horizontal, 0.08 * fontSize)
+            .padding(.vertical, 0.02 * fontSize)
+            .background(Color(red: 0.56, green: 0.72, blue: 0.60).opacity(0.20 * lit),
                         in: RoundedRectangle(cornerRadius: 8))
-            .shadow(color: Color(red: 0.81, green: 0.91, blue: 0.84).opacity(0.9 * max(0, g)),
-                    radius: 14 * max(0, g))
+            .shadow(color: Color(red: 0.81, green: 0.91, blue: 0.84).opacity(0.9 * lit),
+                    radius: 14 * lit)
     }
 }
 

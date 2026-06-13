@@ -12,13 +12,43 @@ struct PostRunSummaryView: View {
     var body: some View {
         Group {
             if let s = store.summary {
-                content(s)
+                if store.phase == .preparing {
+                    interstitial
+                } else {
+                    content(s)
+                }
             } else {
                 Color.black.ignoresSafeArea()
             }
         }
         .sheet(item: $share) { target in
             RunShareComposer(target: target)
+        }
+    }
+
+    /// Shown while the closing roast generates + the run syncs (max 60s).
+    private var interstitial: some View {
+        VStack(spacing: 22) {
+            GobletLogo().frame(width: 64, height: 64).opacity(0.9)
+            ProgressView().controlSize(.large).tint(.orange)
+            Text("Preparing your summary\u{2026}")
+                .font(.headline)
+            VStack(spacing: 6) {
+                readyRow("Writing the verdict", done: store.roastReady)
+                readyRow("Saving the run", done: store.synced)
+            }
+            .font(.subheadline)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(red: 0.04, green: 0.05, blue: 0.05).ignoresSafeArea())
+        .preferredColorScheme(.dark)
+    }
+
+    private func readyRow(_ label: String, done: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: done ? "checkmark.circle.fill" : "circle.dotted")
+                .foregroundStyle(done ? .green : .secondary)
+            Text(label).foregroundStyle(done ? .primary : .secondary)
         }
     }
 
@@ -159,8 +189,8 @@ struct PostRunSummaryView: View {
         card("ROUTE") {
             VStack(alignment: .leading, spacing: 8) {
                 RunMapView(points: s.trail, current: s.trail.last?.coord,
-                           pois: s.pois, plannedRoute: s.plannedRoute,
-                           follow: false, showsColorToggle: true)
+                           pois: [], plannedRoute: s.plannedRoute,
+                           follow: false, showsColorToggle: true, minimalChrome: true)
                     .frame(height: 240)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 if let route = s.routeDescription {
