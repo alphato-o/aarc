@@ -131,9 +131,11 @@ final class RunSummaryStore {
     private func awaitReadiness(runId: UUID) async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         while ContinuousClock.now < deadline {
-            roastReady = finalRoast != nil || finalRoastFailed
+            // roastReady is set by generateFinalRoast ONLY after the audio is
+            // cached — so we hold the interstitial until the voice can play
+            // instantly on reveal (not just until the text arrived).
             synced = (RunEventLog.syncedRunId == runId)
-            if roastReady && synced { break }
+            if (roastReady || finalRoastFailed) && synced { break }
             try? await Task.sleep(for: .milliseconds(300))
             if summary?.runId != runId { return }   // dismissed / superseded
         }
@@ -197,7 +199,7 @@ final class RunSummaryStore {
                     runContext: ctx,
                     personalNotes: PersonalContextStore.shared.bullets,
                     likedLineExamples: LikedLinesStore.shared.vibeExemplars(personalityId: "jessica"),
-                    lengthMode: "medium"
+                    lengthMode: "summary"
                 )
                 result = try await AIClient.shared.reactLine(req)
             } else {
@@ -225,8 +227,13 @@ final class RunSummaryStore {
             guard summary?.runId == s.runId else { return }
             finalRoastWho = who
             finalRoast = result.text
-            // Playback happens when the summary reveals (awaitReadiness),
-            // so the voice starts exactly as the screen appears — no double-play.
+            // Pre-render the AUDIO now so the interstitial holds until the
+            // voice is actually CACHED — then reveal + playback are instant,
+            // not "summary shows, then silence while TTS fetches".
+            let voiceId = useJessica ? RemoteTTS.jessicaVoiceId : RemoteTTS.voiceId
+            await RemoteTTS.shared.prefetch(result.text, voiceId: voiceId)
+            guard summary?.runId == s.runId else { return }
+            roastReady = true
         } catch {
             guard summary?.runId == s.runId else { return }
             finalRoastFailed = true

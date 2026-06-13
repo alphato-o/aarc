@@ -17,6 +17,7 @@ const MAX_TOKENS_BY_LENGTH: Record<JessicaLengthMode, number> = {
     quip: 180,
     medium: 360,
     indulgent: 700,
+    summary: 260,
 };
 
 /// Second-voice reaction. Jessica reacts to a line the primary coach (Ricky)

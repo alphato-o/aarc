@@ -285,7 +285,7 @@ export const ReactLineRequestSchema = z.object({
     ///   "quip"      — one short sentence (<=140 chars, ~6-10s audio)
     ///   "medium"    — 2-3 sentences (~220-380 chars)  [default when absent]
     ///   "indulgent" — the long immersive passage (~450-650 chars), used rarely
-    lengthMode: z.enum(["quip", "medium", "indulgent"]).optional(),
+    lengthMode: z.enum(["quip", "medium", "indulgent", "summary"]).optional(),
 });
 
 export type ReactLineRequest = z.infer<typeof ReactLineRequestSchema>;
