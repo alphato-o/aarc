@@ -73,6 +73,9 @@ final class PersonalContextStore {
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+            // Clamp each bullet under the proxy's 400-char cap — one long
+            // line must never 400 the whole request (kills Ricky AND Jessica).
+            .map { $0.count > 380 ? String($0.prefix(380)) : $0 }
     }
 
     /// Hard cap on bullets sent to the proxy per call. Matches the

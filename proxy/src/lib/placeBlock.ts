@@ -16,7 +16,7 @@ export function pushPlaceBlock(lines: string[], place: PlaceInfo | undefined): v
         lines.push(`- location: ${[place.road, place.area].filter(Boolean).join(", ")}`);
     }
     if (place.pois && place.pois.length > 0) {
-        lines.push(`- nearby right now: ${place.pois.join("; ")}`);
+        lines.push(`- notable places nearby (say the name naturally, as a local would — no address, no "hotel" tacked on): ${place.pois.join("; ")}`);
     }
     if (place.route) {
         lines.push(`- route so far: ${place.route}`);

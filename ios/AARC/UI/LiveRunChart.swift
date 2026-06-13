@@ -273,16 +273,18 @@ struct LiveRunChart: View {
     }
 
     private var hrRange: (min: Double, max: Double) {
-        // Top is PINNED at 200 bpm so a typical ~180 max reads at ~90%
-        // height and the red bars never cap / slam the rail — they keep
-        // their resolution near the top where the runner spends the back
-        // half of a hard run. Bottom tracks the data (floored) for detail
-        // lower down; implausible artifacts are dropped either way.
+        // Data-driven, mirroring speedRange: the axis hugs the actual
+        // min/max with headroom so a 95-bpm jog fills the chart with real
+        // peaks and troughs instead of a flat line squashed under a fixed
+        // 200 rail (the old bug). 15% padding keeps the tallest bar off
+        // the rail; a small floor span avoids a degenerate flat scale when
+        // HR barely moves.
         var values = samples.compactMap(\.heartRate)
         if let live = liveHeartRateBPM, live > 0 { values.append(live) }
         values = values.filter { Self.plausibleHR.contains($0) }
-        let lo = values.min() ?? 100
-        return (max(40, lo - 10), 200)
+        guard let lo = values.min(), let hi = values.max() else { return (100, 160) }
+        let pad = max(4, (hi - lo) * 0.15)
+        return (max(30, lo - pad), hi + pad)
     }
 
     private var hrRangeLabel: String {

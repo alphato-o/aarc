@@ -55,6 +55,10 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
             case "stadium": return "sportscourt.fill"
             case "theatre": return "theatermasks.fill"
             case "museum": return "building.columns.fill"
+            case "mall": return "bag.fill"
+            case "landmark": return "building.2.fill"
+            case "attraction": return "star.fill"
+            case "government": return "shield.fill"
             default: return "mappin"
             }
         }
@@ -96,11 +100,47 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
     private var refreshing = false
     private let log = Logger(subsystem: "club.aarun.AARC", category: "PlaceContext")
 
-    /// Categories worth a coach line. Order is irrelevant here — ranking
-    /// happens in `nearbyPOIs` (hotels first, then by distance).
-    private static let categories: [MKPointOfInterestCategory] = [
-        .hotel, .nightlife, .brewery, .winery, .restaurant, .cafe, .bakery,
-        .park, .fitnessCenter, .stadium, .theater, .museum,
+    /// "Worth mentioning" search terms — only landmark-grade places, not
+    /// every cafe. MapKit exposes no prominence score, so we query a curated
+    /// set of high-signal terms (in zh for China so names come back local)
+    /// and then prune by name. Hotels are filtered hard to the prestige tier
+    /// (no hostels / budget chains — the runner isn't fantasising about a
+    /// Youth Hostel). category drives the marker; isHotel keeps hotels first.
+    private struct POITerm { let term: String; let category: String; let isHotel: Bool }
+    private static let poiTerms: [POITerm] = [
+        // prestige hotels (brand names pull the real ones to the top)
+        POITerm(term: "豪华酒店", category: "hotel", isHotel: true),
+        POITerm(term: "五星级酒店", category: "hotel", isHotel: true),
+        POITerm(term: "luxury hotel", category: "hotel", isHotel: true),
+        // landmarks / prominent buildings
+        POITerm(term: "地标", category: "landmark", isHotel: false),
+        POITerm(term: "landmark", category: "landmark", isHotel: false),
+        POITerm(term: "tower", category: "landmark", isHotel: false),
+        // malls
+        POITerm(term: "购物中心", category: "mall", isHotel: false),
+        POITerm(term: "shopping mall", category: "mall", isHotel: false),
+        // parks + attractions
+        POITerm(term: "公园", category: "park", isHotel: false),
+        POITerm(term: "景点", category: "attraction", isHotel: false),
+        POITerm(term: "park", category: "park", isHotel: false),
+        // civic / culture
+        POITerm(term: "博物馆", category: "museum", isHotel: false),
+        POITerm(term: "体育场", category: "stadium", isHotel: false),
+        POITerm(term: "政府", category: "government", isHotel: false),
+    ]
+    /// Hotel name tokens that mean "prestige" — keep these.
+    private static let hotelKeepTokens = [
+        "shangri", "ritz", "four seasons", "四季", "st. regis", "瑞吉", "mandarin", "文华",
+        "park hyatt", "柏悦", "grand hyatt", "凯悦", "waldorf", "华尔道夫", "rosewood", "瑞吉",
+        "peninsula", "半岛", "kerry", "嘉里", "jw marriott", "万豪", "intercontinental", "洲际",
+        "hilton", "希尔顿", "kempinski", "凯宾斯基", "westin", "威斯汀", "sheraton", "喜来登",
+        "fairmont", "费尔蒙", "conrad", "康莱德", "edition", "raffles", "莱佛士", "sofitel", "索菲特",
+        "豪华", "国际", "大酒店", "grand hotel", "regent", "丽晶",
+    ]
+    /// Anything containing these is NOT worth a mention — drop it.
+    private static let dropTokens = [
+        "hostel", "旅舍", "招待所", "青年", "宾馆", "快捷", "express", "inn", "motel", "budget",
+        "如家", "汉庭", "7天", "锦江之星", "公寓", "民宿", "客栈",
     ]
 
     /// Geometry of the run so far. Detects the classic exercise patterns —
@@ -251,7 +291,14 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
             return route.map { AIClient.PlaceInfo(road: nil, area: nil, pois: [], route: $0) }
         }
         if s.road == nil && s.area == nil && s.pois.isEmpty && route == nil { return nil }
-        return AIClient.PlaceInfo(road: s.road, area: s.area, pois: s.pois, route: route)
+        // Clamp hard so an over-long field can never 400 the LLM request
+        // (the avalanche that silently killed Jessica). pois are already
+        // name-only; cap count + length defensively.
+        return AIClient.PlaceInfo(
+            road: s.road.map { String($0.prefix(100)) },
+            area: s.area.map { String($0.prefix(100)) },
+            pois: Array(s.pois.prefix(6)).map { String($0.prefix(60)) },
+            route: route.map { String($0.prefix(180)) })
     }
 
     // MARK: - CLLocationManagerDelegate
@@ -316,7 +363,9 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         let pins = await pinsTask
         guard isActive else { return }
         poiPins = pins
-        let labels = pins.map { "\($0.name) (\($0.category), \($0.meters)m)" }
+        // NAME ONLY for the coaches — a local says "the Shangri-La", not
+        // "Shangri-La (hotel, 140m)". Clamp each for the proxy's per-entry cap.
+        let labels = pins.map { String($0.name.prefix(60)) }
         let snap = Snapshot(
             road: placemark?.thoroughfare,
             area: placemark?.subLocality ?? placemark?.locality,
@@ -347,35 +396,28 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         return try? await geocoder.reverseGeocodeLocation(loc, preferredLocale: locale).first
     }
 
-    /// Categories searched as natural-language terms — the points-of-interest
-    /// request returns nothing in mainland China (AutoNavi backend), so we
-    /// query terms via MKLocalSearch and merge. Hotels first by design.
-    private static let searchTerms: [(term: String, category: String, hotel: Bool)] = [
-        ("hotel", "hotel", true), ("restaurant", "restaurant", false),
-        ("bar", "bar", false), ("cafe", "cafe", false),
-        ("park", "park", false), ("gym", "gym", false),
-    ]
-
     private func nearbyPOIs(_ loc: CLLocation) async -> [POIPin] {
         // MapKit's POI space is GCJ-02 inside mainland China; shift the
         // search centre or results land ~500 m off. Returned coordinates
         // are in that same display space, so pins plot directly on the map.
         let center = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
         let centerLoc = CLLocation(latitude: center.latitude, longitude: center.longitude)
+        // Wider radius for landmark-grade places (you'd mention a tower 700m
+        // away; not a cafe 700m away).
         let region = MKCoordinateRegion(center: center,
-                                        latitudinalMeters: 700, longitudinalMeters: 700)
-        // Fire the term searches concurrently.
+                                        latitudinalMeters: 1400, longitudinalMeters: 1400)
         let groups = await withTaskGroup(of: [POIPin].self) { group -> [POIPin] in
-            for t in Self.searchTerms {
+            for t in Self.poiTerms {
                 group.addTask { await Self.search(term: t, region: region, center: centerLoc) }
             }
             var all: [POIPin] = []
             for await pins in group { all.append(contentsOf: pins) }
             return all
         }
-        // Dedupe by name, keep nearest, hotels first then by distance.
+        // Dedupe by name, keep nearest; prune to prominent only; hotels first.
         var byName: [String: POIPin] = [:]
-        for p in groups where p.meters <= 400 {
+        for p in groups {
+            if !Self.isProminent(p) { continue }
             if let e = byName[p.name], e.meters <= p.meters { continue }
             byName[p.name] = p
         }
@@ -384,19 +426,48 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
             .prefix(6).map { $0 }
     }
 
-    private static func search(term: (term: String, category: String, hotel: Bool),
-                               region: MKCoordinateRegion, center: CLLocation) async -> [POIPin] {
+    /// Keep only places worth a coach line: hotels must be prestige-tier;
+    /// everything within a category-appropriate radius; nothing on the
+    /// budget/hostel droplist.
+    private static func isProminent(_ p: POIPin) -> Bool {
+        let n = p.name.lowercased()
+        for d in dropTokens where n.contains(d) { return false }
+        if p.isHotel {
+            // Hotels: must read prestige AND be reasonably close.
+            guard p.meters <= 600 else { return false }
+            return hotelKeepTokens.contains { n.contains($0) }
+        }
+        // Landmarks/malls/parks/etc: a generous radius, name must be real.
+        let radius = (p.category == "park" || p.category == "landmark") ? 900 : 600
+        return p.meters <= radius && p.name.count >= 2
+    }
+
+    private static func search(term: POITerm, region: MKCoordinateRegion, center: CLLocation) async -> [POIPin] {
         let req = MKLocalSearch.Request()
         req.naturalLanguageQuery = term.term
         req.region = region
         req.resultTypes = .pointOfInterest
         guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
         return resp.mapItems.compactMap { item in
-            guard let name = item.name, let l = item.placemark.location else { return nil }
-            return POIPin(name: name, category: term.category,
+            guard let raw = item.name, let l = item.placemark.location else { return nil }
+            return POIPin(name: shortenName(raw), category: term.category,
                           coordinate: l.coordinate, meters: Int(l.distance(from: center)),
-                          isHotel: term.hotel)
+                          isHotel: term.isHotel)
         }
+    }
+
+    /// How a local would say it: trim generic suffixes / parenthetical
+    /// branch+address noise so the coach says "Shangri-La", not
+    /// "Shangri-La Hotel (Pudong Riverside Wing, 33 Fucheng Rd)".
+    private static func shortenName(_ raw: String) -> String {
+        var s = raw
+        if let paren = s.firstIndex(where: { $0 == "(" || $0 == "（" }) { s = String(s[..<paren]) }
+        if let dash = s.range(of: " - ") { s = String(s[..<dash.lowerBound]) }
+        s = s.trimmingCharacters(in: .whitespaces)
+        for suffix in ["大酒店", "酒店", " Hotel", " Hotels", " Resort"] {
+            if s.hasSuffix(suffix), s.count > suffix.count + 1 { s = String(s.dropLast(suffix.count)) }
+        }
+        return s.trimmingCharacters(in: .whitespaces)
     }
 
     private static func label(_ category: MKPointOfInterestCategory?) -> String {
