@@ -1,7 +1,7 @@
 {
   "name": "aarc-proxy",
   "version": "0.0.1",
-  "description": "AARC API proxy — Cloudflare Worker at api.aarun.club",
+  "description": "AARC API proxy \u2014 Cloudflare Worker at api.aarun.club",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -9,7 +9,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy:gateway": "bash server/deploy-docker.sh",
+    "deploy:all": "npm run deploy && npm run deploy:gateway"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250109.0",
