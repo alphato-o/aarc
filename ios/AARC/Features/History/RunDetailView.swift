@@ -11,7 +11,9 @@ struct RunDetailView: View {
 
     @State private var hrSeries: [HealthKitReader.SeriesPoint] = []
     @State private var paceSeries: [HealthKitReader.SeriesPoint] = []
-    @State private var routeCoords: [CLLocationCoordinate2D] = []
+    /// Trail with per-point pace/HR so the route is performance-colored
+    /// (same component + hues as the live + summary maps).
+    @State private var trailPoints: [PlaceContext.TrailPoint] = []
     @State private var isLoading = true
     @State private var loadError: String?
 
@@ -73,13 +75,11 @@ struct RunDetailView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Route")
                 .font(.subheadline.bold())
-            if routeCoords.count >= 2 {
-                Map {
-                    MapPolyline(coordinates: routeCoords)
-                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 4, lineCap: .round, lineJoin: .round))
-                }
-                .frame(height: 220)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+            if trailPoints.count >= 2 {
+                RunMapView(points: trailPoints, current: nil, pois: [],
+                           showsColorToggle: true, minimalChrome: true)
+                    .frame(height: 220)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             } else if isLoading {
                 placeholderBox(text: "Loading route…", height: 100)
             } else {
@@ -279,6 +279,19 @@ struct RunDetailView: View {
 
     // MARK: - Loading
 
+    /// Nearest series sample to a timestamp (used to color route points by HR).
+    /// nil when there are no samples. Series are time-ordered.
+    private static func nearestValue(to t: Date, in series: [HealthKitReader.SeriesPoint]) -> Double? {
+        guard !series.isEmpty else { return nil }
+        var best = series[0]
+        var bestGap = abs(series[0].timestamp.timeIntervalSince(t))
+        for p in series.dropFirst() {
+            let gap = abs(p.timestamp.timeIntervalSince(t))
+            if gap < bestGap { best = p; bestGap = gap }
+        }
+        return best.value
+    }
+
     private func loadData() async {
         guard let uuid = run.healthKitWorkoutUUID else {
             // No HealthKit workout (test / simulated run) — render from the
@@ -287,9 +300,9 @@ struct RunDetailView: View {
                let s = try? JSONDecoder().decode(StoredRunSeries.self, from: blob) {
                 self.hrSeries = s.hr.map { .init(timestamp: $0.t, value: $0.v) }
                 self.paceSeries = s.pace.map { .init(timestamp: $0.t, value: $0.v) }
-                // Trail is already display-space — plot directly.
-                self.routeCoords = s.trail.map {
-                    CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+                // Trail is already display-space and carries per-point pace/HR.
+                self.trailPoints = s.trail.map {
+                    .init(coord: .init(latitude: $0.lat, longitude: $0.lon), kmh: $0.kmh, hr: $0.hr)
                 }
             }
             isLoading = false
@@ -312,9 +325,14 @@ struct RunDetailView: View {
             // China are GCJ-02. Transform before plotting so the route
             // sits on top of the actual streets (matching what Apple
             // Fitness shows). Outside China this is a no-op.
-            self.routeCoords = ChinaCoordinateTransform.displayCoordinates(
-                locations.map(\.coordinate)
-            )
+            let display = ChinaCoordinateTransform.displayCoordinates(locations.map(\.coordinate))
+            // Per-point pace (from CLLocation.speed) + nearest HR sample, so
+            // the route colors by performance like the live/summary maps.
+            self.trailPoints = zip(locations, display).map { loc, coord in
+                let kmh = loc.speed >= 0 ? loc.speed * 3.6 : nil
+                let hr = Self.nearestValue(to: loc.timestamp, in: hrPoints)
+                return .init(coord: coord, kmh: kmh, hr: hr)
+            }
             self.isLoading = false
         } catch {
             self.loadError = error.localizedDescription

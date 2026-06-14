@@ -58,8 +58,8 @@ struct ShareCardView: View {
     private var graphH: CGFloat { H > 1200 ? 110 : 92 }
     private var graphTop: CGFloat { kpiY - 56 - graphH }
     private var stampY: CGFloat { graphTop - 48 }
-    private var quoteTop: CGFloat { topY + 56 }
-    private var quoteBottom: CGFloat { stampY - 60 }
+    private var quoteTop: CGFloat { topY + 64 }
+    private var quoteBottom: CGFloat { stampY - 76 }
 
     var body: some View {
         if model.mapImage != nil { routeBody } else { quoteBody }
@@ -70,15 +70,15 @@ struct ShareCardView: View {
     private var routeBody: some View {
         // Compact map (rounded), quote gets the bulk, KPIs pinned above the
         // footer with a clear gap — no overlap.
-        let mapTop = topY + 28
+        let mapTop = topY + 32
         let mapH = model.mapImage!.size.height
         let mapBot = mapTop + mapH
         let footY = H - 56
-        let kpiTop = footY - 110
-        // Generous breathing room above + below the quote so the card isn't
-        // cramped between the map and the stats.
-        let qTop = mapBot + 70
-        let qBot = kpiTop - 64
+        let kpiTop = footY - 120
+        // Fixed, generous breathing room above + below the quote so the card
+        // never reads as cramped between the map and the stats.
+        let qTop = mapBot + 96
+        let qBot = kpiTop - 96
         let q = "\u{201C}\(model.quote)\u{201D}"
         return ZStack(alignment: .topLeading) {
             background
@@ -257,7 +257,9 @@ struct ShareCardView: View {
 }
 
 /// Serif quote whose words light up in sequence during video — full-bright
-/// once spoken, a glowing pill while being spoken, dim before. Lines centred.
+/// once spoken, a glowing pill while being spoken, dim before. Lines are
+/// left-aligned (a quote reads as a quote, and it matches the header/footer
+/// left margin).
 struct KaraokeQuote: View {
     let text: String
     let progress: Double
@@ -266,7 +268,7 @@ struct KaraokeQuote: View {
     private var words: [String] { text.split(separator: " ").map(String.init) }
 
     var body: some View {
-        FlowLayout(spacing: 0.28 * fontSize, lineSpacing: 0.30 * fontSize, alignment: .center) {
+        FlowLayout(spacing: 0.28 * fontSize, lineSpacing: 0.30 * fontSize, alignment: .leading) {
             ForEach(Array(words.enumerated()), id: \.offset) { i, w in
                 wordView(w, glow: glow(i))
             }

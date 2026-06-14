@@ -2,25 +2,20 @@ import SwiftUI
 import MapKit
 import UIKit
 
-/// Base map under the share-card route. Captures a LIVE offscreen MKMapView
-/// (the same thing the summary map uses, which renders fine in China) rather
-/// than MKMapSnapshotter — the snapshotter came back blank on-device. Muted
-/// config + POIs off + a light green wash, dark appearance. The trail is
-/// projected into the captured image's pixel space as performance-colored
-/// segments so the video can draw them progressively.
+/// Base map under the share-card route. Renders the tiles with
+/// `MKMapSnapshotter` — the purpose-built "map → UIImage" API. (The old
+/// approach captured an offscreen MKMapView with `drawHierarchy`, which never
+/// captured the Metal-rendered tile layer and so came back blank — the route
+/// drew but the map behind it didn't.) Muted config + POIs off + a green
+/// wash, dark appearance. The trail is projected into the snapshot's pixel
+/// space via `snapshot.point(for:)` as performance-colored segments, so the
+/// video can draw them progressively.
 ///
-/// Trail coords are display space (GCJ-02 in China); MKMapView renders the
-/// matching tiles and `convert(_:toPointTo:)` maps them straight in.
+/// Trail coords are display space (GCJ-02 in China); the snapshotter renders
+/// the matching tiles and projects display coords straight in.
 enum ShareMap {
     struct Segment: Sendable { let a: CGPoint; let b: CGPoint; let color: Color }
     struct Result { let image: UIImage; let segments: [Segment]; let start: CGPoint?; let finish: CGPoint? }
-
-    private final class RenderWaiter: NSObject, MKMapViewDelegate {
-        var done: ((Bool) -> Void)?
-        func mapViewDidFinishRenderingMap(_ mapView: MKMapView, fullyRendered: Bool) {
-            done?(fullyRendered); done = nil
-        }
-    }
 
     @MainActor
     static func render(points: [PlaceContext.TrailPoint],
@@ -32,50 +27,34 @@ enum ShareMap {
             center: coords[0], latitudinalMeters: 500, longitudinalMeters: 500)
 
         let size = CGSize(width: width, height: height)
-        let mapView = MKMapView(frame: CGRect(origin: .zero, size: size))
-        mapView.overrideUserInterfaceStyle = .dark
-        mapView.isUserInteractionEnabled = false
-        mapView.pointOfInterestFilter = .excludingAll
-        mapView.showsUserLocation = false
+        let options = MKMapSnapshotter.Options()
+        options.region = region
+        options.size = size
+        options.traitCollection = UITraitCollection(userInterfaceStyle: .dark)
         if #available(iOS 17.0, *) {
             let c = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .muted)
             c.pointOfInterestFilter = .excludingAll
-            mapView.preferredConfiguration = c
+            options.preferredConfiguration = c
+        } else {
+            options.mapType = .standard
+            options.pointOfInterestFilter = .excludingAll
         }
-        mapView.setRegion(region, animated: false)
 
-        // MKMapView only fetches tiles while it's in a window — attach it
-        // offscreen, wait for the render-finished callback (with a timeout),
-        // then capture.
-        guard let window = keyWindow() else { return nil }
-        mapView.frame = CGRect(x: -(width + 50), y: 0, width: width, height: height)
-        window.addSubview(mapView)
-        defer { mapView.removeFromSuperview() }
+        // Retained across the await so the operation isn't cancelled.
+        let snapshotter = MKMapSnapshotter(options: options)
+        let snapshot: MKMapSnapshotter.Snapshot
+        do { snapshot = try await snapshotter.start() }
+        catch { return nil }
 
-        let waiter = RenderWaiter()
-        mapView.delegate = waiter
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            var resumed = false
-            waiter.done = { _ in if !resumed { resumed = true; cont.resume() } }
-            // Fallback: capture after 5s even if the callback never fires.
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(5))
-                if !resumed { resumed = true; waiter.done = nil; cont.resume() }
-            }
-        }
-        // One runloop tick so the final tiles commit before capture.
-        try? await Task.sleep(for: .milliseconds(120))
-
-        let captured = UIGraphicsImageRenderer(bounds: mapView.bounds).image { _ in
-            mapView.drawHierarchy(in: mapView.bounds, afterScreenUpdates: true)
-        }
         let base = UIGraphicsImageRenderer(size: size).image { ctx in
-            captured.draw(in: CGRect(origin: .zero, size: size))
+            snapshot.image.draw(in: CGRect(origin: .zero, size: size))
             UIColor(red: 0.16, green: 0.24, blue: 0.18, alpha: 0.30).setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
         }
 
-        func project(_ c: CLLocationCoordinate2D) -> CGPoint { mapView.convert(c, toPointTo: mapView) }
+        // `snapshot.point(for:)` maps a coordinate into the image's pixel
+        // space (origin top-left, sized to `options.size`).
+        func project(_ c: CLLocationCoordinate2D) -> CGPoint { snapshot.point(for: c) }
 
         let stride = max(1, points.count / 160)
         var idx: [Int] = []
@@ -92,12 +71,6 @@ enum ShareMap {
         }
         return Result(image: base, segments: segs,
                       start: project(coords[idx.first!]), finish: project(coords[idx.last!]))
-    }
-
-    private static func keyWindow() -> UIWindow? {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        return scenes.flatMap { $0.windows }.first { $0.isKeyWindow }
-            ?? scenes.flatMap { $0.windows }.first
     }
 
     static func color(_ v: Double, _ lo: Double, _ hi: Double, _ mode: RunMapView.ColorMode) -> Color {

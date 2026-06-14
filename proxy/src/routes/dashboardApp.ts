@@ -2474,7 +2474,8 @@ function drawLayoutQuoteFirst(ctx, W, H, o, progress, c) {
     ctx.fillText("\\u2014  HEARD AT KM " + kmLbl + "  \\u2014", W / 2, stampY);
     ctx.textAlign = "left";
   }
-  drawQuote(ctx, P, W - P * 2, c.topY + 56, stampY - 60, H > 1200 ? 80 : 64, o.quote, progress, true);
+  // Left-aligned (matches the iOS share card; a quote reads as a quote).
+  drawQuote(ctx, P, W - P * 2, c.topY + 64, stampY - 76, H > 1200 ? 80 : 64, o.quote, progress, false);
   drawKpis(ctx, W, P, kpiY, o.kpis);
 }
 
