@@ -35,7 +35,8 @@ enum ShareMap {
 
     static func render(points: [PlaceContext.TrailPoint],
                        mode: RunMapView.ColorMode,
-                       width: CGFloat, height: CGFloat) async -> Result? {
+                       width: CGFloat, height: CGFloat,
+                       tileBase: String) async -> Result? {
         let coords = points.map(\.coord)        // display space (GCJ in China)
         guard coords.count > 1 else { return nil }
         let W = Double(width), H = Double(height)
@@ -72,8 +73,10 @@ enum ShareMap {
                     guard tx >= 0, ty >= 0, tx <= maxIdx, ty <= maxIdx else { continue }
                     let z = zoom
                     group.addTask {
-                        let s = (abs(tx &+ ty) % 4) + 1
-                        let str = "https://wprd0\(s).is.autonavi.com/appmaptile?lang=zh_cn&size=1&scl=1&style=7&x=\(tx)&y=\(ty)&z=\(z)"
+                        // Relayed through our proxy — AutoNavi serves blank
+                        // tiles to a direct on-device request, but real tiles
+                        // to the proxy's server-side fetch.
+                        let str = "\(tileBase)/maptile?x=\(tx)&y=\(ty)&z=\(z)"
                         guard let url = URL(string: str),
                               let (data, _) = try? await URLSession.shared.data(from: url),
                               UIImage(data: data) != nil else { return nil }

@@ -181,7 +181,8 @@ struct RunShareComposer: View {
             let cardH = 1080 / aspect
             // ~32% of the card height so the quote stays the hero.
             let res = await ShareMap.render(points: s.trail, mode: mapMode,
-                                            width: 1080 - 152, height: (cardH * 0.32).rounded())
+                                            width: 1080 - 152, height: (cardH * 0.32).rounded(),
+                                            tileBase: Config.cloudBaseURL.absoluteString)
             mapResult = res
             mapBuilding = false
             if res == nil {

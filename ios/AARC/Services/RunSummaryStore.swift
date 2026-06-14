@@ -152,12 +152,26 @@ final class RunSummaryStore {
             async let hrPts = HealthKitReader.shared.fetchHeartRateSeries(during: workout)
             async let pacePts = HealthKitReader.shared.fetchPaceSeries(during: workout)
             async let route = HealthKitReader.shared.fetchRoute(for: workout)
-            hr = ((try? await hrPts) ?? []).map(\.value)
+            let hrPoints = (try? await hrPts) ?? []
+            hr = hrPoints.map(\.value)
             for p in ((try? await pacePts) ?? []) where p.value > 0 { speed.append(3600.0 / p.value) }
             // HealthKit is WGS-84; transform to display space (GCJ in China).
-            let coords = ChinaCoordinateTransform.displayCoordinates(
-                ((try? await route) ?? []).map(\.coordinate))
-            trail = coords.map { .init(coord: $0, kmh: nil, hr: nil) }
+            let locs = (try? await route) ?? []
+            let coords = ChinaCoordinateTransform.displayCoordinates(locs.map(\.coordinate))
+            // Color the route by performance. CLLocation.speed is usually -1
+            // on workout routes, so derive pace from consecutive points; HR
+            // from the nearest sample. (Without this every segment fell back
+            // to a single color — the "mono trail" in the share card.)
+            trail = zip(locs, coords).enumerated().map { i, pair in
+                let (loc, coord) = pair
+                var kmh: Double? = nil
+                if i > 0 {
+                    let dt = loc.timestamp.timeIntervalSince(locs[i - 1].timestamp)
+                    let dm = loc.distance(from: locs[i - 1])
+                    if dt > 0.5 { kmh = dm / dt * 3.6 }
+                }
+                return .init(coord: coord, kmh: kmh, hr: Self.nearestHR(loc.timestamp, hrPoints))
+            }
         }
 
         let avgHR = hr.isEmpty ? nil : hr.reduce(0, +) / Double(hr.count)
@@ -189,6 +203,18 @@ final class RunSummaryStore {
         roastReady = false
         synced = true
         Task { await self.generateFinalRoast() }
+    }
+
+    /// HR sample nearest a timestamp (time-ordered series), for coloring a
+    /// route point by heart rate. nil when there are no samples.
+    private static func nearestHR(_ t: Date, _ series: [HealthKitReader.SeriesPoint]) -> Double? {
+        guard !series.isEmpty else { return nil }
+        var best = series[0], gap = abs(series[0].timestamp.timeIntervalSince(t))
+        for p in series.dropFirst() {
+            let g = abs(p.timestamp.timeIntervalSince(t))
+            if g < gap { best = p; gap = g }
+        }
+        return best.value
     }
 
     /// Hold the interstitial until BOTH the closing roast is in and the run

@@ -15,6 +15,7 @@ import {
     runAudioHandler,
 } from "./routes/ingestRun";
 import { dashHandler, dashAuthPollHandler, dashAuthApproveHandler } from "./routes/dashboard";
+import { mapTileHandler } from "./routes/mapTile";
 import { landingHandler } from "./routes/landing";
 import { waitlistSubmitHandler, waitlistListHandler } from "./routes/waitlist";
 import { personalNotesGetHandler, personalNotesPutHandler } from "./routes/personalNotes";
@@ -65,6 +66,10 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
 
     if (request.method === "GET" && url.pathname === "/ping") {
         return json({ ok: true, ts: Date.now(), service: "aarc-api" });
+    }
+
+    if (request.method === "GET" && url.pathname === "/maptile") {
+        return mapTileHandler(request);
     }
 
     if (request.method === "POST" && url.pathname === "/generate-script") {
