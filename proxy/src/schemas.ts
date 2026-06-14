@@ -167,6 +167,20 @@ export const PlaceSchema = z.object({
 
 export type PlaceInfo = z.infer<typeof PlaceSchema>;
 
+/// Raw real-time signals the phone sends; the server enriches them with
+/// weather/AQI/news (see lib/ambient.ts) before building the prompt.
+export const AmbientSchema = z.object({
+    lat: z.number().optional(),
+    lon: z.number().optional(),
+    city: softString(120),
+    venue: softString(160),     // treadmill venue guess
+    localClock: softString(16), // "18:42"
+    weekday: softString(20),    // "Sunday"
+    monthDay: softString(40),   // "15 June"
+});
+
+export type AmbientInfo = z.infer<typeof AmbientSchema>;
+
 export const DynamicLineRequestSchema = z.object({
     personalityId: z.string().default("roast_coach"),
     trigger: z.enum([
@@ -197,6 +211,7 @@ export const DynamicLineRequestSchema = z.object({
         /// "you've been stood there for 40 seconds".
         stationarySeconds: z.number().nonnegative().optional(),
         place: PlaceSchema.optional(),
+        ambient: AmbientSchema.optional(),
     }),
     recentDispatched: softStrings(32, 1600),
     customNote: z.string().max(300).optional(),
@@ -259,6 +274,7 @@ export const MusicCommentRequestSchema = z.object({
         planKind: z.enum(["distance", "time", "open"]),
         runType: z.enum(["outdoor", "treadmill"]),
         place: PlaceSchema.optional(),
+        ambient: AmbientSchema.optional(),
     }),
     recentDispatched: softStrings(32, 1600),
     personalNotes: softStrings(40, 600),
@@ -297,6 +313,7 @@ export const ReactLineRequestSchema = z.object({
         planKind: z.enum(["distance", "time", "open"]),
         runType: z.enum(["outdoor", "treadmill"]),
         place: PlaceSchema.optional(),
+        ambient: AmbientSchema.optional(),
     }),
     /// Recent exchange (both voices) so she doesn't repeat and can build on it.
     recentDispatched: softStrings(32, 1600),

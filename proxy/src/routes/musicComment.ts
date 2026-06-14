@@ -6,6 +6,7 @@ import {
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
@@ -39,7 +40,7 @@ export async function musicCommentHandler(
         );
     }
 
-    const userPrompt = buildUserPrompt(req);
+    const userPrompt = await buildUserPrompt(req);
 
     let raw: string;
     let provider: "openrouter" | "anthropic";
@@ -108,7 +109,7 @@ export async function musicCommentHandler(
     return json({ ok: true, ...response });
 }
 
-function buildUserPrompt(req: MusicCommentRequest): string {
+async function buildUserPrompt(req: MusicCommentRequest): Promise<string> {
     const lines: string[] = [];
 
     if (req.currentLyric) {
@@ -155,6 +156,7 @@ function buildUserPrompt(req: MusicCommentRequest): string {
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
     pushPlaceBlock(lines, c.place);
+    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");

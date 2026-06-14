@@ -6,6 +6,7 @@ import {
 } from "../schemas";
 import { reactModeFor, systemPromptFor, JessicaLengthMode } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
@@ -55,7 +56,7 @@ export async function reactLineHandler(
         );
     }
 
-    const userPrompt = buildUserPrompt(req);
+    const userPrompt = await buildUserPrompt(req);
 
     // Cap output by length mode so a quip can't run long and an indulgent
     // passage has room to breathe. Char targets: quip <=140, medium ~220-380,
@@ -131,7 +132,7 @@ export async function reactLineHandler(
     return json({ ok: true, ...response });
 }
 
-function buildUserPrompt(req: ReactLineRequest): string {
+async function buildUserPrompt(req: ReactLineRequest): Promise<string> {
     const c = req.runContext;
     const lines: string[] = [];
 
@@ -162,6 +163,7 @@ function buildUserPrompt(req: ReactLineRequest): string {
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
     pushPlaceBlock(lines, c.place);
+    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");

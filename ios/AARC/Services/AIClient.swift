@@ -174,6 +174,17 @@ actor AIClient {
         var route: String? = nil
     }
 
+    /// Raw real-time signals the server enriches (weather/AQI/news/sun).
+    struct AmbientInfo: Codable, Sendable {
+        var lat: Double? = nil
+        var lon: Double? = nil
+        var city: String? = nil
+        var venue: String? = nil        // treadmill venue guess
+        var localClock: String? = nil   // "18:42"
+        var weekday: String? = nil      // "Sunday"
+        var monthDay: String? = nil     // "15 June"
+    }
+
     struct DynamicLineContext: Codable, Sendable {
         var elapsedSeconds: Double
         var distanceMeters: Double
@@ -192,6 +203,7 @@ actor AIClient {
         /// Defaulted so pre-run call sites (opener, Playground) compile
         /// unchanged and send nothing.
         var place: PlaceInfo? = nil
+        var ambient: AmbientInfo? = nil
     }
 
     struct DynamicLineRequest: Codable, Sendable {
@@ -310,6 +322,7 @@ actor AIClient {
         var runType: String         // "outdoor" | "treadmill"
         /// Real surroundings (outdoor runs) — see PlaceInfo.
         var place: PlaceInfo? = nil
+        var ambient: AmbientInfo? = nil
     }
 
     struct ReactLineRequest: Codable, Sendable {
@@ -389,6 +402,7 @@ actor AIClient {
         var runType: String           // "outdoor" | "treadmill"
         /// Real surroundings (outdoor runs) — see PlaceInfo.
         var place: PlaceInfo? = nil
+        var ambient: AmbientInfo? = nil
     }
 
     struct MusicCommentRequest: Codable, Sendable {

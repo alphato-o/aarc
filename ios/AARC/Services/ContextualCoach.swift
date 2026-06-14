@@ -399,7 +399,8 @@ final class ContextualCoach {
             planTimeMinutes: plan.timeMinutes,
             runType: runType.rawValue,
             stationarySeconds: stationarySeconds,
-            place: PlaceContext.shared.llmInfo
+            place: PlaceContext.shared.llmInfo,
+            ambient: PlaceContext.shared.ambientInfo
         )
         let recent = ScriptEngine.shared.recentDispatchedLines
         let personalNotes = PersonalContextStore.shared.bullets
@@ -528,7 +529,8 @@ final class ContextualCoach {
             currentPaceSecPerKm: metrics.currentPaceSecPerKm,
             planKind: plan.kind.rawValue,
             runType: runType.rawValue,
-            place: PlaceContext.shared.llmInfo
+            place: PlaceContext.shared.llmInfo,
+            ambient: PlaceContext.shared.ambientInfo
         )
         let recent = ScriptEngine.shared.recentDispatchedLines
         let personalNotes = PersonalContextStore.shared.bullets

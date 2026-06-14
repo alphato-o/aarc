@@ -6,6 +6,7 @@ import {
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
@@ -39,7 +40,7 @@ export async function dynamicLineHandler(
         );
     }
 
-    const userPrompt = buildUserPrompt(req);
+    const userPrompt = await buildUserPrompt(req);
 
     let raw: string;
     let provider: "openrouter" | "anthropic";
@@ -108,7 +109,7 @@ export async function dynamicLineHandler(
     return json({ ok: true, ...response });
 }
 
-function buildUserPrompt(req: DynamicLineRequest): string {
+async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
     const c = req.runContext;
     const lines: string[] = [];
 
@@ -151,6 +152,7 @@ function buildUserPrompt(req: DynamicLineRequest): string {
         lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (they were running and have now STOPPED — quote the seconds, never a distance)`);
     }
     pushPlaceBlock(lines, c.place);
+    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
 
     if (req.customNote && req.customNote.trim().length > 0) {
         lines.push("");

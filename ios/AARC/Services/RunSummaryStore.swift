@@ -282,7 +282,8 @@ final class RunSummaryStore {
                     currentPaceSecPerKm: s.avgPaceSecPerKm,
                     planKind: "open",
                     runType: s.isOutdoor ? "outdoor" : "treadmill",
-                    place: PlaceContext.shared.llmInfo
+                    place: PlaceContext.shared.llmInfo,
+                    ambient: PlaceContext.shared.ambientInfo
                 )
                 let req = AIClient.ReactLineRequest(
                     personalityId: "jessica",
@@ -304,7 +305,8 @@ final class RunSummaryStore {
                     avgPaceSecPerKm: s.avgPaceSecPerKm,
                     planKind: "open",
                     runType: s.isOutdoor ? "outdoor" : "treadmill",
-                    place: PlaceContext.shared.llmInfo
+                    place: PlaceContext.shared.llmInfo,
+                    ambient: PlaceContext.shared.ambientInfo
                 )
                 let req = AIClient.DynamicLineRequest(
                     personalityId: "roast_coach",

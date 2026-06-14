@@ -79,6 +79,14 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
 
     /// Where the runner is right now (display space). nil until first fix.
     private(set) var displayCurrent: CLLocationCoordinate2D?
+    /// Last RAW WGS-84 fix — for the server's weather/AQI/news (Open-Meteo is
+    /// WGS), and the ambient block. Set on outdoor fixes + the treadmill
+    /// one-shot below.
+    private(set) var lastWGS: CLLocationCoordinate2D?
+    /// Treadmill venue guess + city from a one-shot lookup (indoor runs have
+    /// no continuous GPS; this is a single coarse fix, no trail pollution).
+    var treadmillVenue: String?
+    private var ambientCity: String?
     /// The path travelled so far with per-point metrics (display space).
     private(set) var trail: [TrailPoint] = []
     /// Just the coordinates — kept for callers that only need the line.
@@ -282,6 +290,31 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
 
     /// Compact payload for the LLM endpoints. nil when inactive, empty,
     /// or stale (>5 min old — better no context than wrong context).
+    /// Raw real-time signals for the server to enrich. Time is always
+    /// present; location/city come from live GPS (outdoor) or the treadmill
+    /// one-shot; venue is treadmill-only.
+    var ambientInfo: AIClient.AmbientInfo {
+        let now = Date()
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"; let clock = f.string(from: now)
+        f.dateFormat = "EEEE"; let wd = f.string(from: now)
+        f.dateFormat = "d MMMM"; let md = f.string(from: now)
+        return AIClient.AmbientInfo(
+            lat: lastWGS?.latitude, lon: lastWGS?.longitude,
+            city: snapshot?.area ?? ambientCity,
+            venue: treadmillVenue,
+            localClock: clock, weekday: wd, monthDay: md)
+    }
+
+    /// Seed location/city/venue from the treadmill one-shot (no continuous
+    /// tracking indoors → no trail, no gps logging).
+    func setTreadmillContext(coord: CLLocationCoordinate2D, city: String?, venue: String?) {
+        lastWGS = coord
+        ambientCity = city
+        treadmillVenue = venue
+    }
+
     var llmInfo: AIClient.PlaceInfo? {
         guard isActive else { return nil }
         let route = routeShape.routeDescription
@@ -318,6 +351,7 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         guard isActive else { return }
         // Every fix feeds the route geometry; geocoding/POI below throttles.
         routeShape.add(loc)
+        lastWGS = loc.coordinate
         // Map state: current position + metric-tagged trail, in display space.
         let disp = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
         displayCurrent = disp

@@ -131,6 +131,14 @@ final class LiveMetricsConsumer {
             } else {
                 PlaceContext.shared.start()
             }
+        } else {
+            // Treadmill: one-shot coarse location → city + venue guess for the
+            // ambient context (no continuous tracking, so no bogus route).
+            Task { @MainActor in
+                if let v = await VenueLocator.shared.capture() {
+                    PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city, venue: v.venue)
+                }
+            }
         }
 
         // Hand the most-recently generated script to ScriptEngine so it

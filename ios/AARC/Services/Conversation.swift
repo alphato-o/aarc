@@ -197,7 +197,8 @@ final class Conversation {
             currentPaceSecPerKm: metrics.currentPaceSecPerKm,
             planKind: plan.kind.rawValue,
             runType: runType.rawValue,
-            place: PlaceContext.shared.llmInfo
+            place: PlaceContext.shared.llmInfo,
+            ambient: PlaceContext.shared.ambientInfo
         )
         // On a milestone she riffs off the marker itself; otherwise off
         // Ricky's recent line.
