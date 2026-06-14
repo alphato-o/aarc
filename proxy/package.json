@@ -1,7 +1,7 @@
 {
   "name": "aarc-proxy",
   "version": "0.0.1",
-  "description": "AARC API proxy \u2014 Cloudflare Worker at api.aarun.club",
+  "description": "AARC API proxy — Cloudflare Worker at api.aarun.club",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -19,6 +19,7 @@
     "wrangler": "^4.89.1"
   },
   "dependencies": {
+    "upng-js": "^2.1.0",
     "zod": "^3.24.1"
   }
 }

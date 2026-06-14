@@ -22,13 +22,13 @@ struct ShareCardModel {
     var who: String        // "ricky" | "jessica" | ""
     var heardAtKm: Double?  // "HEARD AT KM x" stamp, when known
     var aspect: CGFloat    // width / height (0.8 portrait, 1 square)
-    // Route layout (outdoor): a baked base-map image + colored trail segments
-    // in that image's pixel space. When set, the card shows the map as the
-    // hero and draws the trail up to `progress` (so the video animates it).
+    // Route layout (outdoor): a server-rendered base-map image + the route
+    // polyline projected into that image's pixel space, with a per-segment
+    // color. The card draws the route up to `progress` (so the video animates
+    // it) with a start marker + a moving head/finish marker.
     var mapImage: UIImage? = nil
-    var mapSegments: [ShareMap.Segment] = []
-    var mapStart: CGPoint? = nil
-    var mapFinish: CGPoint? = nil
+    var mapPoints: [CGPoint] = []
+    var mapColors: [Color] = []
 
     static let portrait: CGFloat = 1080.0 / 1350.0
     static let square: CGFloat = 1.0
@@ -70,7 +70,11 @@ struct ShareCardView: View {
     private var routeBody: some View {
         // Compact map (rounded), quote gets the bulk, KPIs pinned above the
         // footer with a clear gap — no overlap.
-        let mapTop = topY + 32
+        // ONE uniform gap between every stacked component (divider→map,
+        // map→quote, quote→KPIs, KPIs→footer) for a consistent vertical rhythm.
+        let G: CGFloat = 60
+        let kpiH: CGFloat = 84
+        let mapTop = topY + G
         let mapW = W - P * 2
         // Preserve the captured map's aspect (it's snapshotted at the device's
         // screen scale, so don't trust its raw point height).
@@ -78,47 +82,82 @@ struct ShareCardView: View {
         let mapH = (img.size.height / max(1, img.size.width)) * mapW
         let mapBot = mapTop + mapH
         let footY = H - 56
-        let kpiTop = footY - 120
-        // Fixed, generous breathing room above + below the quote so the card
-        // never reads as cramped between the map and the stats.
-        let qTop = mapBot + 96
-        let qBot = kpiTop - 96
+        let kpiTop = footY - G - kpiH
+        let qTop = mapBot + G
+        let qBot = kpiTop - G
         let q = "\u{201C}\(model.quote)\u{201D}"
         return ZStack(alignment: .topLeading) {
             background
             header
             ZStack(alignment: .topLeading) {
-                Image(uiImage: model.mapImage!).resizable().frame(width: W - P * 2, height: mapH)
+                Image(uiImage: img).resizable().frame(width: mapW, height: mapH)
                 Canvas { ctx, _ in
-                    let upto = max(1, Int(Double(model.mapSegments.count) * min(progress, 1)))
-                    for i in 0..<min(upto, model.mapSegments.count) {
-                        let s = model.mapSegments[i]
-                        var p = Path(); p.move(to: s.a); p.addLine(to: s.b)
-                        ctx.stroke(p, with: .color(s.color), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
-                    }
-                    if let st = model.mapStart {
-                        ctx.fill(Path(ellipseIn: CGRect(x: st.x - 8, y: st.y - 8, width: 16, height: 16)),
-                                 with: .color(Color(red: 0.81, green: 0.91, blue: 0.84)))
-                    }
+                    Self.drawRoute(ctx, points: model.mapPoints, colors: model.mapColors,
+                                   imageSize: img.size, drawW: mapW, drawH: mapH, progress: progress)
                 }
-                .frame(width: W - P * 2, height: mapH)
+                .frame(width: mapW, height: mapH)
             }
-            .frame(width: W - P * 2, height: mapH)
+            .frame(width: mapW, height: mapH)
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .position(x: W / 2, y: mapTop + mapH / 2)
 
             // quote — fitted strictly into the gap between map and KPIs
             KaraokeQuote(text: q, progress: progress,
-                         fontSize: ShareCardView.fittedSerifSize(q, boxW: (W - P * 2) * 0.86,
-                                                                 boxH: qBot - qTop, maxSize: H > 1200 ? 58 : 48))
+                         fontSize: ShareCardView.fittedSerifSize(q, boxW: (W - P * 2) * 0.92,
+                                                                 boxH: qBot - qTop, maxSize: H > 1200 ? 66 : 54))
                 .frame(width: W - P * 2, height: qBot - qTop)
                 .position(x: W / 2, y: (qTop + qBot) / 2)
 
-            kpiRow.frame(width: W - P * 2).position(x: W / 2, y: kpiTop + 30)
+            kpiRow.frame(width: W - P * 2).position(x: W / 2, y: kpiTop + kpiH / 2)
             footer
         }
         .frame(width: W, height: H)
         .environment(\.colorScheme, .dark)
+    }
+
+    /// Draw the route over the base map: a performance-colored polyline grown
+    /// by ARC LENGTH up to `progress` (smooth at any frame rate, not one GPS
+    /// point at a time), with a green start marker and a moving cream
+    /// head/finish marker. Mirrors the web dashboard exactly.
+    static func drawRoute(_ ctx: GraphicsContext, points: [CGPoint], colors: [Color],
+                          imageSize: CGSize, drawW: CGFloat, drawH: CGFloat, progress: Double) {
+        guard points.count > 1, imageSize.width > 0, imageSize.height > 0 else { return }
+        let sx = drawW / imageSize.width, sy = drawH / imageSize.height
+        func S(_ p: CGPoint) -> CGPoint { CGPoint(x: p.x * sx, y: p.y * sy) }
+        let xy = points.map(S)
+        var cum: [CGFloat] = [0]
+        for i in 1..<xy.count { cum.append(cum[i - 1] + hypot(xy[i].x - xy[i - 1].x, xy[i].y - xy[i - 1].y)) }
+        let total = cum.last ?? 1
+        let dlen = (progress >= 1 ? 1 : CGFloat(progress)) * total
+        var head = xy[0]
+        for i in 1..<xy.count {
+            let a = xy[i - 1], b = xy[i]
+            let col = colors.indices.contains(i) ? colors[i] : Color(red: 0.66, green: 0.78, blue: 0.69)
+            if cum[i] <= dlen {
+                var p = Path(); p.move(to: a); p.addLine(to: b)
+                ctx.stroke(p, with: .color(col), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                head = b
+            } else {
+                let seg = cum[i] - cum[i - 1]
+                let f = seg > 0 ? max(0, min(1, (dlen - cum[i - 1]) / seg)) : 0
+                head = CGPoint(x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f)
+                var p = Path(); p.move(to: a); p.addLine(to: head)
+                ctx.stroke(p, with: .color(col), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                break
+            }
+        }
+        routeMarker(ctx, xy[0], Color(red: 0.46, green: 0.886, blue: 0.635))   // start = green
+        routeMarker(ctx, head, Color(red: 0.957, green: 0.949, blue: 0.910))   // head/finish = cream
+    }
+
+    private static func routeMarker(_ ctx: GraphicsContext, _ p: CGPoint, _ fill: Color) {
+        let halo = Color(red: 0.03, green: 0.05, blue: 0.04)
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - 11, y: p.y - 11, width: 22, height: 22)),
+                 with: .color(halo.opacity(0.55)))
+        ctx.fill(Path(ellipseIn: CGRect(x: p.x - 7.5, y: p.y - 7.5, width: 15, height: 15)),
+                 with: .color(fill))
+        ctx.stroke(Path(ellipseIn: CGRect(x: p.x - 7.5, y: p.y - 7.5, width: 15, height: 15)),
+                   with: .color(halo.opacity(0.85)), lineWidth: 2.5)
     }
 
     // MARK: - Quote layout (default / treadmill)

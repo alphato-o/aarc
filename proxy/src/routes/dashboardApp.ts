@@ -2133,10 +2133,74 @@ function routePoints() {
     var d = ev.data || {};
     if (ev.type === "loc" || (has(d.lat) && has(d.lon))) {
       var la = num(d.lat), lo = num(d.lon);
-      if (isFinite(la) && isFinite(lo)) out.push({ lat: la, lon: lo, t: num(ev.t) });
+      if (isFinite(la) && isFinite(lo)) {
+        out.push({ lat: la, lon: lo, t: num(ev.t),
+                   v: has(d.kmh) ? num(d.kmh) : NaN, hr: has(d.hr) ? num(d.hr) : NaN });
+      }
     }
   });
   return downsampleObjs(out, 300);
+}
+// Web-Mercator world pixel (tile=256), matching the server's /staticmap math.
+function worldPx(lon, lat, z) {
+  var n = 256 * Math.pow(2, z);
+  var x = (lon + 180) / 360 * n;
+  var r = lat * Math.PI / 180;
+  var y = (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n;
+  return { x: x, y: y };
+}
+// Performance hue, matching the iOS RunMapView / ShareMap palette.
+function routeColor(v, lo, hi, mode) {
+  if (!isFinite(v) || v <= 0 || hi <= lo) return "rgb(168,199,176)";
+  var t = (v - lo) / (hi - lo);
+  var h = mode === "hr" ? 0.62 * (1 - t) : 0.33 * t;
+  return hsvCss(h, 0.85, 0.95);
+}
+// Route endpoint marker: dark halo + colored core + thin outline, so the
+// start (green) and the moving head / finish (cream) pop on the map.
+function routeMarker(ctx, x, y, fill) {
+  ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(8,12,9,0.55)"; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, 7.5, 0, Math.PI * 2);
+  ctx.fillStyle = fill; ctx.fill();
+  ctx.lineWidth = 2.5; ctx.strokeStyle = "rgba(8,12,9,0.85)"; ctx.stroke();
+}
+function hsvCss(h, s, v) {
+  var i = Math.floor(h * 6), f = h * 6 - i;
+  var p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s), r, g, b;
+  switch (i % 6) {
+    case 0: r = v; g = t; b = p; break; case 1: r = q; g = v; b = p; break;
+    case 2: r = p; g = v; b = t; break; case 3: r = p; g = q; b = v; break;
+    case 4: r = t; g = p; b = v; break; default: r = v; g = p; b = q;
+  }
+  return "rgb(" + Math.round(r * 255) + "," + Math.round(g * 255) + "," + Math.round(b * 255) + ")";
+}
+// Fetch the styled base map for the current route into shareState.mapImg, with
+// the projection params so the route can be drawn/animated on top.
+function prefetchRouteMap() {
+  var pts = routePoints();
+  shareState.mapImg = null; shareState.mapProj = null;
+  if (pts.length < 2) { renderSharePreview(); return; }
+  var d = shareDims(), P = 76;
+  // Same map band as iOS: full content width, ~32% of the card height.
+  var boxW = Math.round(d.w - P * 2), boxH = Math.round(d.h * 0.32);
+  var body = { w: boxW, h: boxH, mode: "pace", datum: "wgs",
+               points: pts.map(function (p) { return [p.lon, p.lat, isFinite(p.v) ? p.v : null]; }) };
+  var token = (shareState.mapToken = (shareState.mapToken || 0) + 1);
+  fetch("/staticmap", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(function (r) {
+      var proj = { zoom: +r.headers.get("X-Map-Zoom"), ox: +r.headers.get("X-Map-Ox"),
+                   oy: +r.headers.get("X-Map-Oy"), w: boxW, h: boxH };
+      return r.blob().then(function (b) {
+        var img = new Image();
+        img.onload = function () {
+          if (token !== shareState.mapToken) return; // superseded
+          shareState.mapImg = img; shareState.mapProj = proj; renderSharePreview();
+        };
+        img.src = URL.createObjectURL(b);
+      });
+    })
+    .catch(function () { renderSharePreview(); });
 }
 function elevPoints() {
   var out = [];
@@ -2518,42 +2582,69 @@ function drawLayoutSplits(ctx, W, H, o, progress, c) {
   drawQuote(ctx, P, W - P * 2, ladBot + 40, c.footY - 70, H > 1200 ? 62 : 50, o.quote, progress, false);
 }
 
-// ---- layout: route silhouette hero (needs GPS polyline in the upload)
+// ---- layout: route map hero (server base map + performance-colored route).
+// Mirrors the iOS routeBody exactly: map then quote then KPIs then footer, one
+// uniform gap between each. The route animates with progress (video).
 function drawLayoutRoute(ctx, W, H, o, progress, c) {
-  var P = c.P;
+  var P = c.P, G = 60, kpiH = 84;
   var pts = o.route;
-  var boxX = P + 30, boxY = c.topY + 40;
-  var boxW = W - (P + 30) * 2, boxH = H > 1200 ? 380 : 290;
-  // normalize lat/lon into the box, preserving aspect (lat shrink ~cos)
-  var minLa = Infinity, maxLa = -Infinity, minLo = Infinity, maxLo = -Infinity;
-  pts.forEach(function (p2) {
-    if (p2.lat < minLa) minLa = p2.lat; if (p2.lat > maxLa) maxLa = p2.lat;
-    if (p2.lon < minLo) minLo = p2.lon; if (p2.lon > maxLo) maxLo = p2.lon;
-  });
-  var latScale = Math.cos(((minLa + maxLa) / 2) * Math.PI / 180);
-  var spanX = (maxLo - minLo) * latScale || 1e-6, spanY = (maxLa - minLa) || 1e-6;
-  var sc = Math.min(boxW / spanX, boxH / spanY) * 0.92;
-  var offX = boxX + (boxW - spanX * sc) / 2, offY = boxY + (boxH - spanY * sc) / 2;
-  function RX(p2) { return offX + (p2.lon - minLo) * latScale * sc; }
-  function RY(p2) { return offY + (maxLa - p2.lat) * sc; }
-  var upto = progress >= 1 ? pts.length - 1 : Math.max(1, Math.floor(progress * (pts.length - 1)));
-  ctx.beginPath();
-  for (var i = 0; i <= upto; i++) {
-    var x = RX(pts[i]), y = RY(pts[i]);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  var mapX = P, mapY = c.topY + G, mapW = W - P * 2, mapH = Math.round(H * 0.32);
+  var mapBot = mapY + mapH;
+  var footY = c.footY, kpiTop = footY - G - kpiH;
+  var qTop = mapBot + G, qBot = kpiTop - G;
+
+  // base map (rounded), or a placeholder while it loads
+  ctx.save();
+  rr(ctx, mapX, mapY, mapW, mapH, 18); ctx.clip();
+  if (shareState.mapImg) ctx.drawImage(shareState.mapImg, mapX, mapY, mapW, mapH);
+  else { ctx.fillStyle = "#0c140e"; ctx.fillRect(mapX, mapY, mapW, mapH); }
+
+  // performance-colored route, drawn up to progress, projected with the same
+  // zoom/origin the server used (so it lands exactly on the tiles).
+  var proj = shareState.mapProj;
+  if (proj && pts.length > 1) {
+    var sx = mapW / proj.w, sy = mapH / proj.h;
+    // Project once to pixel space, then walk by ARC LENGTH so the leading edge
+    // advances smoothly every frame (not one GPS point at a time → 30fps, not
+    // ~1fps).
+    var XY = pts.map(function (p) {
+      var w = worldPx(p.lon, p.lat, proj.zoom);
+      return [mapX + (w.x - proj.ox) * sx, mapY + (w.y - proj.oy) * sy];
+    });
+    var cum = [0];
+    for (var i = 1; i < XY.length; i++) cum[i] = cum[i - 1] + Math.hypot(XY[i][0] - XY[i - 1][0], XY[i][1] - XY[i - 1][1]);
+    var total = cum[cum.length - 1] || 1;
+    var vals = pts.map(function (p) { return p.v; }).filter(function (v) { return isFinite(v) && v > 0; });
+    var lo = vals.length ? Math.min.apply(null, vals) : 0, hi = vals.length ? Math.max.apply(null, vals) : 1;
+    var dlen = (progress >= 1 ? 1 : progress) * total;
+    ctx.lineWidth = 6; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    var headX = XY[0][0], headY = XY[0][1];
+    for (var i = 1; i < XY.length; i++) {
+      ctx.strokeStyle = routeColor(pts[i].v, lo, hi, "pace");
+      if (cum[i] <= dlen) {
+        ctx.beginPath(); ctx.moveTo(XY[i - 1][0], XY[i - 1][1]); ctx.lineTo(XY[i][0], XY[i][1]); ctx.stroke();
+        headX = XY[i][0]; headY = XY[i][1];
+      } else {
+        var seg = cum[i] - cum[i - 1];
+        var f = seg > 0 ? Math.max(0, Math.min(1, (dlen - cum[i - 1]) / seg)) : 0;
+        headX = XY[i - 1][0] + (XY[i][0] - XY[i - 1][0]) * f;
+        headY = XY[i - 1][1] + (XY[i][1] - XY[i - 1][1]) * f;
+        ctx.beginPath(); ctx.moveTo(XY[i - 1][0], XY[i - 1][1]); ctx.lineTo(headX, headY); ctx.stroke();
+        break;
+      }
+    }
+    // start marker (green) + moving head / finish marker (cream) — distinct,
+    // dark-haloed so they read on any tile.
+    routeMarker(ctx, XY[0][0], XY[0][1], "#76e2a2");
+    routeMarker(ctx, headX, headY, "#f4f2e8");
+  } else if (!shareState.mapImg) {
+    ctx.fillStyle = "#5b6b5f"; ctx.font = "500 22px " + SANS; ctx.textAlign = "center";
+    ctx.fillText("Loading map\\u2026", mapX + mapW / 2, mapY + mapH / 2); ctx.textAlign = "left";
   }
-  var grad = ctx.createLinearGradient(boxX, boxY, boxX + boxW, boxY + boxH);
-  grad.addColorStop(0, "#cfe8d6"); grad.addColorStop(1, "#8fb89a");
-  ctx.strokeStyle = grad; ctx.lineWidth = 9; ctx.lineJoin = "round"; ctx.lineCap = "round";
-  ctx.stroke();
-  // start solid, finish ring
-  ctx.beginPath(); ctx.arc(RX(pts[0]), RY(pts[0]), 11, 0, Math.PI * 2); ctx.fillStyle = "#cfe8d6"; ctx.fill();
-  var last = pts[upto];
-  ctx.beginPath(); ctx.arc(RX(last), RY(last), 11, 0, Math.PI * 2);
-  ctx.fillStyle = "#0b0e0c"; ctx.fill();
-  ctx.strokeStyle = "#cfe8d6"; ctx.lineWidth = 4; ctx.stroke();
-  var kpiBot = drawKpis(ctx, W, P, boxY + boxH + 36, o.kpis);
-  drawQuote(ctx, P, W - P * 2, kpiBot + 40, c.footY - 70, H > 1200 ? 58 : 48, o.quote, progress, false);
+  ctx.restore();
+
+  drawQuote(ctx, P, W - P * 2, qTop, qBot, H > 1200 ? 66 : 54, o.quote, progress, false);
+  drawKpis(ctx, W, P, kpiTop, o.kpis);
 }
 
 // ---- layout: elevation + pace strip (needs altitude in metrics)
@@ -2727,7 +2818,7 @@ function openShareModal() {
       "Needs at least one full kilometre";
     b.classList.toggle("on", k === pick);
   });
-  renderSharePreview();
+  if (pick === "route") prefetchRouteMap(); else renderSharePreview();
   document.getElementById("sharemodal").classList.add("open");
 }
 function closeShareModal() {
@@ -2886,7 +2977,8 @@ document.querySelectorAll("#shareformat button").forEach(function (b) {
     document.querySelectorAll("#shareformat button").forEach(function (x) { x.classList.remove("on"); });
     b.classList.add("on");
     shareState.fmt = b.getAttribute("data-fmt");
-    renderSharePreview();
+    // Format change → different map band size → refetch the base map.
+    if (shareState.layout === "route") prefetchRouteMap(); else renderSharePreview();
   });
 });
 document.querySelectorAll("#sharelayout button").forEach(function (b) {
@@ -2895,7 +2987,7 @@ document.querySelectorAll("#sharelayout button").forEach(function (b) {
     document.querySelectorAll("#sharelayout button").forEach(function (x) { x.classList.remove("on"); });
     b.classList.add("on");
     shareState.layout = b.getAttribute("data-layout");
-    renderSharePreview();
+    if (shareState.layout === "route") prefetchRouteMap(); else renderSharePreview();
   });
 });
 document.getElementById("sharequote").addEventListener("change", function () {

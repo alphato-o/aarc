@@ -1,35 +1,28 @@
 import SwiftUI
-import MapKit
 import UIKit
 
 /// Base map under the share-card route.
 ///
-/// We can't capture Apple-Maps tiles to a bitmap in mainland China: MapKit
-/// renders tiles OUT OF PROCESS (the system maps daemon composites them onto
-/// the screen), so `drawHierarchy` — which only re-renders our own process's
-/// layers — captures a blank map even when the map is visibly on screen. And
-/// `MKMapSnapshotter`, the one in-process rasterizer, returns blank tiles in
-/// China. Both Apple paths are dead ends here.
-///
-/// So we fetch map imagery we control: AutoNavi (高德) raster tiles. They're
-/// GCJ-02 (our trail is already display/GCJ space, so it projects straight in
-/// with standard Web-Mercator math), key-free, and served from inside China.
-/// We stitch the covering tiles into the base image and draw the
-/// performance-colored trail on top — entirely in-process, so it always lands
-/// in the exported image.
+/// The styled, label-free base map is rendered SERVER-side (`POST /staticmap`)
+/// — the only reliable way to get map tiles into a bitmap in mainland China
+/// (MKMapSnapshotter is blank there, on-device tile fetches are slow/blank).
+/// The device fetches ONE image plus the projection params (zoom/origin) in
+/// the response headers, then draws the performance-colored route on top
+/// itself — full for the still, progressively for the video. So a 60s video is
+/// local canvas frames over a single fetched image, not per-frame network.
 enum ShareMap {
-    struct Segment: Sendable { let a: CGPoint; let b: CGPoint; let color: Color }
-    struct Result { let image: UIImage; let segments: [Segment]; let start: CGPoint?; let finish: CGPoint? }
+    struct Result {
+        let image: UIImage      // styled base map (CARTO dark_nolabels + green tint)
+        let points: [CGPoint]   // route polyline projected into the image's pixel space
+        let colors: [Color]     // colors[i] = colour of segment points[i-1]→points[i]
+    }
 
-    private static let tileSize = 256.0
-
-    /// Web-Mercator world-pixel position of a coordinate at a zoom (tile=256).
-    /// Fed GCJ-02 lon/lat to match the AutoNavi tile grid.
-    private static func world(_ c: CLLocationCoordinate2D, _ z: Int) -> CGPoint {
-        let n = tileSize * pow(2.0, Double(z))
-        let x = (c.longitude + 180.0) / 360.0 * n
-        let latRad = c.latitude * .pi / 180.0
-        let y = (1.0 - log(tan(latRad) + 1.0 / cos(latRad)) / .pi) / 2.0 * n
+    /// Web-Mercator world pixel (tile=256), matching the server's projection.
+    private static func world(_ lon: Double, _ lat: Double, _ z: Int) -> CGPoint {
+        let n = 256.0 * pow(2.0, Double(z))
+        let x = (lon + 180.0) / 360.0 * n
+        let r = lat * .pi / 180.0
+        let y = (1.0 - log(tan(r) + 1.0 / cos(r)) / .pi) / 2.0 * n
         return CGPoint(x: x, y: y)
     }
 
@@ -37,103 +30,42 @@ enum ShareMap {
                        mode: RunMapView.ColorMode,
                        width: CGFloat, height: CGFloat,
                        tileBase: String) async -> Result? {
-        let coords = points.map(\.coord)        // display space (GCJ in China)
-        guard coords.count > 1 else { return nil }
-        let W = Double(width), H = Double(height)
+        guard points.count > 1 else { return nil }
+        // CARTO tiles are WGS-84; our trail is display space (GCJ in China) →
+        // convert back to WGS so the route lines up on the server's tiles.
+        let wgs = points.map { ChinaCoordinateTransform.wgsCoordinate(fromDisplay: $0.coord) }
+        let vals = points.map { (mode == .pace ? $0.kmh : $0.hr) ?? 0 }
 
-        var minLat = coords[0].latitude, maxLat = coords[0].latitude
-        var minLon = coords[0].longitude, maxLon = coords[0].longitude
-        for c in coords {
-            minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
-            minLon = min(minLon, c.longitude); maxLon = max(maxLon, c.longitude)
+        let body: [String: Any] = [
+            "w": Int(width), "h": Int(height),
+            "mode": mode == .hr ? "hr" : "pace", "datum": "wgs",
+            "points": zip(wgs, vals).map { [$0.0.longitude, $0.0.latitude, $0.1] },
+        ]
+        guard let url = URL(string: "\(tileBase)/staticmap"),
+              let payload = try? JSONSerialization.data(withJSONObject: body) else { return nil }
+        var req = URLRequest(url: url, timeoutInterval: 30)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.httpBody = payload
+
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let img = UIImage(data: data),
+              let zStr = http.value(forHTTPHeaderField: "X-Map-Zoom"),
+              let zoom = Int(zStr) else { return nil }
+        let ox = Double(http.value(forHTTPHeaderField: "X-Map-Ox") ?? "") ?? 0
+        let oy = Double(http.value(forHTTPHeaderField: "X-Map-Oy") ?? "") ?? 0
+
+        // Project the route into the base image's pixel space (same formula +
+        // origin the server used → it lands exactly on the tiles).
+        let pxPts = wgs.map { c -> CGPoint in
+            let w = world(c.longitude, c.latitude, zoom)
+            return CGPoint(x: w.x - ox, y: w.y - oy)
         }
-
-        // Largest zoom at which the (padded) route still fits the image.
-        var zoom = 3
-        for z in stride(from: 19, through: 3, by: -1) {
-            let tl = world(.init(latitude: maxLat, longitude: minLon), z)
-            let br = world(.init(latitude: minLat, longitude: maxLon), z)
-            if (br.x - tl.x) <= W * 0.84 && (br.y - tl.y) <= H * 0.84 { zoom = z; break }
-        }
-
-        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2,
-                                            longitude: (minLon + maxLon) / 2)
-        let cw = world(center, zoom)
-        let originX = Double(cw.x) - W / 2, originY = Double(cw.y) - H / 2
-
-        let minTX = Int(floor(originX / tileSize)), maxTX = Int(floor((originX + W) / tileSize))
-        let minTY = Int(floor(originY / tileSize)), maxTY = Int(floor((originY + H) / tileSize))
-        let maxIdx = Int(pow(2.0, Double(zoom))) - 1
-
-        // Bounded per-request timeout so a stuck tile can't hang the share on
-        // "Loading map…" — on a slow link we'd rather draw a partial map than
-        // wait out the 60s default.
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 14
-        cfg.waitsForConnectivity = false
-        let session = URLSession(configuration: cfg)
-
-        struct Tile: Sendable { let x: Int; let y: Int; let png: Data }
-        var tiles: [Tile] = []
-        await withTaskGroup(of: Tile?.self) { group in
-            for tx in minTX...maxTX {
-                for ty in minTY...maxTY {
-                    guard tx >= 0, ty >= 0, tx <= maxIdx, ty <= maxIdx else { continue }
-                    let z = zoom
-                    group.addTask {
-                        // Relayed through our proxy (AutoNavi serves blank tiles
-                        // to a direct on-device request) via the failover-aware
-                        // endpoint.
-                        let str = "\(tileBase)/maptile?x=\(tx)&y=\(ty)&z=\(z)"
-                        guard let url = URL(string: str),
-                              let (data, _) = try? await session.data(from: url),
-                              UIImage(data: data) != nil else { return nil }
-                        return Tile(x: tx, y: ty, png: data)
-                    }
-                }
-            }
-            for await t in group { if let t { tiles.append(t) } }
-        }
-        guard !tiles.isEmpty else { return nil }
-
-        let size = CGSize(width: width, height: height)
-        let base = UIGraphicsImageRenderer(size: size).image { ctx in
-            UIColor(red: 0.043, green: 0.055, blue: 0.047, alpha: 1).setFill()
-            ctx.fill(CGRect(origin: .zero, size: size))
-            for t in tiles {
-                guard let img = UIImage(data: t.png) else { continue }
-                let r = CGRect(x: Double(t.x) * tileSize - originX,
-                               y: Double(t.y) * tileSize - originY,
-                               width: tileSize, height: tileSize)
-                img.draw(in: r)
-            }
-            // AutoNavi style 7 is a LIGHT map; darken + brand it so the band
-            // sits in the dark card instead of glaring out of it (but keep it
-            // light enough that the streets read).
-            UIColor(red: 0.05, green: 0.11, blue: 0.07, alpha: 0.38).setFill()
-            ctx.fill(CGRect(origin: .zero, size: size))
-        }
-
-        func project(_ c: CLLocationCoordinate2D) -> CGPoint {
-            let w = world(c, zoom)
-            return CGPoint(x: Double(w.x) - originX, y: Double(w.y) - originY)
-        }
-
-        let step = max(1, points.count / 160)
-        var idx: [Int] = []
-        var i = 0
-        while i < points.count { idx.append(i); i += step }
-        if idx.last != points.count - 1 { idx.append(points.count - 1) }
-        let vals = idx.compactMap { mode == .pace ? points[$0].kmh : points[$0].hr }.filter { $0 > 0 }
-        let lo = vals.min() ?? 0, hi = vals.max() ?? 1
-        var segs: [Segment] = []
-        for j in 1..<idx.count {
-            let v = (mode == .pace ? points[idx[j]].kmh : points[idx[j]].hr) ?? 0
-            segs.append(Segment(a: project(coords[idx[j - 1]]), b: project(coords[idx[j]]),
-                                color: color(v, lo, hi, mode)))
-        }
-        return Result(image: base, segments: segs,
-                      start: project(coords[idx.first!]), finish: project(coords[idx.last!]))
+        let positive = vals.filter { $0 > 0 }
+        let lo = positive.min() ?? 0, hi = positive.max() ?? 1
+        let colors = vals.map { color($0, lo, hi, mode) }
+        return Result(image: img, points: pxPts, colors: colors)
     }
 
     /// Performance hue for a value, shared by the live map and the share card.
@@ -141,7 +73,7 @@ enum ShareMap {
         guard v > 0, hi > lo else { return Color(red: 0.66, green: 0.78, blue: 0.69) }
         let t = (v - lo) / (hi - lo)
         return mode == .pace
-            ? Color(hue: 0.33 * t, saturation: 0.85, brightness: 0.92)
-            : Color(hue: 0.62 * (1 - t), saturation: 0.85, brightness: 0.92)
+            ? Color(hue: 0.33 * t, saturation: 0.85, brightness: 0.95)
+            : Color(hue: 0.62 * (1 - t), saturation: 0.85, brightness: 0.95)
     }
 }

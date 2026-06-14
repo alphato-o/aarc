@@ -130,9 +130,8 @@ struct RunShareComposer: View {
             speed: s.speedSeries, hr: s.hrSeries,
             quote: q.text.strippingAudioTags, who: q.who, heardAtKm: nil, aspect: aspect,
             mapImage: layout == .route ? mapResult?.image : nil,
-            mapSegments: layout == .route ? (mapResult?.segments ?? []) : [],
-            mapStart: layout == .route ? mapResult?.start : nil,
-            mapFinish: layout == .route ? mapResult?.finish : nil)
+            mapPoints: layout == .route ? (mapResult?.points ?? []) : [],
+            mapColors: layout == .route ? (mapResult?.colors ?? []) : [])
     }
 
     // MARK: controls
