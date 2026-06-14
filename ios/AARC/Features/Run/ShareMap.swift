@@ -65,6 +65,14 @@ enum ShareMap {
         let minTY = Int(floor(originY / tileSize)), maxTY = Int(floor((originY + H) / tileSize))
         let maxIdx = Int(pow(2.0, Double(zoom))) - 1
 
+        // Bounded per-request timeout so a stuck tile can't hang the share on
+        // "Loading map…" — on a slow link we'd rather draw a partial map than
+        // wait out the 60s default.
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 14
+        cfg.waitsForConnectivity = false
+        let session = URLSession(configuration: cfg)
+
         struct Tile: Sendable { let x: Int; let y: Int; let png: Data }
         var tiles: [Tile] = []
         await withTaskGroup(of: Tile?.self) { group in
@@ -73,12 +81,12 @@ enum ShareMap {
                     guard tx >= 0, ty >= 0, tx <= maxIdx, ty <= maxIdx else { continue }
                     let z = zoom
                     group.addTask {
-                        // Relayed through our proxy — AutoNavi serves blank
-                        // tiles to a direct on-device request, but real tiles
-                        // to the proxy's server-side fetch.
+                        // Relayed through our proxy (AutoNavi serves blank tiles
+                        // to a direct on-device request) via the failover-aware
+                        // endpoint.
                         let str = "\(tileBase)/maptile?x=\(tx)&y=\(ty)&z=\(z)"
                         guard let url = URL(string: str),
-                              let (data, _) = try? await URLSession.shared.data(from: url),
+                              let (data, _) = try? await session.data(from: url),
                               UIImage(data: data) != nil else { return nil }
                         return Tile(x: tx, y: ty, png: data)
                     }
@@ -100,8 +108,9 @@ enum ShareMap {
                 img.draw(in: r)
             }
             // AutoNavi style 7 is a LIGHT map; darken + brand it so the band
-            // sits in the dark card instead of glaring out of it.
-            UIColor(red: 0.05, green: 0.11, blue: 0.07, alpha: 0.52).setFill()
+            // sits in the dark card instead of glaring out of it (but keep it
+            // light enough that the streets read).
+            UIColor(red: 0.05, green: 0.11, blue: 0.07, alpha: 0.38).setFill()
             ctx.fill(CGRect(origin: .zero, size: size))
         }
 

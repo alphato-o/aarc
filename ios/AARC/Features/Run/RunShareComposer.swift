@@ -180,9 +180,12 @@ struct RunShareComposer: View {
         Task {
             let cardH = 1080 / aspect
             // ~32% of the card height so the quote stays the hero.
+            // Tiles don't touch D1/R2 — use the failover-aware endpoint, NOT
+            // the CF-pinned one (CF crawls in China; the gateway serves tiles
+            // in ~2s).
             let res = await ShareMap.render(points: s.trail, mode: mapMode,
                                             width: 1080 - 152, height: (cardH * 0.32).rounded(),
-                                            tileBase: Config.cloudBaseURL.absoluteString)
+                                            tileBase: Config.apiBaseURL.absoluteString)
             mapResult = res
             mapBuilding = false
             if res == nil {
