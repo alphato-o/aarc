@@ -20,6 +20,7 @@ interface Body {
     datum?: "gcj" | "wgs";
     points?: [number, number, number | null][];
     drawRoute?: boolean;   // bake the route server-side (default: client draws it)
+    padBottom?: number;    // reserve this many px at the bottom (route fits above it)
 }
 
 const TILE = 256;
@@ -139,14 +140,18 @@ export async function staticMapHandler(request: Request): Promise<Response> {
         minLat = Math.min(minLat, p.lat); maxLat = Math.max(maxLat, p.lat);
     }
 
+    // Reserve a bottom band (for a KPI overlay): fit + center the route into
+    // the region ABOVE it, while the tiles still fill the whole image.
+    const padBottom = Math.max(0, Math.min(H - 40, Math.round(body.padBottom ?? 0)));
+    const fitH = H - padBottom;
     let zoom = 3;
     for (let z = 19; z >= 3; z--) {
         const [tlx, tly] = world(minLon, maxLat, z);
         const [brx, bry] = world(maxLon, minLat, z);
-        if (brx - tlx <= W * 0.84 && bry - tly <= H * 0.84) { zoom = z; break; }
+        if (brx - tlx <= W * 0.84 && bry - tly <= fitH * 0.84) { zoom = z; break; }
     }
     const [cx, cy] = world((minLon + maxLon) / 2, (minLat + maxLat) / 2, zoom);
-    const originX = cx - W / 2, originY = cy - H / 2;
+    const originX = cx - W / 2, originY = cy - fitH / 2;
     const proj = (lon: number, lat: number): [number, number] => {
         const [wx, wy] = world(lon, lat, zoom);
         return [wx - originX, wy - originY];

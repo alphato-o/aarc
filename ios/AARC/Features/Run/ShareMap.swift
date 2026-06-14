@@ -29,6 +29,7 @@ enum ShareMap {
     static func render(points: [PlaceContext.TrailPoint],
                        mode: RunMapView.ColorMode,
                        width: CGFloat, height: CGFloat,
+                       padBottom: CGFloat = 0,
                        tileBase: String) async -> Result? {
         guard points.count > 1 else { return nil }
         // CARTO tiles are WGS-84; our trail is display space (GCJ in China) →
@@ -37,7 +38,7 @@ enum ShareMap {
         let vals = points.map { (mode == .pace ? $0.kmh : $0.hr) ?? 0 }
 
         let body: [String: Any] = [
-            "w": Int(width), "h": Int(height),
+            "w": Int(width), "h": Int(height), "padBottom": Int(padBottom),
             "mode": mode == .hr ? "hr" : "pace", "datum": "wgs",
             "points": zip(wgs, vals).map { [$0.0.longitude, $0.0.latitude, $0.1] },
         ]

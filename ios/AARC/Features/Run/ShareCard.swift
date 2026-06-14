@@ -67,48 +67,55 @@ struct ShareCardView: View {
 
     // MARK: - Route layout (outdoor): map hero + trail + compact quote
 
+    /// Height of the KPI band overlaid on the bottom of the route map.
+    static let mapKpiBand: CGFloat = 150
+
     private var routeBody: some View {
-        // Compact map (rounded), quote gets the bulk, KPIs pinned above the
-        // footer with a clear gap — no overlap.
-        // ONE uniform gap between every stacked component (divider→map,
-        // map→quote, quote→KPIs, KPIs→footer) for a consistent vertical rhythm.
+        // Map (rounded) with the KPI strip overlaid on its bottom band (white,
+        // over a dark scrim); the route is fit ABOVE that band so it never
+        // collides. The quote then gets the whole space below the map.
         let G: CGFloat = 60
-        let kpiH: CGFloat = 84
         let mapTop = topY + G
         let mapW = W - P * 2
-        // Preserve the captured map's aspect (it's snapshotted at the device's
-        // screen scale, so don't trust its raw point height).
         let img = model.mapImage!
         let mapH = (img.size.height / max(1, img.size.width)) * mapW
+        // Band in draw space (image is fetched 1:1 with mapW, so band == server padBottom).
+        let band = Self.mapKpiBand * (mapH / max(1, img.size.height))
         let mapBot = mapTop + mapH
         let footY = H - 56
-        let kpiTop = footY - G - kpiH
         let qTop = mapBot + G
-        let qBot = kpiTop - G
+        let qBot = footY - G
         let q = "\u{201C}\(model.quote)\u{201D}"
         return ZStack(alignment: .topLeading) {
             background
             header
-            ZStack(alignment: .topLeading) {
+            ZStack(alignment: .bottom) {
                 Image(uiImage: img).resizable().frame(width: mapW, height: mapH)
                 Canvas { ctx, _ in
                     Self.drawRoute(ctx, points: model.mapPoints, colors: model.mapColors,
                                    imageSize: img.size, drawW: mapW, drawH: mapH, progress: progress)
                 }
                 .frame(width: mapW, height: mapH)
+                // dark scrim under the KPIs for contrast + white KPI strip
+                ZStack {
+                    LinearGradient(colors: [.clear, .black.opacity(0.62)],
+                                   startPoint: .top, endPoint: .bottom)
+                    kpiRow(value: .white, label: .white.opacity(0.82), divider: .white.opacity(0.28))
+                        .padding(.horizontal, 26)
+                }
+                .frame(width: mapW, height: band)
             }
             .frame(width: mapW, height: mapH)
             .clipShape(RoundedRectangle(cornerRadius: 18))
             .position(x: W / 2, y: mapTop + mapH / 2)
 
-            // quote — fitted strictly into the gap between map and KPIs
+            // quote — now owns the whole band below the map down to the footer
             KaraokeQuote(text: q, progress: progress,
                          fontSize: ShareCardView.fittedSerifSize(q, boxW: (W - P * 2) * 0.92,
-                                                                 boxH: qBot - qTop, maxSize: H > 1200 ? 66 : 54))
+                                                                 boxH: qBot - qTop, maxSize: H > 1200 ? 72 : 58))
                 .frame(width: W - P * 2, height: qBot - qTop)
                 .position(x: W / 2, y: (qTop + qBot) / 2)
 
-            kpiRow.frame(width: W - P * 2).position(x: W / 2, y: kpiTop + kpiH / 2)
             footer
         }
         .frame(width: W, height: H)
@@ -176,7 +183,7 @@ struct ShareCardView: View {
             chartStrip
                 .frame(width: W - P * 2, height: graphH)
                 .position(x: W / 2, y: graphTop + graphH / 2)
-            kpiRow
+            kpiRow()
                 .frame(width: W - P * 2)
                 .position(x: W / 2, y: kpiY + 30)
             footer
@@ -252,17 +259,20 @@ struct ShareCardView: View {
         }
     }
 
-    private var kpiRow: some View {
-        HStack(spacing: 0) {
+    private func kpiRow(value: Color? = nil, label: Color? = nil, divider: Color? = nil) -> some View {
+        let valueColor = value ?? cream
+        let labelColor = label ?? dim
+        let dividerColor = divider ?? cream.opacity(0.08)
+        return HStack(spacing: 0) {
             ForEach(Array(model.kpis.enumerated()), id: \.offset) { i, kpi in
                 VStack(spacing: 6) {
                     Text(kpi.value).font(.system(size: 42, weight: .heavy)).monospacedDigit()
-                        .foregroundStyle(cream).minimumScaleFactor(0.5).lineLimit(1)
-                    Text(kpi.label.uppercased()).font(.system(size: 16, weight: .bold)).foregroundStyle(dim)
+                        .foregroundStyle(valueColor).minimumScaleFactor(0.5).lineLimit(1)
+                    Text(kpi.label.uppercased()).font(.system(size: 16, weight: .bold)).foregroundStyle(labelColor)
                 }
                 .frame(maxWidth: .infinity)
                 .overlay(alignment: .leading) {
-                    if i > 0 { Rectangle().fill(cream.opacity(0.08)).frame(width: 1, height: 56) }
+                    if i > 0 { Rectangle().fill(dividerColor).frame(width: 1, height: 56) }
                 }
             }
         }

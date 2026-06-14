@@ -369,9 +369,14 @@ private struct RunListRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            Text(RunTitleGenerator.title(forRunId: run.id, date: run.startedAt,
+                                         runType: RunType(rawValue: run.runTypeRaw) ?? .outdoor))
+                .font(.subheadline.bold())
+                .lineLimit(2)
             HStack(spacing: 6) {
                 Text(run.startedAt, format: .dateTime.weekday().day().month(.abbreviated).hour().minute())
-                    .font(.subheadline.bold())
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if run.isTestData {
                     Text("TEST").font(.caption2.bold())
                         .padding(.horizontal, 5).padding(.vertical, 1)

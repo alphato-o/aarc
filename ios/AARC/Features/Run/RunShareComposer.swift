@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import Photos
+import AARCKit
 
 /// Share composer presented from the post-run summary. Previews the card,
 /// lets the runner pick the centrepiece quote + format, and exports an image
@@ -178,12 +179,15 @@ struct RunShareComposer: View {
         mapResult = nil
         Task {
             let cardH = 1080 / aspect
-            // ~32% of the card height so the quote stays the hero.
-            // Tiles don't touch D1/R2 — use the failover-aware endpoint, NOT
-            // the CF-pinned one (CF crawls in China; the gateway serves tiles
-            // in ~2s).
+            // Route region (~30% of card) + a bottom band that holds the white
+            // KPI overlay; the route is fit ABOVE the band so they never collide.
+            // Tiles don't touch D1/R2 — use the failover-aware endpoint, NOT the
+            // CF-pinned one (CF crawls in China; the gateway serves tiles ~2s).
+            let routeH = (cardH * 0.30).rounded()
+            let band = ShareCardView.mapKpiBand
             let res = await ShareMap.render(points: s.trail, mode: mapMode,
-                                            width: 1080 - 152, height: (cardH * 0.32).rounded(),
+                                            width: 1080 - 152, height: routeH + band,
+                                            padBottom: band,
                                             tileBase: Config.apiBaseURL.absoluteString)
             mapResult = res
             mapBuilding = false
@@ -221,9 +225,24 @@ struct RunShareComposer: View {
 
     // MARK: export
 
+    /// Filesystem-safe run name for exported files (matches the dashboard).
+    private var fileSlug: String {
+        guard let s = store.summary else { return "aarc-run" }
+        return RunTitleGenerator.fileName(forRunId: s.runId, date: s.startedAt,
+                                          runType: s.isOutdoor ? .outdoor : .treadmill)
+    }
+
     private func shareImage() {
         guard let m = model, let img = ShareExport.image(m) else { return }
-        shareItems = [img]; showShare = true
+        // Share a named file (not a bare UIImage) so the run name is the filename.
+        if let data = img.pngData() {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(fileSlug).png")
+            try? data.write(to: url)
+            shareItems = FileManager.default.fileExists(atPath: url.path) ? [url] : [img]
+        } else {
+            shareItems = [img]
+        }
+        showShare = true
     }
 
     private func shareVideo() async {
@@ -242,10 +261,19 @@ struct RunShareComposer: View {
         do {
             let url = try await ShareExport.video(model: m, audioURL: audioURL)
             busy = false; status = ""
-            shareItems = [url]; showShare = true
+            shareItems = [renamed(url, to: "\(fileSlug).mp4")]; showShare = true
         } catch {
             busy = false; status = "Video render failed."
         }
+    }
+
+    /// Move an exported temp file to a named one (so the share sheet shows the
+    /// run name); falls back to the original on failure.
+    private func renamed(_ url: URL, to name: String) -> URL {
+        let dst = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: dst)
+        do { try FileManager.default.moveItem(at: url, to: dst); return dst }
+        catch { return url }
     }
 
     // MARK: save to Photos (add-only — we only ever write)

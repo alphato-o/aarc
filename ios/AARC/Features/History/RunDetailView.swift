@@ -49,6 +49,7 @@ struct RunDetailView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(RunTitleGenerator.title(
                 forRunId: run.id,
+                date: run.startedAt,
                 runType: RunType(rawValue: run.runTypeRaw) ?? .outdoor
             ))
                 .font(.title3.bold())

@@ -114,6 +114,7 @@ export const APP_HTML = `<!doctype html>
   .run-row .toprow { display: flex; align-items: center; gap: 7px; }
   .run-row .hdot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; background: var(--green); }
   .run-row .hdot.bad { background: var(--hr); box-shadow: 0 0 5px rgba(248,81,73,.7); }
+  .run-row .runname { color: var(--textHi); font-weight: 600; font-size: 12.5px; line-height: 1.25; margin: 3px 0 2px; }
   .run-row .date { color: var(--textHi); font-weight: 600; font-size: 12px; flex: 1;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-row .spark { display: block; margin: 5px 0 3px; }
@@ -831,9 +832,11 @@ function renderRuns() {
     if (fp) bits.push("<b>" + esc(fp) + "</b>");
     bits.push(esc(run.event_count + " events"));
     var bad = run._health === "bad";
+    var name = (metaObj(run.meta).name || "").trim();
     row.innerHTML =
       '<div class="toprow"><span class="hdot' + (bad ? " bad" : "") + '"></span>' +
       '<span class="date">' + esc(dateStr) + "</span></div>" +
+      (name ? '<div class="runname">' + esc(name) + "</div>" : "") +
       rowSpark(run) +
       '<div class="sub">' + bits.join(" ") + "</div>" +
       '<button class="del" title="Move to recycle bin">&#10005;</button>';
@@ -2182,9 +2185,11 @@ function prefetchRouteMap() {
   shareState.mapImg = null; shareState.mapProj = null;
   if (pts.length < 2) { renderSharePreview(); return; }
   var d = shareDims(), P = 76;
-  // Same map band as iOS: full content width, ~32% of the card height.
-  var boxW = Math.round(d.w - P * 2), boxH = Math.round(d.h * 0.32);
-  var body = { w: boxW, h: boxH, mode: "pace", datum: "wgs",
+  // Same map band as iOS: full content width, ~30% route region + a 150px
+  // bottom band that holds the white KPI overlay (route fit above it).
+  var band = 150;
+  var boxW = Math.round(d.w - P * 2), boxH = Math.round(d.h * 0.30) + band;
+  var body = { w: boxW, h: boxH, padBottom: band, mode: "pace", datum: "wgs",
                points: pts.map(function (p) { return [p.lon, p.lat, isFinite(p.v) ? p.v : null]; }) };
   var token = (shareState.mapToken = (shareState.mapToken || 0) + 1);
   fetch("/staticmap", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
@@ -2586,12 +2591,12 @@ function drawLayoutSplits(ctx, W, H, o, progress, c) {
 // Mirrors the iOS routeBody exactly: map then quote then KPIs then footer, one
 // uniform gap between each. The route animates with progress (video).
 function drawLayoutRoute(ctx, W, H, o, progress, c) {
-  var P = c.P, G = 60, kpiH = 84;
+  var P = c.P, G = 60, band = 150;
   var pts = o.route;
-  var mapX = P, mapY = c.topY + G, mapW = W - P * 2, mapH = Math.round(H * 0.32);
+  var mapX = P, mapY = c.topY + G, mapW = W - P * 2, mapH = Math.round(H * 0.30) + band;
   var mapBot = mapY + mapH;
-  var footY = c.footY, kpiTop = footY - G - kpiH;
-  var qTop = mapBot + G, qBot = kpiTop - G;
+  var footY = c.footY;
+  var qTop = mapBot + G, qBot = footY - G;
 
   // base map (rounded), or a placeholder while it loads
   ctx.save();
@@ -2641,10 +2646,30 @@ function drawLayoutRoute(ctx, W, H, o, progress, c) {
     ctx.fillStyle = "#5b6b5f"; ctx.font = "500 22px " + SANS; ctx.textAlign = "center";
     ctx.fillText("Loading map\\u2026", mapX + mapW / 2, mapY + mapH / 2); ctx.textAlign = "left";
   }
+
+  // White KPI strip over a dark scrim, on the map's reserved bottom band (still
+  // inside the rounded clip). The route was fit above this band → no overlap.
+  var bandTop = mapBot - band;
+  var grad = ctx.createLinearGradient(0, bandTop, 0, mapBot);
+  grad.addColorStop(0, "rgba(0,0,0,0)"); grad.addColorStop(1, "rgba(0,0,0,0.62)");
+  ctx.fillStyle = grad; ctx.fillRect(mapX, bandTop, mapW, band);
+  var ky = mapBot - band / 2, n = o.kpis.length, cw = mapW / n;
+  for (var k = 0; k < n; k++) {
+    var cx = mapX + cw * k + cw / 2;
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffffff"; ctx.font = "800 42px " + SANS; ctx.fillText(o.kpis[k].v, cx, ky + 8);
+    ctx.fillStyle = "rgba(255,255,255,0.82)"; ctx.font = "700 16px " + SANS;
+    ctx.fillText(o.kpis[k].k.toUpperCase(), cx, ky + 38);
+    if (k > 0) {
+      ctx.strokeStyle = "rgba(255,255,255,0.28)"; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(mapX + cw * k, ky - 26); ctx.lineTo(mapX + cw * k, ky + 30); ctx.stroke();
+    }
+  }
+  ctx.textAlign = "left";
   ctx.restore();
 
-  drawQuote(ctx, P, W - P * 2, qTop, qBot, H > 1200 ? 66 : 54, o.quote, progress, false);
-  drawKpis(ctx, W, P, kpiTop, o.kpis);
+  // Quote now owns the whole space below the map.
+  drawQuote(ctx, P, W - P * 2, qTop, qBot, H > 1200 ? 72 : 58, o.quote, progress, false);
 }
 
 // ---- layout: elevation + pace strip (needs altitude in metrics)
@@ -2832,6 +2857,12 @@ function shareStatus(msg, isErr) {
 }
 function shareSlug() {
   var r = currentRunObj();
+  // Prefer the run's name (matches iOS), slugified for a filesystem-safe name.
+  var name = r ? (metaObj(r.meta).name || "").trim() : "";
+  if (name) {
+    var slug = name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
+    if (slug) return slug;
+  }
   var d = r ? new Date(r.started_at) : null;
   if (d && !isNaN(d.getTime())) return "aarc-" + d.toISOString().slice(0, 10);
   return "aarc-run";

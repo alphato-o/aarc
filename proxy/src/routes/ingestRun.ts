@@ -119,7 +119,9 @@ export async function ingestRunHandler(request: Request, env: Env): Promise<Resp
     // the `run.start` event detail with `isTest=1`.
     const startEvent = events.find((e) => e.type === "run.start");
     const isTest = startEvent ? /(?:^|;)isTest=1(?:;|$)/.test(startEvent.detail) : false;
-    const meta = JSON.stringify({ isTest });
+    // The phone tags run.start with the generated run name (data.name).
+    const name = typeof startEvent?.data?.name === "string" ? startEvent.data.name.slice(0, 160) : "";
+    const meta = JSON.stringify({ isTest, name });
 
     // Replace any previous copy (retries after a half-applied failure).
     await env.DB.batch([
