@@ -9,7 +9,14 @@ import Photos
 struct RunShareComposer: View {
     let target: ShareTarget
     @Environment(\.dismiss) private var dismiss
-    @State private var store = RunSummaryStore.shared
+    @State private var store: RunSummaryStore
+
+    /// Defaults to the live post-run store; History sharing injects a
+    /// detached store seeded from a past run.
+    init(target: ShareTarget, store: RunSummaryStore = .shared) {
+        self.target = target
+        _store = State(initialValue: store)
+    }
 
     @State private var aspect = ShareCardModel.portrait
     @State private var quoteIdx = 0          // 0 = closing roast, 1… = hearted lines

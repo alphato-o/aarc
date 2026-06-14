@@ -281,6 +281,17 @@ struct RunDetailView: View {
 
     private func loadData() async {
         guard let uuid = run.healthKitWorkoutUUID else {
+            // No HealthKit workout (test / simulated run) — render from the
+            // series persisted on the record instead.
+            if let blob = run.seriesBlob,
+               let s = try? JSONDecoder().decode(StoredRunSeries.self, from: blob) {
+                self.hrSeries = s.hr.map { .init(timestamp: $0.t, value: $0.v) }
+                self.paceSeries = s.pace.map { .init(timestamp: $0.t, value: $0.v) }
+                // Trail is already display-space — plot directly.
+                self.routeCoords = s.trail.map {
+                    CLLocationCoordinate2D(latitude: $0.lat, longitude: $0.lon)
+                }
+            }
             isLoading = false
             return
         }

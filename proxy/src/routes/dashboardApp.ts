@@ -103,6 +103,11 @@ export const APP_HTML = `<!doctype html>
     width: 252px; min-width: 252px; overflow-y: auto;
     background: var(--panel); border-right: 1px solid var(--line);
   }
+  #runfilter {
+    position: sticky; top: 0; z-index: 2;
+    padding: 8px; gap: 6px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
   .run-row { padding: 9px 12px; border-bottom: 1px solid var(--line2); cursor: pointer; position: relative; }
   .run-row:hover { background: #161d27; }
   .run-row.active { background: #1c2632; box-shadow: inset 3px 0 0 var(--select); }
@@ -433,7 +438,13 @@ export const APP_HTML = `<!doctype html>
   </div>
 </div>
 <div id="layout">
-  <nav id="runs"><div class="empty">Loading runs&hellip;</div></nav>
+  <nav id="runs">
+    <div id="runfilter" class="seg">
+      <button data-cat="real" class="on">Runs</button>
+      <button data-cat="test">Test</button>
+    </div>
+    <div id="runlist"><div class="empty">Loading runs&hellip;</div></div>
+  </nav>
   <main id="center">
     <div id="film"></div>
 
@@ -588,7 +599,7 @@ var state = {
   xmode: "time", dur: 60, maxDist: 0,
   v0: 0, v1: 60, domain0: 0, domain1: 60,
   selected: -1, directorIntervals: [], summary: null, net: [], pan: null,
-  tab: "perf", debug: false
+  tab: "perf", debug: false, runCat: "real"
 };
 
 var chart = document.getElementById("chart");
@@ -782,11 +793,23 @@ function fetchSpark(run) {
   }).catch(function () { done(); });
 }
 
+function isTestRun(run) { return metaObj(run.meta).isTest === true; }
+
 function renderRuns() {
-  var nav = document.getElementById("runs");
+  var nav = document.getElementById("runlist");
   nav.innerHTML = "";
-  if (state.runs.length === 0) { nav.innerHTML = '<div class="empty">No runs yet.</div>'; return; }
-  state.runs.forEach(function (run) {
+  // Keep the Test tab's count fresh.
+  var testCount = state.runs.filter(isTestRun).length;
+  var tbtn = document.querySelector('#runfilter button[data-cat="test"]');
+  if (tbtn) tbtn.textContent = testCount ? "Test (" + testCount + ")" : "Test";
+  var wantTest = state.runCat === "test";
+  var rows = state.runs.filter(function (r) { return isTestRun(r) === wantTest; });
+  if (rows.length === 0) {
+    nav.innerHTML = '<div class="empty">' +
+      (wantTest ? "No test runs." : "No runs yet.") + "</div>";
+    return;
+  }
+  rows.forEach(function (run) {
     var row = document.createElement("div");
     row.className = "run-row" + (run.run_id === state.runId ? " active" : "");
     var d = new Date(run.started_at);
@@ -1945,6 +1968,19 @@ function setTab(tab) {
 }
 document.querySelectorAll("#tabs button").forEach(function (b) {
   b.addEventListener("click", function () { setTab(b.getAttribute("data-tab")); });
+});
+
+// --- runs Real/Test filter ---------------------------------------------
+document.querySelectorAll("#runfilter button").forEach(function (b) {
+  b.addEventListener("click", function () {
+    var cat = b.getAttribute("data-cat");
+    if (state.runCat === cat) return;
+    state.runCat = cat;
+    document.querySelectorAll("#runfilter button").forEach(function (x) {
+      x.classList.toggle("on", x.getAttribute("data-cat") === cat);
+    });
+    renderRuns();
+  });
 });
 
 // --- x toggle ----------------------------------------------------------

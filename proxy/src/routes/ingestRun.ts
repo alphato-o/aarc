@@ -114,6 +114,13 @@ export async function ingestRunHandler(request: Request, env: Env): Promise<Resp
     const startedAt = events[0]?.wall ?? "";
     const uploadedAt = new Date().toISOString();
 
+    // Surface whether this was a test/simulated run so the dashboard can keep
+    // them in their own tab (mirrors the in-app History split). The phone tags
+    // the `run.start` event detail with `isTest=1`.
+    const startEvent = events.find((e) => e.type === "run.start");
+    const isTest = startEvent ? /(?:^|;)isTest=1(?:;|$)/.test(startEvent.detail) : false;
+    const meta = JSON.stringify({ isTest });
+
     // Replace any previous copy (retries after a half-applied failure).
     await env.DB.batch([
         env.DB.prepare("DELETE FROM run_events WHERE run_id = ?").bind(runId),
@@ -124,7 +131,7 @@ export async function ingestRunHandler(request: Request, env: Env): Promise<Resp
                 // the run back as active (deleted_at = NULL).
                 "INSERT OR REPLACE INTO runs (run_id, started_at, uploaded_at, event_count, meta, deleted_at) VALUES (?, ?, ?, ?, ?, NULL)",
             )
-            .bind(runId, startedAt, uploadedAt, events.length, "{}"),
+            .bind(runId, startedAt, uploadedAt, events.length, meta),
     ]);
 
     // Multi-row inserts (6 cols × 10 rows = 60 bound params, comfortably

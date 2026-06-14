@@ -4,6 +4,18 @@ import SwiftData
 // Phase 0 placeholder schema, fleshed out in §1.9.
 // See docs/data-model.md for the full target shape.
 
+/// Compact HR/pace/trail series persisted on a RunRecord for runs without a
+/// HealthKit workout (test/sim), so History can show their charts + route.
+struct StoredRunSeries: Codable {
+    struct Pt: Codable { let t: Date; let v: Double }
+    /// Trail vertex (display-space coord) with the performance at that point,
+    /// so a shared historical route can still be performance-colored.
+    struct TPt: Codable { let lat: Double; let lon: Double; let kmh: Double?; let hr: Double? }
+    var hr: [Pt] = []
+    var pace: [Pt] = []        // sec/km
+    var trail: [TPt] = []
+}
+
 @Model
 final class RunRecord {
     @Attribute(.unique) var id: UUID
@@ -35,6 +47,11 @@ final class RunRecord {
     /// (permanently removing the HK workout too) after the retention window.
     var deletedAt: Date? = nil
 
+    /// Persisted HR/pace series + GPS trail for runs that have NO HealthKit
+    /// workout to read back (test / simulated runs). JSON of `StoredRunSeries`.
+    /// nil for real runs — those fetch richer data from HealthKit on demand.
+    var seriesBlob: Data? = nil
+
     init(
         id: UUID = UUID(),
         startedAt: Date = .now,
@@ -46,9 +63,11 @@ final class RunRecord {
         cachedDistanceMeters: Double = 0,
         cachedDurationSeconds: Double = 0,
         cachedAvgPaceSecPerKm: Double = 0,
-        cachedEnergyKcal: Double = 0
+        cachedEnergyKcal: Double = 0,
+        seriesBlob: Data? = nil
     ) {
         self.id = id
+        self.seriesBlob = seriesBlob
         self.startedAt = startedAt
         self.endedAt = endedAt
         self.personality = personality

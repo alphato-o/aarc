@@ -115,7 +115,9 @@ final class LiveMetricsConsumer {
 
         // Open the per-run diagnostics log (events + voice archive).
         RunEventLog.shared.startRun(runId: runId)
-        RunEventLog.shared.record("run.start", "runType=\(pendingRunType.rawValue)")
+        RunEventLog.shared.record(
+            "run.start",
+            "runType=\(pendingRunType.rawValue);isTest=\(RunOrchestrator.shared.isTestRun ? 1 : 0)")
 
         // Real-world surroundings for the coaches — outdoor runs only.
         // The desk simulator runs the SAME pipeline fed by a synthetic
@@ -210,6 +212,16 @@ final class LiveMetricsConsumer {
             predicate: #Predicate { $0.id == id })), !existing.isEmpty { return }
         let dist = latest?.distanceMeters ?? 0
         let dur = latest?.elapsed ?? 0
+        // Persist the chart series + trail so History can render this test run
+        // (no HealthKit workout to read back from).
+        var series = StoredRunSeries()
+        for s in LiveRunChartStore.shared.samples {
+            if let h = s.heartRate, h > 0 { series.hr.append(.init(t: s.recordedAt, v: h)) }
+            if let p = s.paceSecPerKm, p > 0 { series.pace.append(.init(t: s.recordedAt, v: p)) }
+        }
+        series.trail = PlaceContext.shared.trail.map {
+            .init(lat: $0.coord.latitude, lon: $0.coord.longitude, kmh: $0.kmh, hr: $0.hr)
+        }
         let record = RunRecord(
             id: id,
             startedAt: startedAt ?? .now,
@@ -221,7 +233,8 @@ final class LiveMetricsConsumer {
             cachedDistanceMeters: dist,
             cachedDurationSeconds: dur,
             cachedAvgPaceSecPerKm: dist > 0 ? dur / (dist / 1000) : 0,
-            cachedEnergyKcal: 0
+            cachedEnergyKcal: 0,
+            seriesBlob: try? JSONEncoder().encode(series)
         )
         context.insert(record)
         try? context.save()

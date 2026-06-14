@@ -12,7 +12,11 @@ import AARCKit
 @Observable
 final class RunSummaryStore {
     static let shared = RunSummaryStore()
-    private init() {}
+    /// `shared` drives the live post-run summary. History sharing builds its
+    /// OWN detached instance (via `loadFromHistory`) so it never seeds the
+    /// shared one — otherwise `isPresenting` would pop a stray summary sheet
+    /// on the Run tab.
+    init() {}
 
     struct HeartedLine: Identifiable, Sendable {
         let id = UUID()
@@ -123,6 +127,68 @@ final class RunSummaryStore {
         synced = false
         Task { await self.generateFinalRoast() }
         Task { await self.awaitReadiness(runId: runId) }
+    }
+
+    /// Seed a DETACHED store from a finished run in History, so the share
+    /// composer can re-generate an image/video for it later. Series come from
+    /// the persisted blob (test/sim runs) or HealthKit (real runs). Unlike
+    /// `capture()`, this never shows an interstitial or auto-plays — it lands
+    /// in `.ready` and the share sheet drives playback on demand.
+    func loadFromHistory(_ run: RunRecord) async {
+        let isOutdoor = run.runTypeRaw == "outdoor"
+        var speed: [Double] = [], hr: [Double] = []
+        var trail: [PlaceContext.TrailPoint] = []
+
+        if let blob = run.seriesBlob,
+           let s = try? JSONDecoder().decode(StoredRunSeries.self, from: blob) {
+            for p in s.pace where p.v > 0 { speed.append(3600.0 / p.v) }
+            hr = s.hr.map(\.v)
+            trail = s.trail.map {
+                .init(coord: .init(latitude: $0.lat, longitude: $0.lon), kmh: $0.kmh, hr: $0.hr)
+            }
+        } else if let uuid = run.healthKitWorkoutUUID,
+                  let workout = try? await HealthKitReader.shared.fetchWorkout(uuid: uuid) {
+            // Real run — pull the richer series/route straight from HealthKit.
+            async let hrPts = HealthKitReader.shared.fetchHeartRateSeries(during: workout)
+            async let pacePts = HealthKitReader.shared.fetchPaceSeries(during: workout)
+            async let route = HealthKitReader.shared.fetchRoute(for: workout)
+            hr = ((try? await hrPts) ?? []).map(\.value)
+            for p in ((try? await pacePts) ?? []) where p.value > 0 { speed.append(3600.0 / p.value) }
+            // HealthKit is WGS-84; transform to display space (GCJ in China).
+            let coords = ChinaCoordinateTransform.displayCoordinates(
+                ((try? await route) ?? []).map(\.coordinate))
+            trail = coords.map { .init(coord: $0, kmh: nil, hr: nil) }
+        }
+
+        let avgHR = hr.isEmpty ? nil : hr.reduce(0, +) / Double(hr.count)
+        summary = Summary(
+            runId: run.id,
+            startedAt: run.startedAt,
+            isOutdoor: isOutdoor,
+            isTest: run.isTestData,
+            distanceMeters: run.cachedDistanceMeters,
+            durationSeconds: run.cachedDurationSeconds,
+            avgPaceSecPerKm: run.cachedAvgPaceSecPerKm,
+            avgHR: avgHR,
+            maxHR: hr.max(),
+            speedSeries: speed,
+            hrSeries: hr,
+            splits: [],
+            trail: isOutdoor ? trail : [],
+            pois: [],
+            plannedRoute: [],
+            routeDescription: nil,
+            // Hearted lines aren't bounded to a past run's window, so skip
+            // them here — the freshly-generated closing roast is the quote.
+            hearted: [],
+            planTotalMeters: nil
+        )
+        finalRoast = nil
+        finalRoastFailed = false
+        phase = .ready
+        roastReady = false
+        synced = true
+        Task { await self.generateFinalRoast() }
     }
 
     /// Hold the interstitial until BOTH the closing roast is in and the run

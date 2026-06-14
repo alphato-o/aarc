@@ -13,7 +13,16 @@ struct HistoryView: View {
     @Query(filter: #Predicate<RunRecord> { $0.deletedAt == nil && $0.isTestData == true })
     private var testRuns: [RunRecord]
 
+    @State private var category: Category = .real
+    private enum Category: String, CaseIterable { case real = "Runs", test = "Test" }
+    /// Runs shown for the selected category.
+    private var shownRuns: [RunRecord] {
+        runs.filter { category == .test ? $0.isTestData : !$0.isTestData }
+    }
+
     @State private var pendingDelete: RunRecord?
+    /// Detached summary store seeded from a past run, driving the share sheet.
+    @State private var shareStore: RunSummaryStore?
     @State private var confirmTestPurge = false
     @State private var deletingId: PersistentIdentifier?
     @State private var deleteError: String?
@@ -29,16 +38,21 @@ struct HistoryView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if runs.isEmpty {
-                    ContentUnavailableView(
-                        "No runs yet",
-                        systemImage: "list.bullet.rectangle",
-                        description: Text("Finish a run on your Apple Watch and it will appear here within a few seconds.")
-                    )
+            VStack(spacing: 0) {
+                Picker("Category", selection: $category) {
+                    ForEach(Category.allCases, id: \.self) { c in
+                        Text(categoryLabel(c)).tag(c)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal).padding(.vertical, 8)
+
+                if shownRuns.isEmpty {
+                    emptyState
+                        .frame(maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(runs) { run in runRow(run) }
+                        ForEach(shownRuns) { run in runRow(run) }
                     }
                     .listStyle(.plain)
                 }
@@ -119,7 +133,38 @@ struct HistoryView: View {
             ), presenting: importResult) { _ in
                 Button("OK", role: .cancel) {}
             } message: { Text($0) }
+            .sheet(isPresented: Binding(
+                get: { shareStore != nil }, set: { if !$0 { shareStore = nil } }
+            )) {
+                if let shareStore {
+                    RunShareComposer(target: .wholeRun, store: shareStore)
+                }
+            }
         }
+    }
+
+    /// Re-open a finished run for sharing: build a detached summary store from
+    /// it (series from the persisted blob or HealthKit) and present the same
+    /// composer used at the end of a run, so a fresh image/video can be made.
+    private func presentShare(_ run: RunRecord) {
+        let store = RunSummaryStore()
+        shareStore = store
+        Task { await store.loadFromHistory(run) }
+    }
+
+    private func categoryLabel(_ c: Category) -> String {
+        guard c == .test else { return "Runs" }
+        return testRuns.isEmpty ? "Test" : "Test (\(testRuns.count))"
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        let title: String = category == .test ? "No test runs" : "No runs yet"
+        let icon: String = category == .test ? "flask" : "list.bullet.rectangle"
+        let detail: String = category == .test
+            ? "Runs you do in test / simulate mode land here, kept apart from real runs."
+            : "Finish a run on your Apple Watch and it will appear here within a few seconds."
+        ContentUnavailableView(title, systemImage: icon, description: Text(detail))
     }
 
     @ViewBuilder
@@ -135,6 +180,10 @@ struct HistoryView: View {
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            Button { presentShare(run) } label: {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+            .tint(.orange)
             if let archived = diagnostics(for: run) {
                 NavigationLink {
                     ControlRoomView(replay: archived)
@@ -145,6 +194,9 @@ struct HistoryView: View {
             }
         }
         .contextMenu {
+            Button { presentShare(run) } label: {
+                Label("Share run", systemImage: "square.and.arrow.up")
+            }
             Button {
                 run.isTestData.toggle()
                 try? modelContext.save()
