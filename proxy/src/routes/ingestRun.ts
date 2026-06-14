@@ -197,11 +197,25 @@ export async function listRunsHandler(request: Request, env: Env): Promise<Respo
     if (!readAuthorized(request, env)) return unauthorized();
     const { results } = await env.DB
         .prepare(
-            "SELECT run_id, started_at, uploaded_at, event_count, meta FROM runs WHERE deleted_at IS NULL ORDER BY started_at DESC LIMIT 500",
+            `SELECT run_id, started_at, uploaded_at, event_count, meta, ${IS_TEST_SELECT}
+             FROM runs r WHERE deleted_at IS NULL ORDER BY started_at DESC LIMIT 500`,
         )
         .all();
     return json(results);
 }
+
+/// Whether a run was a test/sim run, derived from its events so it works for
+/// runs ingested before the `meta.isTest` tag existed:
+///   * new runs tag `run.start` with `isTest=1`
+///   * every test/sim run (no HealthKit workout) seals `run.end` as
+///     `workout=test/sim`
+/// Emitted as the `is_test` column (0/1) on the run-list endpoints.
+const IS_TEST_SELECT = `EXISTS(
+    SELECT 1 FROM run_events e WHERE e.run_id = r.run_id AND (
+        (e.type = 'run.start' AND e.detail LIKE '%isTest=1%') OR
+        (e.type = 'run.end' AND e.detail = 'workout=test/sim')
+    )
+) AS is_test`;
 
 // MARK: - GET /api/runs/deleted
 
@@ -211,7 +225,8 @@ export async function listDeletedRunsHandler(request: Request, env: Env): Promis
     if (!readAuthorized(request, env)) return unauthorized();
     const { results } = await env.DB
         .prepare(
-            "SELECT run_id, started_at, uploaded_at, event_count, meta, deleted_at FROM runs WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 500",
+            `SELECT run_id, started_at, uploaded_at, event_count, meta, deleted_at, ${IS_TEST_SELECT}
+             FROM runs r WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC LIMIT 500`,
         )
         .all();
     return json(results);

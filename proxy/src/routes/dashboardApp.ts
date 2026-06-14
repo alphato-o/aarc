@@ -793,7 +793,12 @@ function fetchSpark(run) {
   }).catch(function () { done(); });
 }
 
-function isTestRun(run) { return metaObj(run.meta).isTest === true; }
+function isTestRun(run) {
+  // is_test is computed server-side from the run's events (works for runs
+  // ingested before the meta tag existed); meta is the newer fallback.
+  if (run.is_test === 1 || run.is_test === true) return true;
+  return metaObj(run.meta).isTest === true;
+}
 
 function renderRuns() {
   var nav = document.getElementById("runlist");
