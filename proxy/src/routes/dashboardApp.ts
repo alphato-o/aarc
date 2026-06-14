@@ -669,7 +669,7 @@ function loadRuns(keepSel) {
       if (state.runs.length > 0) selectRun(state.runs[0].run_id); else clearRun();
     }
   }).catch(function (e) {
-    document.getElementById("runs").innerHTML = '<div class="empty">Failed to load runs: ' + esc(e.message) + "</div>";
+    document.getElementById("runlist").innerHTML = '<div class="empty">Failed to load runs: ' + esc(e.message) + "</div>";
   });
 }
 
