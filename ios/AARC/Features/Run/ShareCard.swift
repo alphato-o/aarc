@@ -71,7 +71,11 @@ struct ShareCardView: View {
         // Compact map (rounded), quote gets the bulk, KPIs pinned above the
         // footer with a clear gap — no overlap.
         let mapTop = topY + 32
-        let mapH = model.mapImage!.size.height
+        let mapW = W - P * 2
+        // Preserve the captured map's aspect (it's snapshotted at the device's
+        // screen scale, so don't trust its raw point height).
+        let img = model.mapImage!
+        let mapH = (img.size.height / max(1, img.size.width)) * mapW
         let mapBot = mapTop + mapH
         let footY = H - 56
         let kpiTop = footY - 120

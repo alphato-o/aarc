@@ -28,8 +28,13 @@ struct RunShareComposer: View {
     @State private var layout: Layout = .quote
     @State private var mapMode: RunMapView.ColorMode = .pace
     @State private var mapResult: ShareMap.Result?
-    @State private var mapBuilding = false
+    /// True while the live, on-screen map renders + captures (route layout).
+    @State private var capturing = false
     private enum Layout: String { case quote, route }
+
+    /// Aspect of the map band on the card (matches routeBody's geometry), so
+    /// the live capture view has the right shape before it's baked in.
+    private var mapBandAspect: CGFloat { (1080 - 152) / ((1080 / aspect) * 0.32) }
 
     private var isOutdoor: Bool { (store.summary?.isOutdoor ?? false) && (store.summary?.trail.count ?? 0) > 1 }
 
@@ -42,7 +47,28 @@ struct RunShareComposer: View {
                     // True WYSIWYG: show the exact rendered card image, not a
                     // scaled live view (scaleEffect kept the 1080pt layout
                     // bounds and rendered blank/clipped — the "wonky preview").
-                    if let preview {
+                    if capturing, let s = store.summary {
+                        // Live on-screen map → captured to a bitmap once its
+                        // tiles render (the only way to get Apple-Maps tiles in
+                        // mainland China). Baked into the card preview after.
+                        CapturableRouteMap(points: s.trail, mode: mapMode) { img in
+                            mapResult = ShareMap.Result(image: img, segments: [],
+                                                        start: nil, finish: nil)
+                            capturing = false
+                            regenPreview()
+                        }
+                        .id("\(mapBandAspect)-\(mapMode.rawValue)")
+                        .aspectRatio(mapBandAspect, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .overlay(alignment: .bottom) {
+                            Text("Rendering map\u{2026}")
+                                .font(.caption2).foregroundStyle(.white.opacity(0.9))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(.black.opacity(0.55), in: Capsule())
+                                .padding(10)
+                        }
+                    } else if let preview {
                         Image(uiImage: preview)
                             .resizable().scaledToFit()
                             .frame(maxWidth: .infinity)
@@ -68,11 +94,11 @@ struct RunShareComposer: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
             .sheet(isPresented: $showShare) { ActivityView(items: shareItems) }
             .onAppear { regenPreview() }
-            .onChange(of: aspect) { _, _ in if layout == .route { buildMapIfNeeded() } else { regenPreview() } }
+            .onChange(of: aspect) { _, _ in if layout == .route { recaptureMap() } else { regenPreview() } }
             .onChange(of: quoteIdx) { _, _ in regenPreview() }
             .onChange(of: store.finalRoast) { _, _ in regenPreview() }
-            .onChange(of: layout) { _, l in if l == .route { buildMapIfNeeded() } else { regenPreview() } }
-            .onChange(of: mapMode) { _, _ in buildMapIfNeeded() }
+            .onChange(of: layout) { _, l in if l == .route { recaptureMap() } else { regenPreview() } }
+            .onChange(of: mapMode) { _, _ in if layout == .route { recaptureMap() } }
         }
         .presentationDetents([.large])
     }
@@ -149,7 +175,7 @@ struct RunShareComposer: View {
                     Text("Pace").tag(RunMapView.ColorMode.pace)
                     Text("HR").tag(RunMapView.ColorMode.hr)
                 }.pickerStyle(.segmented)
-                if mapBuilding { Text("Rendering map\u{2026}").font(.caption2).foregroundStyle(.secondary) }
+                if capturing { Text("Rendering map\u{2026}").font(.caption2).foregroundStyle(.secondary) }
             }
         }
     }
@@ -161,20 +187,12 @@ struct RunShareComposer: View {
         }.pickerStyle(.segmented)
     }
 
-    /// Build the map snapshot (async) when the route layout / color / format
-    /// changes, then refresh the preview.
-    private func buildMapIfNeeded() {
-        guard layout == .route, isOutdoor, let s = store.summary else { return }
-        mapBuilding = true
-        Task {
-            let cardH = 1080 / aspect
-            // Smaller map (~32% of card) so the quote is the hero.
-            let res = await ShareMap.render(points: s.trail, mode: mapMode,
-                                            width: 1080 - 152, height: (cardH * 0.32).rounded())
-            mapResult = res
-            mapBuilding = false
-            regenPreview()
-        }
+    /// Re-render the route map: drop the stale capture and show the live
+    /// on-screen map again, which re-captures itself once its tiles draw.
+    private func recaptureMap() {
+        guard layout == .route, isOutdoor else { return }
+        mapResult = nil
+        capturing = true
     }
 
     private var actions: some View {
@@ -197,7 +215,7 @@ struct RunShareComposer: View {
             }
         }
         .controlSize(.large)
-        .disabled(busy)
+        .disabled(busy || capturing)
         .overlay { if busy { ProgressView() } }
     }
 
