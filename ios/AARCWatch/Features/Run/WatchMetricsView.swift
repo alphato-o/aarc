@@ -16,7 +16,7 @@ struct WatchMetricsView: View {
     private let green = Color(red: 0.36, green: 0.85, blue: 0.55)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             // Hero TIME + brand accent.
             HStack(spacing: 6) {
                 RunnerBadge(
@@ -29,48 +29,63 @@ struct WatchMetricsView: View {
                     Text("PAUSED").font(.system(size: 11, weight: .bold)).foregroundStyle(yellow)
                 }
                 Spacer(minLength: 0)
-                Text("TIME").font(.system(size: 11, weight: .bold)).foregroundStyle(.secondary)
+                Text(formatElapsed(metrics.elapsed))
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .foregroundStyle(yellow.opacity(dim))
+                    .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
             }
+            .padding(.bottom, 2)
 
-            Text(formatElapsed(metrics.elapsed))
-                .font(.system(size: 42, weight: .semibold, design: .rounded))
-                .foregroundStyle(yellow.opacity(dim))
-                .monospacedDigit().minimumScaleFactor(0.7).lineLimit(1)
+            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
 
-            Rectangle().fill(.white.opacity(0.12)).frame(height: 1).padding(.top, 3)
-
-            // Secondary metrics, distributed to fill the remaining height.
-            Spacer(minLength: 4)
-            row(formatDistanceValue(metrics.distanceMeters), formatDistanceUnit(metrics.distanceMeters), .white)
-            Spacer(minLength: 4)
-            row(formatPace(metrics.currentPaceSecPerKm), "PACE", green)
-            Spacer(minLength: 4)
-            row(formatHR(metrics.currentHeartRate), "BPM", .white, heart: true)
-            Spacer(minLength: 4)
-            row("\(Int(metrics.energyKcal))", "CAL", .white)
+            // 2×2 quadrant grid — each metric gets a big number + small label,
+            // filling the whole lower screen. Pace+distance (the decision
+            // metrics) on top; effort+burn below.
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    quad(formatDistanceValue(metrics.distanceMeters),
+                         formatDistanceUnit(metrics.distanceMeters), .white)
+                    vline
+                    quad(formatPace(metrics.currentPaceSecPerKm), "PACE", green)
+                }
+                hline
+                HStack(spacing: 0) {
+                    quad(formatHR(metrics.currentHeartRate), "BPM", .white, heart: true)
+                    vline
+                    quad("\(Int(metrics.energyKcal))", "CAL", .white)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 4)
         .padding(.bottom, 2)
     }
 
-    /// Big value left, small-caps unit pinned right (numbers all left-align).
+    /// One quadrant: a big centered number (+ optional heart) over a small
+    /// caps label, filling its cell.
     @ViewBuilder
-    private func row(_ value: String, _ unit: String, _ color: Color, heart: Bool = false) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(value)
-                .font(.system(size: 34, weight: .medium, design: .rounded))
-                .foregroundStyle(color.opacity(dim))
-                .monospacedDigit()
-            if heart {
-                Image(systemName: "heart.fill").font(.system(size: 13))
-                    .foregroundStyle(.red.opacity(dim)).baselineOffset(1)
+    private func quad(_ value: String, _ label: String, _ color: Color, heart: Bool = false) -> some View {
+        VStack(spacing: 1) {
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(value)
+                    .font(.system(size: 34, weight: .semibold, design: .rounded))
+                    .foregroundStyle(color.opacity(dim))
+                    .monospacedDigit()
+                if heart {
+                    Image(systemName: "heart.fill").font(.system(size: 12))
+                        .foregroundStyle(.red.opacity(dim)).baselineOffset(1)
+                }
             }
-            Spacer(minLength: 4)
-            Text(unit).font(.system(size: 12, weight: .bold)).foregroundStyle(.secondary.opacity(dim))
+            .lineLimit(1).minimumScaleFactor(0.45)
+            Text(label)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.secondary.opacity(dim))
         }
-        .lineLimit(1).minimumScaleFactor(0.6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+
+    private var vline: some View { Rectangle().fill(.white.opacity(0.10)).frame(width: 1) }
+    private var hline: some View { Rectangle().fill(.white.opacity(0.10)).frame(height: 1) }
 
     // MARK: - Formatting
 
