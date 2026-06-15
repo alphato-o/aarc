@@ -278,9 +278,14 @@ final class PhoneSession: NSObject {
             // Runner hearted the current line from the watch.
             LiveSubtitleStore.shared.likeFromWatch(id: id, text: text, who: who)
 
+        case .endWorkout:
+            // The watch ended a desk-sim mirror from the wrist — stop the sim.
+            if RunOrchestrator.shared.isSimulating { RunSimulator.shared.end() }
+
         // Outbound-only on phone side; ignore if echoed somehow.
-        case .startWorkout, .cancelStart, .endWorkout, .hapticCue,
-             .companionMessageDispatched, .scriptReady, .scriptFailed, .coachLine:
+        case .startWorkout, .cancelStart, .hapticCue,
+             .companionMessageDispatched, .scriptReady, .scriptFailed,
+             .coachLine, .simStart, .simEnd, .simTrail:
             break
         }
     }

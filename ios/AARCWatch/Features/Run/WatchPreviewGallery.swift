@@ -34,6 +34,18 @@ struct WatchPreviewGallery: View {
             WatchMetricsView(metrics: Self.mockMetrics(.paused), runType: .outdoor)
         case "chart":
             WatchChartPage(samples: Self.mockSamples, elapsed: 1458, currentHR: 152, distanceMeters: 2410)
+        case "simrun":
+            // Drive the host into a sim-display mirror, then show the real
+            // in-run UI so the sim path can be screenshot-verified solo.
+            WatchActiveRunView()
+                .onAppear {
+                    let h = WorkoutSessionHost.shared
+                    h.startSimDisplay(runId: UUID(), runType: .outdoor)
+                    h.ingestSimMetrics(Self.mockMetrics(.running))
+                    let t = Self.mockTrailPoints
+                    h.ingestSimTrail(lats: t.map { $0.coord.latitude }, lons: t.map { $0.coord.longitude },
+                                     kmh: t.map { $0.kmh }, hr: t.map { $0.hr })
+                }
         case "map":
             // Mirrors WatchActiveRunView.mapPage (outdoor): self-drawn trail +
             // pulsing position + a distance capsule.

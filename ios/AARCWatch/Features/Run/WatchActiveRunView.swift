@@ -39,11 +39,18 @@ struct WatchActiveRunView: View {
         .alert("End run?", isPresented: $showEndConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("End", role: .destructive) {
-                // Show the post-run summary INSTANTLY (it reads in-memory
-                // data, no wait). The slow HealthKit teardown runs in the
-                // background so the tap never feels dropped.
-                showSummary = true
-                Task { _ = await host.endRun() }
+                if host.isSimDisplay {
+                    // Desk-sim mirror: no HK session. End the local display +
+                    // tell the phone to end its sim; the phone shows the summary.
+                    session.sendStateEvent(.endWorkout)
+                    host.endSimDisplay()
+                } else {
+                    // Show the post-run summary INSTANTLY (it reads in-memory
+                    // data, no wait). The slow HealthKit teardown runs in the
+                    // background so the tap never feels dropped.
+                    showSummary = true
+                    Task { _ = await host.endRun() }
+                }
             }
         } message: {
             Text(host.currentRunIsTestData

@@ -190,6 +190,10 @@ final class RunSimulator {
         LiveMetricsConsumer.shared.pendingPersonalityId = personalityId
         LiveMetricsConsumer.shared.ingestStarted(runId: runId, startedAt: Date())
 
+        // Mirror the desk sim to the watch (display-only) so its UI/UX can be
+        // checked without a real run.
+        PhoneSession.shared.sendStateEvent(.simStart(runId: runId, runType: runType))
+
         // Simulated OUTDOOR run: plot a synthetic route from the device's
         // real location so the place-awareness pipeline fires for real.
         if runType == .outdoor {
@@ -228,6 +232,7 @@ final class RunSimulator {
         isActive = false
         ticker?.invalidate(); ticker = nil
         lastWall = nil
+        PhoneSession.shared.sendStateEvent(.simEnd)
         LiveMetricsConsumer.shared.ingestEnded(workoutUUID: nil)
     }
 
@@ -327,11 +332,24 @@ final class RunSimulator {
             state: .running
         )
         LiveMetricsConsumer.shared.ingest(metrics)
+        // Mirror metrics to the watch sim display.
+        PhoneSession.shared.sendBestEffort(.liveMetrics(metrics))
 
         // Walk the synthetic route — PlaceContext gets a fix per tick and
         // applies its own thresholds, exactly as with real GPS.
         if let route = simRoute {
             PlaceContext.shared.ingestSimulated(route.location(at: simDistance))
+            // Mirror the trail to the watch sim map (downsampled, display space).
+            let trail = PlaceContext.shared.trail
+            if !trail.isEmpty {
+                let step = max(1, trail.count / 120)
+                let sampled = stride(from: 0, to: trail.count, by: step).map { trail[$0] }
+                PhoneSession.shared.sendBestEffort(.simTrail(
+                    lats: sampled.map { $0.coord.latitude },
+                    lons: sampled.map { $0.coord.longitude },
+                    kmh: sampled.map { $0.kmh },
+                    hr: sampled.map { $0.hr }))
+            }
         }
     }
 }

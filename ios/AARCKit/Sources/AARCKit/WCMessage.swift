@@ -24,6 +24,14 @@ public enum WCMessage: Codable, Sendable {
     /// The coach line currently on screen, mirrored to the watch so the runner
     /// can read + heart it without the phone. Empty text clears it.
     case coachLine(id: UUID, text: String, who: String)
+    /// Desk-test simulator: the phone is driving a synthetic run and wants the
+    /// watch to MIRROR it (display-only — no HealthKit), so the watch UI/UX can
+    /// be checked at a desk. Metrics arrive via `liveMetrics`, the trail via
+    /// `simTrail`, and it ends with `simEnd`.
+    case simStart(runId: UUID, runType: RunType)
+    case simEnd
+    /// Synthetic trail for the sim map (display-space coords + per-point speed/HR).
+    case simTrail(lats: [Double], lons: [Double], kmh: [Double?], hr: [Double?])
 
     // Watch → Phone
     /// Watch received + accepted a startWorkout command and is counting

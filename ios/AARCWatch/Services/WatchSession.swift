@@ -295,11 +295,25 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
                 currentCoachLine = CoachLine(id: id, text: text, who: who, receivedAt: Date())
             }
 
+        case .simStart(let runId, let runType):
+            // Phone desk-test sim — mirror it (display only).
+            WorkoutSessionHost.shared.startSimDisplay(runId: runId, runType: runType)
+
+        case .simEnd:
+            WorkoutSessionHost.shared.endSimDisplay()
+
+        case .simTrail(let lats, let lons, let kmh, let hr):
+            WorkoutSessionHost.shared.ingestSimTrail(lats: lats, lons: lons, kmh: kmh, hr: hr)
+
+        case .liveMetrics(let m):
+            // In a sim mirror, metrics flow phone→watch (reverse of a real run).
+            WorkoutSessionHost.shared.ingestSimMetrics(m)
+
         // Inbound only from the phone-initiation path; ignore all
         // outbound message cases that should never come back to us.
         case .hapticCue, .companionMessageDispatched,
              .prepareWorkout, .workoutStarted, .workoutPaused,
-             .workoutResumed, .workoutEnded, .liveMetrics,
+             .workoutResumed, .workoutEnded,
              .heartLine, .startAck, .startDeclined:
             break
         }

@@ -69,6 +69,9 @@ final class WorkoutSessionHost: NSObject {
 
     /// Raw GPS trail for the on-watch route map (WGS-84; the watch map is a
     /// self-relative Canvas drawing, so datum is irrelevant). Downsampled.
+    /// True while MIRRORING a phone desk-test sim run (display-only, no HK).
+    var isSimDisplay = false
+
     var routeTrail: [CLLocationCoordinate2D] = []
     /// Trail with per-point speed/HR + a MapKit-display (GCJ in China) coord,
     /// for the performance-hued route on the in-run map.
@@ -472,6 +475,55 @@ final class WorkoutSessionHost: NSObject {
             }
         }
         healthStore.recoverActiveWorkoutSession(completion: completion)
+    }
+
+    // MARK: - Desk-test sim mirror (display-only)
+
+    /// Enter a display-only run that mirrors the phone's desk simulator — shows
+    /// the full in-run UI without starting a HealthKit session.
+    func startSimDisplay(runId: UUID, runType: RunType) {
+        currentRunId = runId
+        currentRunType = runType
+        currentRunIsTestData = true
+        isSimDisplay = true
+        routeTrail = []; routeTrailPoints = []; chartSamples = []
+        liveMetrics = .zero
+        state = .running
+        phase = .running
+        WatchBreadcrumbs.shared.drop("sim mirror start (\(runType.rawValue))")
+    }
+
+    func ingestSimMetrics(_ m: LiveMetrics) {
+        guard isSimDisplay else { return }
+        state = m.state
+        phase = m.state == .paused ? .paused : .running
+        liveMetrics = m
+        if m.state == .running {
+            chartSamples.append(WatchChartSample(
+                hr: (m.currentHeartRate ?? 0) > 0 ? m.currentHeartRate : nil,
+                kmh: (m.currentPaceSecPerKm ?? 0) > 0 ? 3600.0 / m.currentPaceSecPerKm! : nil))
+            if chartSamples.count > 80 { chartSamples.removeFirst(chartSamples.count - 80) }
+        }
+    }
+
+    func ingestSimTrail(lats: [Double], lons: [Double], kmh: [Double?], hr: [Double?]) {
+        guard isSimDisplay, lats.count == lons.count else { return }
+        var pts: [WatchTrailPoint] = []
+        for i in lats.indices {
+            pts.append(WatchTrailPoint(coord: .init(latitude: lats[i], longitude: lons[i]),
+                                       kmh: i < kmh.count ? kmh[i] : nil,
+                                       hr: i < hr.count ? hr[i] : nil))
+        }
+        routeTrailPoints = pts
+        routeTrail = pts.map(\.coord)
+    }
+
+    func endSimDisplay() {
+        guard isSimDisplay else { return }
+        isSimDisplay = false
+        state = .ended
+        phase = .idle
+        WatchBreadcrumbs.shared.drop("sim mirror end")
     }
 
     func pause() {
