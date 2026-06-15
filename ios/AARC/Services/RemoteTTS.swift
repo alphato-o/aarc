@@ -400,7 +400,12 @@ final class RemoteTTS: NSObject {
     /// crawled to 259s — the CN2 GIA gateway was healthy the whole time
     /// and never got asked. A normal synth answers well under this, so
     /// the hedge fires only when the route is already in trouble.
-    private static let hedgeAfterSeconds: UInt64 = 12
+    /// Raised from 12s: both endpoints now resolve through the SAME R2 cache
+    /// on the proxy (the gateway proxies /tts to CF), so the backup hitting the
+    /// cache means it no longer re-bills ElevenLabs — but a longer delay still
+    /// minimises the rare in-flight collision window. The hedge fires only when
+    /// the primary is genuinely stalled.
+    private static let hedgeAfterSeconds: UInt64 = 16
 
     private func fetchAudio(text: String, voiceId: String = RemoteTTS.voiceId) async throws -> Data {
         // Dev override: single attempt, no hedging.
