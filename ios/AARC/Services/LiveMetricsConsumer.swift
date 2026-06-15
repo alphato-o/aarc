@@ -158,6 +158,7 @@ final class LiveMetricsConsumer {
         }
         ContextualCoach.shared.start(runType: pendingRunType)
         RunDirector.shared.start(plan: ScriptPreviewStore.shared.currentPlan)
+        AmbientProbe.shared.start()   // fetch + surface the real-time ambient context
         LiveActivityController.shared.start(
             runId: runId,
             personalityId: pendingPersonalityId,
@@ -193,6 +194,7 @@ final class LiveMetricsConsumer {
     func ingestEnded(workoutUUID: UUID?) {
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
+        AmbientProbe.shared.stop()
 
         // Snapshot everything the post-run summary needs WHILE it's still
         // live (chart samples, route + POIs, hearted lines) and kick off

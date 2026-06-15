@@ -89,6 +89,7 @@ struct ControlRoomView: View {
         header(now: now)
         if simulator.isActive { simControlSection }
         runProgressSection(now: now)
+        ambientSection
         networkInspectorSection(now: now)
         watchLinkSection
         directorSection(now: now)
@@ -96,6 +97,48 @@ struct ControlRoomView: View {
         voicesSection
         musicSection
         eventTailSection
+    }
+
+    // MARK: - Ambient context (real-time data fed into script generation)
+
+    @State private var ambientProbe = AmbientProbe.shared
+
+    /// Latest ambient snapshot — live from the probe, or parsed from the
+    /// replayed run's logged "ambient" events.
+    private var liveAmbient: AmbientProbe.Snapshot? {
+        if isReplay {
+            guard let ev = replayEvents.last(where: { $0.type == "ambient" }) else { return nil }
+            let fields = ev.data.sorted { $0.key < $1.key }.map { (label: $0.key, value: $0.value) }
+            return .init(fetchedAt: Date(), hasLocation: !ev.data.isEmpty, fields: fields, block: "")
+        }
+        return ambientProbe.latest
+    }
+
+    @ViewBuilder
+    private var ambientSection: some View {
+        section("AMBIENT CONTEXT", accent: .teal) {
+            if let s = liveAmbient, !s.fields.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(s.fields.enumerated()), id: \.offset) { _, f in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(f.label).font(.caption2.bold()).foregroundStyle(.teal)
+                                .frame(width: 62, alignment: .leading)
+                            Text(f.value).font(.caption)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    Text("fed into every coach line as live context")
+                        .font(.system(size: 10)).foregroundStyle(.tertiary).padding(.top, 2)
+                }
+            } else if liveAmbient != nil {
+                Text("Located, but no weather/AQI/news yet (offline or just started).")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            } else {
+                Text(isReplay ? "No ambient context was logged for this run."
+                              : "Fetching ambient context…")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
     }
 
     // MARK: - Simulator controls (desk test)
@@ -215,6 +258,7 @@ struct ControlRoomView: View {
             replayLoadingHint()
         } else {
             replayRunProgressSection()
+            ambientSection
             replayNetworkInspectorSection(now: now)
             replayRunSummarySection()
             replayEventTailSection()
