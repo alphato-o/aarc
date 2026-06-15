@@ -456,24 +456,17 @@ struct RunHomeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            HStack(spacing: 12) {
-                bigStartButton(
-                    label: "Treadmill",
-                    icon: "figure.run.treadmill",
-                    background: Color.green
-                ) {
+            // Slide-to-start (not tap) so a stray touch can't begin a run.
+            VStack(spacing: 14) {
+                SlideToStart(label: "Treadmill", icon: "figure.run.treadmill", tint: .green) {
                     Task { await startTapped(.treadmill) }
                 }
-
-                bigStartButton(
-                    label: "Outdoor",
-                    icon: "figure.run",
-                    background: Color.accentColor
-                ) {
+                SlideToStart(label: "Outdoor", icon: "figure.run", tint: .accentColor) {
                     Task { await startTapped(.outdoor) }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 8)
         }
     }
 

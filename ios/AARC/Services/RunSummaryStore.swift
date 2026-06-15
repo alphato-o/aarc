@@ -74,6 +74,10 @@ final class RunSummaryStore {
     func capture() {
         let consumer = LiveMetricsConsumer.shared
         guard let runId = consumer.currentRunId else { return }
+        // Idempotent per run: an instant local End captures first, then the
+        // watch's workoutEnded would call this again — don't re-capture (that
+        // would reset the summary + regenerate the closing roast).
+        if summary?.runId == runId { return }
         let startedAt = consumer.startedAt ?? Date()
         let isOutdoor = consumer.pendingRunType == .outdoor
 

@@ -444,6 +444,10 @@ struct ActiveRunView: View {
         RunDirector.shared.stop()
         VoiceFeedbackQueue.shared.stopAll()
 
+        // Flip the UI to the post-run summary INSTANTLY — the HK teardown +
+        // watch confirmation below run async behind the interstitial.
+        LiveMetricsConsumer.shared.endNow()
+
         // Desk-test simulator (if it was driving this run).
         RunSimulator.shared.end()
         // Phone-only run: tell PhoneWorkoutSession to end.

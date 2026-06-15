@@ -176,6 +176,18 @@ final class LiveMetricsConsumer {
     /// `workoutUUID` is nil for TEST / SIMULATED runs that intentionally
     /// wrote nothing to Apple Health — those persist a RunRecord straight
     /// from the live metrics instead of reading HealthKit back.
+    /// Instant local end: flip the UI out of the run and present the summary
+    /// the moment the user taps End — the real HealthKit teardown + the watch's
+    /// `workoutEnded` confirmation run async behind the interstitial. Without
+    /// this the phone sat on the run UI waiting seconds for the watch to
+    /// confirm. `capture()` is idempotent, so the later `ingestEnded` is a no-op
+    /// for the summary.
+    func endNow() {
+        guard isRunActive else { return }
+        latest = latest?.with(state: .ended)   // isRunActive → false immediately
+        RunSummaryStore.shared.capture()
+    }
+
     func ingestEnded(workoutUUID: UUID?) {
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
