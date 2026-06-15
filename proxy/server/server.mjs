@@ -87,6 +87,11 @@ const env = {
     ...process.env,
     DB: stubBinding("DB", "D1"),
     VOICES: stubBinding("VOICES", "R2"),
+    // This box has no R2, so route /tts through the CF worker's single R2 cache
+    // (one generation per line, shared with direct-CF hits → no hedge
+    // double-charge). tts.ts keys off THIS, not env.VOICES (a truthy stub here).
+    // Override or blank via TTS_PROXY_ORIGIN in server/.env if CF moves.
+    TTS_PROXY_ORIGIN: process.env.TTS_PROXY_ORIGIN ?? "https://api.aarun.club",
 };
 
 // Minimal ExecutionContext — enough for ctx.waitUntil(...) fire-and-forget.

@@ -11,6 +11,14 @@ export interface Env {
     /// identical text is never re-billed to ElevenLabs, even after a client
     /// reinstall wipes the on-device cache (the dominant test-cost leak).
     VOICES?: R2Bucket;
+    /// Set ONLY on the Node gateway (server.mjs) to the CF worker origin
+    /// (https://api.aarun.club). When present, /tts is proxied there so a line
+    /// is generated ONCE through CF's single R2 cache — both the gateway and a
+    /// direct-CF hit share that cache, killing the hedge double-charge. We must
+    /// NOT key gateway-detection off `env.VOICES`: on the gateway it's a truthy
+    /// Proxy stub that throws on access, so `!env.VOICES` was always false and
+    /// the gateway silently took the CF path, generated fresh, and never cached.
+    TTS_PROXY_ORIGIN?: string;
 }
 
 /// Stable cache key for a TTS request — same voice + text + params → same key.
@@ -52,14 +60,14 @@ export async function ttsHandler(request: Request, env: Env): Promise<Response> 
     }
     const req = parsed.data;
 
-    // GATEWAY path (no R2 binding): proxy generation to the CF worker's
-    // R2-cached /tts so a line is generated ONCE and cached — this is what
-    // stops the hedge double-charge (device→CF and device→gateway both resolve
-    // through the same R2 cache; the second is a cache hit). Falls back to
-    // direct generation only if CF is unreachable from the gateway.
-    if (!env.VOICES) {
+    // GATEWAY path: proxy generation to the CF worker's R2-cached /tts so a
+    // line is generated ONCE and cached — this is what stops the hedge
+    // double-charge (device→CF and device→gateway both resolve through the same
+    // R2 cache; the second is a cache hit). Falls back to direct generation
+    // only if CF is unreachable from the gateway.
+    if (env.TTS_PROXY_ORIGIN) {
         try {
-            const cf = await fetch("https://api.aarun.club/tts", {
+            const cf = await fetch(`${env.TTS_PROXY_ORIGIN}/tts`, {
                 method: "POST",
                 headers: { "content-type": "application/json" },
                 body: JSON.stringify(req),
@@ -68,6 +76,10 @@ export async function ttsHandler(request: Request, env: Env): Promise<Response> 
                 return new Response(cf.body, {
                     status: 200,
                     headers: { "content-type": "audio/mpeg", "x-tts-via": "gateway-cf",
+                               // Forward CF's cache verdict so the device can see
+                               // hit/miss even on the gateway-routed path (this is
+                               // how we confirm the hedge isn't double-billing).
+                               "x-tts-cache": cf.headers.get("x-tts-cache") ?? "",
                                "cache-control": "public, max-age=86400" },
                 });
             }
@@ -86,9 +98,13 @@ export async function ttsHandler(request: Request, env: Env): Promise<Response> 
     // request (it did once mid-run — `R2 binding "VOICES"` errors took down
     // generation entirely). On any read failure we fall straight through to
     // ElevenLabs, so the cache is a pure optimisation that can't break TTS.
+    // No R2 here (e.g. local dev without the binding) → generate directly.
+    const voices = env.VOICES;
+    if (!voices) return await generateDirect(req, env);
+
     const cacheKey = await ttsCacheKey(req);
     try {
-        const hit = await env.VOICES.get(cacheKey);
+        const hit = await voices.get(cacheKey);
         if (hit) {
             return new Response(hit.body, {
                 status: 200,
@@ -119,8 +135,8 @@ export async function ttsHandler(request: Request, env: Env): Promise<Response> 
 
     // Store in the R2 cache (best-effort) so a repeat — including after a
     // client reinstall — never re-bills ElevenLabs.
-    if (env.VOICES && cacheKey) {
-        try { await env.VOICES.put(cacheKey, audio, { httpMetadata: { contentType: "audio/mpeg" } }); }
+    if (cacheKey) {
+        try { await voices.put(cacheKey, audio, { httpMetadata: { contentType: "audio/mpeg" } }); }
         catch { /* cache write is best-effort */ }
     }
 

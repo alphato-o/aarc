@@ -400,12 +400,19 @@ final class RemoteTTS: NSObject {
     /// crawled to 259s — the CN2 GIA gateway was healthy the whole time
     /// and never got asked. A normal synth answers well under this, so
     /// the hedge fires only when the route is already in trouble.
-    /// Raised from 12s: both endpoints now resolve through the SAME R2 cache
-    /// on the proxy (the gateway proxies /tts to CF), so the backup hitting the
-    /// cache means it no longer re-bills ElevenLabs — but a longer delay still
-    /// minimises the rare in-flight collision window. The hedge fires only when
-    /// the primary is genuinely stalled.
-    private static let hedgeAfterSeconds: UInt64 = 16
+    /// LENGTH-SCALED: eleven_v3 latency grows with text — a short coach line
+    /// answers in ~4s, but one of Jessica's ~500-char passages legitimately
+    /// takes ~25s. A fixed 16s hedge therefore fired on EVERY long line and
+    /// double-billed it (confirmed in EL history: ~21% of generations were
+    /// same-length duplicates seconds apart). We now wait until the primary has
+    /// clearly EXCEEDED its expected generation time before asking the backup,
+    /// so the hedge fires on genuine stalls, not normal long synths. The R2
+    /// cache (gateway → CF) backstops the rare case where both still fire.
+    private static func hedgeDelayNanos(forChars chars: Int) -> UInt64 {
+        let expected = 4.0 + 0.045 * Double(chars)        // rough v3 gen seconds
+        let delay = min(45.0, max(12.0, expected * 1.6))  // fire only well past expected
+        return UInt64(delay * 1_000_000_000)
+    }
 
     private func fetchAudio(text: String, voiceId: String = RemoteTTS.voiceId) async throws -> Data {
         // Dev override: single attempt, no hedging.
@@ -425,7 +432,7 @@ final class RemoteTTS: NSObject {
             }
             group.addTask {
                 do {
-                    try await Task.sleep(nanoseconds: Self.hedgeAfterSeconds * 1_000_000_000)
+                    try await Task.sleep(nanoseconds: Self.hedgeDelayNanos(forChars: text.count))
                     return (backup.id, .success(try await self.attemptFetch(
                         text: text, voiceId: voiceId, baseURL: backup.url, tag: backup.id)))
                 } catch { return (backup.id, .failure(error)) }
@@ -488,7 +495,18 @@ final class RemoteTTS: NSObject {
                 NetworkActivityMonitor.shared.fail(net, "HTTP \(http.statusCode) via \(tag)")
                 throw RemoteTTSError.httpStatus(http.statusCode, body: bodyText.prefix(300).description)
             }
-            NetworkActivityMonitor.shared.finish(net, bytes: data.count, detail: "HTTP \(http.statusCode) via \(tag)")
+            // Surface the server cache verdict so a BILLED generation (miss) is
+            // distinguishable from a free cache HIT in the Control Room network
+            // inspector + the D1 run log — this is how we confirm the R2 cache
+            // is actually deduping (incl. the hedge) without EL history access.
+            func hdr(_ k: String) -> String? {
+                http.value(forHTTPHeaderField: k).flatMap { $0.isEmpty ? nil : $0 }
+            }
+            // Prefer the cache verdict (hit|miss); fall back to the routing tag.
+            let verdict = hdr("x-tts-cache").map { " · \($0)" }
+                ?? hdr("x-tts-via").map { " · via:\($0)" } ?? ""
+            NetworkActivityMonitor.shared.finish(net, bytes: data.count,
+                                                 detail: "HTTP \(http.statusCode) via \(tag)\(verdict)")
             return data
         } catch {
             // Hedge loser (the other endpoint won the race) — cancellation
