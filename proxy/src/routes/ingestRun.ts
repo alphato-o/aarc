@@ -119,9 +119,11 @@ export async function ingestRunHandler(request: Request, env: Env): Promise<Resp
     // the `run.start` event detail with `isTest=1`.
     const startEvent = events.find((e) => e.type === "run.start");
     const isTest = startEvent ? /(?:^|;)isTest=1(?:;|$)/.test(startEvent.detail) : false;
-    // The phone tags run.start with the generated run name (data.name).
+    // The phone tags run.start with the generated run name + the DEVICE
+    // timezone (the source of truth for displaying run times).
     const name = typeof startEvent?.data?.name === "string" ? startEvent.data.name.slice(0, 160) : "";
-    const meta = JSON.stringify({ isTest, name });
+    const tz = typeof startEvent?.data?.tz === "string" ? startEvent.data.tz.slice(0, 64) : "";
+    const meta = JSON.stringify({ isTest, name, tz });
 
     // Replace any previous copy (retries after a half-applied failure).
     await env.DB.batch([

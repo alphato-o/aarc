@@ -116,10 +116,12 @@ final class LiveMetricsConsumer {
         // Open the per-run diagnostics log (events + voice archive).
         RunEventLog.shared.startRun(runId: runId)
         let runTitle = RunTitleGenerator.title(forRunId: runId, date: startedAt, runType: pendingRunType)
+        // The DEVICE's timezone is the source of truth for displaying run times
+        // (the dashboard renders in this tz, not the viewer's browser / UTC).
         RunEventLog.shared.record(
             "run.start",
             "runType=\(pendingRunType.rawValue);isTest=\(RunOrchestrator.shared.isTestRun ? 1 : 0)",
-            data: ["name": runTitle])
+            data: ["name": runTitle, "tz": TimeZone.current.identifier])
 
         // Real-world surroundings for the coaches — outdoor runs only.
         // The desk simulator runs the SAME pipeline fed by a synthetic

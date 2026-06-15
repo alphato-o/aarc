@@ -794,6 +794,10 @@ function fetchSpark(run) {
   }).catch(function () { done(); });
 }
 
+// The DEVICE timezone the run was recorded in (source of truth for times);
+// undefined → fall back to the viewer's local tz.
+function runTZ(run) { return (run && metaObj(run.meta).tz) || undefined; }
+
 function isTestRun(run) {
   // is_test is computed server-side from the run's events (works for runs
   // ingested before the meta tag existed); meta is the newer fallback.
@@ -819,9 +823,10 @@ function renderRuns() {
     var row = document.createElement("div");
     row.className = "run-row" + (run.run_id === state.runId ? " active" : "");
     var d = new Date(run.started_at);
+    var tz = runTZ(run);
     var dateStr = isNaN(d.getTime()) ? String(run.started_at)
-      : d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
-        d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      : d.toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: tz }) + " " +
+        d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: tz });
     var md = metaDurDist(metaObj(run.meta));
     var dur = isFinite(md.dur) ? md.dur : run._dur;
     var dist = isFinite(md.dist) ? md.dist : run._dist;
@@ -1912,9 +1917,10 @@ function renderBin() {
   if (!state.deleted.length) { root.innerHTML = head + '<div class="empty">The recycle bin is empty.</div>'; return; }
   var cards = state.deleted.map(function (run) {
     var d = new Date(run.started_at);
+    var tz = runTZ(run);
     var dateStr = isNaN(d.getTime()) ? String(run.started_at)
-      : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) + " " +
-        d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+      : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", timeZone: tz }) + " " +
+        d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: tz });
     var md = metaDurDist(metaObj(run.meta));
     var bits = [];
     var fd = fmtDur(md.dur); if (fd) bits.push(fd);
@@ -2078,7 +2084,7 @@ function shareDateLabel() {
   if (!r) return "";
   var d = new Date(r.started_at);
   if (isNaN(d.getTime())) return "";
-  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: runTZ(r) });
 }
 function shareSpeechLines() {
   var out = [];
