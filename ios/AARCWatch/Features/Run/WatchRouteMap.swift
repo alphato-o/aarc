@@ -1,67 +1,99 @@
 import SwiftUI
+import MapKit
 import CoreLocation
 
-/// Lightweight self-drawn route map for the watch — no MapKit tiles (cheap
-/// on battery during a workout). Draws the trail traced so far and a flashing
-/// dot at the current position, auto-fitted to the screen. Used live (with
-/// the pulse) and post-run (static, full route).
+/// A trail vertex with the performance at that point (display/GCJ-space coord).
+struct WatchTrailPoint: Identifiable {
+    let id = UUID()
+    let coord: CLLocationCoordinate2D
+    let kmh: Double?
+    let hr: Double?
+}
+
+enum WatchTrailColorMode { case pace, hr }
+
+/// In-run route map on the watch — REAL Apple-Maps tiles (so you can see where
+/// you are), with the trail hued by performance (pace or HR) like the phone.
+/// Coordinates are already display-space (GCJ in China) so they sit on the
+/// tiles. Follows the runner with a close zoom.
 struct WatchRouteMap: View {
-    var trail: [CLLocationCoordinate2D]
-    var live: Bool = true
+    var points: [WatchTrailPoint]
+    var mode: WatchTrailColorMode = .pace
+    var follow: Bool = true
+
+    @State private var camera: MapCameraPosition = .automatic
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: live ? 0.1 : 3600)) { tl in
-            let phase = tl.date.timeIntervalSinceReferenceDate
-            let pulseR: CGFloat = live ? 5 + 4 * CGFloat(0.5 + 0.5 * sin(phase * 3)) : 6
-            canvas(pulseR: pulseR)
+        Map(position: $camera, interactionModes: [.zoom, .pan]) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
+                MapPolyline(coordinates: [seg.a, seg.b])
+                    .stroke(seg.color, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+            }
+            if let cur = points.last?.coord {
+                Annotation("", coordinate: cur) {
+                    ZStack {
+                        Circle().fill(.blue.opacity(0.3)).frame(width: 22, height: 22)
+                        Circle().fill(.blue).frame(width: 11, height: 11)
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                    }
+                }
+            }
+        }
+        .mapStyle(.standard(elevation: .flat, pointsOfInterest: .excludingAll, showsTraffic: false))
+        .onChange(of: regionKey) { _, _ in updateCamera() }
+        .onAppear { updateCamera() }
+    }
+
+    private var regionKey: String {
+        guard let c = points.last?.coord else { return "-" }
+        return "\(Int(c.latitude * 3000)),\(Int(c.longitude * 3000))|\(points.count / 4)"
+    }
+
+    private func updateCamera() {
+        guard let cur = points.last?.coord else { return }
+        if follow {
+            camera = .region(MKCoordinateRegion(center: cur,
+                                                latitudinalMeters: 600, longitudinalMeters: 600))
+        } else if let region = boundingRegion(points.map(\.coord)) {
+            camera = .region(region)   // post-run: fit the whole route
         }
     }
 
-    private func canvas(pulseR: CGFloat) -> some View {
-        Canvas { ctx, size in
-            guard trail.count > 1 else {
-                if let p = trail.first {
-                    let c = CGPoint(x: size.width / 2, y: size.height / 2)
-                    _ = p
-                    ctx.fill(Path(ellipseIn: CGRect(x: c.x - 4, y: c.y - 4, width: 8, height: 8)),
-                             with: .color(.blue))
-                }
-                return
-            }
-            // Fit lat/lon to the canvas, preserving aspect (lat shrinks by cos).
-            var minLat = trail[0].latitude, maxLat = trail[0].latitude
-            var minLon = trail[0].longitude, maxLon = trail[0].longitude
-            for c in trail {
-                minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
-                minLon = min(minLon, c.longitude); maxLon = max(maxLon, c.longitude)
-            }
-            let latMid = (minLat + maxLat) / 2
-            let lonScale = cos(latMid * .pi / 180)
-            let spanX = max((maxLon - minLon) * lonScale, 1e-6)
-            let spanY = max(maxLat - minLat, 1e-6)
-            let pad: CGFloat = 14
-            let scale = min((size.width - pad * 2) / spanX, (size.height - pad * 2) / spanY)
-            let offX = (size.width - spanX * scale) / 2
-            let offY = (size.height - spanY * scale) / 2
-            func pt(_ c: CLLocationCoordinate2D) -> CGPoint {
-                CGPoint(x: offX + (c.longitude - minLon) * lonScale * scale,
-                        y: offY + (maxLat - c.latitude) * scale)
-            }
-            var path = Path()
-            path.move(to: pt(trail[0]))
-            for c in trail.dropFirst() { path.addLine(to: pt(c)) }
-            ctx.stroke(path, with: .color(Color(red: 1.0, green: 0.55, blue: 0.30)),
-                       style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
-            // start dot
-            let s = pt(trail[0])
-            ctx.fill(Path(ellipseIn: CGRect(x: s.x - 3, y: s.y - 3, width: 6, height: 6)),
-                     with: .color(.white.opacity(0.5)))
-            // current position (pulsing when live)
-            let cur = pt(trail[trail.count - 1])
-            ctx.fill(Path(ellipseIn: CGRect(x: cur.x - pulseR, y: cur.y - pulseR, width: pulseR * 2, height: pulseR * 2)),
-                     with: .color(.blue.opacity(0.35)))
-            ctx.fill(Path(ellipseIn: CGRect(x: cur.x - 4, y: cur.y - 4, width: 8, height: 8)),
-                     with: .color(.blue))
+    private func boundingRegion(_ cs: [CLLocationCoordinate2D]) -> MKCoordinateRegion? {
+        guard let first = cs.first else { return nil }
+        var minLat = first.latitude, maxLat = first.latitude
+        var minLon = first.longitude, maxLon = first.longitude
+        for c in cs {
+            minLat = min(minLat, c.latitude); maxLat = max(maxLat, c.latitude)
+            minLon = min(minLon, c.longitude); maxLon = max(maxLon, c.longitude)
         }
+        return MKCoordinateRegion(
+            center: .init(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2),
+            span: .init(latitudeDelta: max((maxLat - minLat) * 1.4, 0.003),
+                        longitudeDelta: max((maxLon - minLon) * 1.4, 0.003)))
+    }
+
+    // MARK: - Performance-hued segments
+
+    private struct Seg { let a: CLLocationCoordinate2D; let b: CLLocationCoordinate2D; let color: Color }
+
+    private var segments: [Seg] {
+        guard points.count > 1 else { return [] }
+        let vals = points.compactMap { mode == .pace ? $0.kmh : $0.hr }.filter { $0 > 0 }
+        let lo = vals.min() ?? 0, hi = vals.max() ?? 1
+        var out: [Seg] = []
+        for i in 1..<points.count {
+            let v = (mode == .pace ? points[i].kmh : points[i].hr) ?? 0
+            out.append(Seg(a: points[i - 1].coord, b: points[i].coord, color: color(v, lo, hi)))
+        }
+        return out
+    }
+
+    private func color(_ v: Double, _ lo: Double, _ hi: Double) -> Color {
+        guard v > 0, hi > lo else { return Color(red: 0.66, green: 0.78, blue: 0.69) }
+        let t = (v - lo) / (hi - lo)
+        return mode == .pace
+            ? Color(hue: 0.33 * t, saturation: 0.85, brightness: 0.95)        // slow red → fast green
+            : Color(hue: 0.62 * (1 - t), saturation: 0.85, brightness: 0.95)  // low blue → high red
     }
 }

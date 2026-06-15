@@ -70,6 +70,9 @@ final class WorkoutSessionHost: NSObject {
     /// Raw GPS trail for the on-watch route map (WGS-84; the watch map is a
     /// self-relative Canvas drawing, so datum is irrelevant). Downsampled.
     var routeTrail: [CLLocationCoordinate2D] = []
+    /// Trail with per-point speed/HR + a MapKit-display (GCJ in China) coord,
+    /// for the performance-hued route on the in-run map.
+    var routeTrailPoints: [WatchTrailPoint] = []
     private func appendTrail(_ locs: [CLLocation]) {
         for l in locs {
             if let last = routeTrail.last {
@@ -77,8 +80,13 @@ final class WorkoutSessionHost: NSObject {
                 if d < 10 { continue }
             }
             routeTrail.append(l.coordinate)
+            routeTrailPoints.append(WatchTrailPoint(
+                coord: ChinaCoordinateTransform.displayCoordinate(l.coordinate),
+                kmh: l.speed >= 0 ? l.speed * 3.6 : nil,
+                hr: liveMetrics.currentHeartRate))
         }
         if routeTrail.count > 600 { routeTrail.removeFirst(routeTrail.count - 600) }
+        if routeTrailPoints.count > 600 { routeTrailPoints.removeFirst(routeTrailPoints.count - 600) }
     }
 
     // Diagnostics (visible on the active-run view's debug section).
@@ -366,6 +374,7 @@ final class WorkoutSessionHost: NSObject {
 
         if locationType == .outdoor {
             self.routeTrail = []
+            self.routeTrailPoints = []
             self.routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
             self.location = LocationProvider { [weak self] locs in
                 Task { @MainActor in

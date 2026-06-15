@@ -46,7 +46,7 @@ struct WatchActiveRunView: View {
                  : "This run will be permanently saved to Apple Health.")
         }
         .fullScreenCover(isPresented: $showSummary, onDismiss: { dismiss() }) {
-            WatchRunSummary(trail: host.routeTrail, metrics: host.liveMetrics) {
+            WatchRunSummary(points: host.routeTrailPoints, metrics: host.liveMetrics) {
                 showSummary = false
             }
         }
@@ -80,10 +80,10 @@ struct WatchActiveRunView: View {
 
     private var mapPage: some View {
         ZStack(alignment: .bottomLeading) {
-            if host.routeTrail.isEmpty {
+            if host.routeTrailPoints.isEmpty {
                 ContentUnavailableView("Finding you\u{2026}", systemImage: "location.magnifyingglass")
             } else {
-                WatchRouteMap(trail: host.routeTrail, live: true).ignoresSafeArea()
+                WatchRouteMap(points: host.routeTrailPoints, mode: .pace).ignoresSafeArea()
             }
             Text("\(String(format: "%.2f", host.liveMetrics.distanceMeters / 1000)) km")
                 .font(.caption.bold().monospacedDigit())
@@ -137,71 +137,10 @@ struct WatchActiveRunView: View {
         .padding(.horizontal)
     }
 
-    // MARK: - Metrics (default centre) — Apple Workout layout
+    // MARK: - Metrics (default centre)
 
     private var metricsPage: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // Workout badge top-left, exactly where Apple puts the workout
-            // icon — but it's a real runner mid-stride, not a static glyph.
-            HStack(spacing: 6) {
-                RunnerBadge(
-                    isRunning: host.state == .running,
-                    speedMps: speedMps(host.liveMetrics.currentPaceSecPerKm),
-                    cadenceSPM: host.liveMetrics.cadenceStepsPerMinute,
-                    indoor: host.currentRunType == .treadmill
-                )
-                if host.state == .paused {
-                    Text("PAUSED")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.yellow)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.bottom, 2)
-
-            // Elapsed — the hero number, Apple-yellow.
-            Text(formatElapsed(host.liveMetrics.elapsed))
-                .font(.system(size: 40, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color(red: 0.98, green: 0.83, blue: 0.18))
-                .monospacedDigit()
-                .minimumScaleFactor(0.7)
-                .lineLimit(1)
-
-            metricRow(formatHR(host.liveMetrics.currentHeartRate), "BPM",
-                      color: .white, heart: true)
-            metricRow(formatPace(host.liveMetrics.currentPaceSecPerKm), "PACE",
-                      color: Color(red: 0.36, green: 0.85, blue: 0.55))
-            metricRow(formatPace(host.liveMetrics.avgPaceSecPerKm), "AVG PACE",
-                      color: .white.opacity(0.85))
-            metricRow(formatDistanceValue(host.liveMetrics.distanceMeters),
-                      formatDistanceUnit(host.liveMetrics.distanceMeters), color: .white)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.horizontal, 4)
-    }
-
-    /// One Apple-style metric line: big value, small caps unit to the right,
-    /// optional heart. Baseline-aligned so the unit sits on the number's foot.
-    @ViewBuilder
-    private func metricRow(_ value: String, _ unit: String, color: Color, heart: Bool = false) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text(value)
-                .font(.system(size: 26, weight: .medium, design: .rounded))
-                .foregroundStyle(color)
-                .monospacedDigit()
-            if heart {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.red)
-                    .baselineOffset(1)
-            }
-            Text(unit)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-        }
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
+        WatchMetricsView(metrics: host.liveMetrics, runType: host.currentRunType)
     }
 
     // MARK: - Diagnostics (swipe right)
@@ -269,41 +208,6 @@ struct WatchActiveRunView: View {
     private func secondsAgo(_ date: Date) -> Int {
         max(0, Int(Date().timeIntervalSince(date)))
     }
-
-    private func formatElapsed(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds)
-        let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
-        return h > 0
-            ? String(format: "%d:%02d:%02d", h, m, sec)
-            : String(format: "%d:%02d", m, sec)
-    }
-
-    private func formatDistanceValue(_ meters: Double) -> String {
-        meters >= 1000 ? String(format: "%.2f", meters / 1000) : String(format: "%.0f", meters)
-    }
-
-    private func formatDistanceUnit(_ meters: Double) -> String {
-        meters >= 1000 ? "KM" : "M"
-    }
-
-    private func formatPace(_ secPerKm: Double?) -> String {
-        guard let s = secPerKm, s.isFinite, s > 0 else { return "—" }
-        let m = Int(s) / 60
-        let r = Int(s) % 60
-        return String(format: "%d'%02d\"", m, r)
-    }
-
-    private func formatHR(_ bpm: Double?) -> String {
-        guard let bpm, bpm > 0 else { return "—" }
-        return "\(Int(bpm))"
-    }
-
-    /// Forward speed in m/s from pace, for the running figure. 0 when there's
-    /// no usable pace reading (the runner then idles gently).
-    private func speedMps(_ secPerKm: Double?) -> Double {
-        guard let s = secPerKm, s.isFinite, s > 0 else { return 0 }
-        return 1000.0 / s
-    }
 }
 
 // MARK: - Runner badge
@@ -316,7 +220,7 @@ struct WatchActiveRunView: View {
 /// reads as actual running, not a bobbing pictogram. Freezes + dims when
 /// paused; only animates while running AND on-screen, so it costs nothing
 /// wrist-down.
-private struct RunnerBadge: View {
+struct RunnerBadge: View {
     let isRunning: Bool
     let speedMps: Double
     let cadenceSPM: Double?

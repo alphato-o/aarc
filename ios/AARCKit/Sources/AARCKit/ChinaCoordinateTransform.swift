@@ -14,7 +14,7 @@ import CoreLocation
 /// We do NOT transform points outside mainland China — the algorithm
 /// is undefined there and would produce nonsense. Hong Kong, Macau,
 /// Taiwan, and everywhere else continue to use the input coordinates.
-enum ChinaCoordinateTransform {
+public enum ChinaCoordinateTransform {
     /// Bounding box for mainland China minus the special administrative
     /// regions that use WGS-84 tiles. Slightly conservative to avoid
     /// false positives on edge cases (e.g., Mongolia, the Yellow Sea).
@@ -25,12 +25,12 @@ enum ChinaCoordinateTransform {
     /// Return the coordinate as it should appear on Apple Maps —
     /// transformed if the input falls inside mainland China, untouched
     /// otherwise.
-    static func displayCoordinate(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+    public static func displayCoordinate(_ c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
         guard isInsideChina(c) else { return c }
         return wgs84ToGcj02(c)
     }
 
-    static func displayCoordinates(_ cs: [CLLocationCoordinate2D]) -> [CLLocationCoordinate2D] {
+    public static func displayCoordinates(_ cs: [CLLocationCoordinate2D]) -> [CLLocationCoordinate2D] {
         cs.map(displayCoordinate)
     }
 
@@ -38,7 +38,7 @@ enum ChinaCoordinateTransform {
     /// to WGS-84. One-step approximation — the shift varies slowly, so
     /// applying the forward delta in reverse is accurate to ~1-2 m, plenty
     /// for synthetic test routes. Identity outside mainland China.
-    static func wgsCoordinate(fromDisplay c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+    public static func wgsCoordinate(fromDisplay c: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
         guard isInsideChina(c) else { return c }
         let shifted = wgs84ToGcj02(c)
         return CLLocationCoordinate2D(
@@ -59,7 +59,7 @@ enum ChinaCoordinateTransform {
 
     /// Public probe: is this WGS-84 coordinate in mainland China? Used to
     /// pick the local-script locale for geocoding (zh-Hans).
-    static func isMainlandChina(_ c: CLLocationCoordinate2D) -> Bool { isInsideChina(c) }
+    public static func isMainlandChina(_ c: CLLocationCoordinate2D) -> Bool { isInsideChina(c) }
 
     private static func isInsideChina(_ c: CLLocationCoordinate2D) -> Bool {
         guard mainlandBox.latMin <= c.latitude, c.latitude <= mainlandBox.latMax,

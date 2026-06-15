@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import AARCKit
 
 /// Env-gated screenshot harness (AARC_PREVIEW=<screen>) so the in-run pages can
 /// be verified on the simulator with mock data — no live run/phone needed.
@@ -20,13 +21,17 @@ struct WatchPreviewGallery: View {
                            who: "ricky", stampSecondsAgo: 8, hearted: true) {}
         case "coach_empty":
             WatchCoachPage(line: nil, who: nil, stampSecondsAgo: nil, hearted: false) {}
+        case "metrics":
+            WatchMetricsView(metrics: Self.mockMetrics(.running), runType: .treadmill)
+        case "metrics_paused":
+            WatchMetricsView(metrics: Self.mockMetrics(.paused), runType: .outdoor)
         case "chart":
             WatchChartPage(samples: Self.mockSamples, elapsed: 1458, currentHR: 152, distanceMeters: 2410)
         case "map":
             // Mirrors WatchActiveRunView.mapPage (outdoor): self-drawn trail +
             // pulsing position + a distance capsule.
             ZStack(alignment: .bottomLeading) {
-                WatchRouteMap(trail: Self.mockTrail, live: true).ignoresSafeArea()
+                WatchRouteMap(points: Self.mockTrailPoints, mode: .pace).ignoresSafeArea()
                 Text("2.41 km")
                     .font(.caption.bold().monospacedDigit())
                     .padding(.horizontal, 8).padding(.vertical, 3)
@@ -38,17 +43,25 @@ struct WatchPreviewGallery: View {
         }
     }
 
-    /// A recognizable looping trail (a park-ish loop) for the map preview.
-    static var mockTrail: [CLLocationCoordinate2D] {
+    /// A recognizable looping trail (a park-ish loop) for the map preview,
+    /// with varying speed so the hue ramp is visible. Coords are display-space.
+    static var mockTrailPoints: [WatchTrailPoint] {
         let cx = 39.9075, cy = 116.447
-        var out: [CLLocationCoordinate2D] = []
+        var out: [WatchTrailPoint] = []
         for i in 0..<70 {
             let t = Double(i) / 70 * 2 * .pi
-            let r = 0.004 * (1 + 0.35 * sin(t * 3))   // wobbly loop
-            out.append(.init(latitude: cx + r * sin(t) * 0.7,
-                             longitude: cy + r * cos(t)))
+            let r = 0.004 * (1 + 0.35 * sin(t * 3))
+            out.append(WatchTrailPoint(
+                coord: .init(latitude: cx + r * sin(t) * 0.7, longitude: cy + r * cos(t)),
+                kmh: 9 + 4 * sin(t * 2.5), hr: nil))
         }
         return out
+    }
+
+    static func mockMetrics(_ state: WorkoutState) -> LiveMetrics {
+        LiveMetrics(elapsed: 1458, distanceMeters: 3410, currentPaceSecPerKm: 342,
+                    avgPaceSecPerKm: 358, currentHeartRate: 152, energyKcal: 287,
+                    cadenceStepsPerMinute: 174, lastSplit: nil, state: state)
     }
 
     static var mockSamples: [WatchChartSample] {

@@ -5,15 +5,15 @@ import AARCKit
 /// Brief post-run screen on the watch: the route (outdoor) + headline stats.
 /// The rich summary lives on the phone; this is the glance-and-go version.
 struct WatchRunSummary: View {
-    let trail: [CLLocationCoordinate2D]
+    let points: [WatchTrailPoint]
     let metrics: LiveMetrics
     let onDone: () -> Void
 
     var body: some View {
         ScrollView {
             VStack(spacing: 10) {
-                if trail.count > 1 {
-                    WatchRouteMap(trail: trail, live: false)
+                if points.count > 1 {
+                    WatchRouteMap(points: points, mode: .pace, follow: false)
                         .frame(height: 110)
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
