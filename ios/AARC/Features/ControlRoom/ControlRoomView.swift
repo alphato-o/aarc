@@ -127,6 +127,7 @@ struct ControlRoomView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
+                    if !isReplay { ambientFreshness }
                     Text("fed into every coach line as live context")
                         .font(.system(size: 10)).foregroundStyle(.tertiary).padding(.top, 2)
                 }
@@ -137,7 +138,32 @@ struct ControlRoomView: View {
                 Text(isReplay ? "No ambient context was logged for this run."
                               : "Fetching ambient context…")
                     .font(.caption2).foregroundStyle(.tertiary)
+                if !isReplay { ambientFreshness }
             }
+        }
+    }
+
+    /// Live freshness line — shows how long ago the ambient context was fetched
+    /// and flags a failed refresh, so a stale/time-only snapshot is never
+    /// mistaken for current. Ticks once a second.
+    @ViewBuilder
+    private var ambientFreshness: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let fetched = ambientProbe.latest?.fetchedAt
+            let attempt = ambientProbe.lastAttemptAt
+            let age = fetched.map { Int(ctx.date.timeIntervalSince($0)) }
+            let refreshFailed = !ambientProbe.lastOK && attempt != nil
+                && (fetched == nil || attempt! > fetched!)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(refreshFailed ? Color.orange : (age ?? 9999) < 960 ? .green : .gray)
+                    .frame(width: 6, height: 6)
+                Text(age == nil ? "no successful fetch yet"
+                     : "updated \(age! < 2 ? "just now" : "\(age!)s ago")"
+                       + (refreshFailed ? " · last refresh failed" : ""))
+                    .font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
+            .padding(.top, 2)
         }
     }
 

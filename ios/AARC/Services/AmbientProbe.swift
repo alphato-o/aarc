@@ -19,23 +19,37 @@ final class AmbientProbe {
     }
 
     private(set) var latest: Snapshot?
+    /// Fetch status, surfaced in the Control Room so a stale/failed fetch is
+    /// visible instead of silently showing an old (or time-only) snapshot.
+    private(set) var lastAttemptAt: Date?
+    private(set) var lastOK = false
     private var loop: Task<Void, Never>?
 
     func start() {
         stop()
-        Task { await probe() }
         loop = Task { [weak self] in
+            guard let self else { return }
+            // Probe FAST at first — at run start there's usually no GPS fix yet,
+            // so the opening fetch is location-less (time only). Retry every 30s
+            // until we land a real located fetch with weather/AQI, THEN settle
+            // into the cheap 15-min cadence. (Before, a cold-start miss meant 15
+            // minutes of "only the time" in the Control Room.)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(900))
-                await self?.probe()
+                let located = await self.probe()
+                let next: Duration = located ? .seconds(900) : .seconds(30)
+                try? await Task.sleep(for: next)
             }
         }
     }
 
     func stop() { loop?.cancel(); loop = nil }
-    func clear() { latest = nil }
+    func clear() { latest = nil; lastAttemptAt = nil; lastOK = false }
 
-    func probe() async {
+    /// Returns true once we have a location-backed fetch with real ambient
+    /// data (so the loop can stop hammering and settle into its slow cadence).
+    @discardableResult
+    func probe() async -> Bool {
+        lastAttemptAt = Date()
         let info = PlaceContext.shared.ambientInfo
         var body: [String: Any] = [:]
         if let v = info.lat { body["lat"] = v }
@@ -47,7 +61,7 @@ final class AmbientProbe {
         if let v = info.monthDay { body["monthDay"] = v }
 
         guard let url = URL(string: "\(Config.apiBaseURL.absoluteString)/ambient"),
-              let payload = try? JSONSerialization.data(withJSONObject: body) else { return }
+              let payload = try? JSONSerialization.data(withJSONObject: body) else { return false }
         var req = URLRequest(url: url, timeoutInterval: 12)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
@@ -55,7 +69,10 @@ final class AmbientProbe {
 
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200,
-              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            lastOK = false
+            return false
+        }
         let r = j["resolved"] as? [String: Any] ?? [:]
         let block = j["block"] as? String ?? ""
 
@@ -66,11 +83,11 @@ final class AmbientProbe {
         if let c = r["conditions"] as? String { fields.append(("Sky", c)) }
         if let h = num("humidity") { fields.append(("Humidity", "\(h)%")) }
         if let w = num("windKmh") { fields.append(("Wind", "\(w) km/h")) }
-        if let a = num("aqi") {
+        if let p = num("pm25") {
             let cat = r["aqiCategory"] as? String ?? ""
-            let pol = r["pollutant"] as? String
-            fields.append(("AQI", "\(a) — \(cat)\(pol.map { " (\($0))" } ?? "")"))
+            fields.append(("PM2.5", "\(p) µg/m³\(cat.isEmpty ? "" : " — \(cat)")"))
         }
+        if let a = num("aqi") { fields.append(("AQI", "\(a)")) }
         if let ss = r["sunset"] as? String { fields.append(("Sunset", ss)) }
         if let world = r["worldNews"] as? [String], let first = world.first {
             fields.append(("World", first))
@@ -83,12 +100,18 @@ final class AmbientProbe {
         }
         if let venue = info.venue { fields.append(("Venue", venue)) }
 
-        latest = Snapshot(fetchedAt: Date(), hasLocation: info.lat != nil, fields: fields, block: block)
+        let located = info.lat != nil
+        latest = Snapshot(fetchedAt: Date(), hasLocation: located, fields: fields, block: block)
+        lastOK = true
 
         // Mirror into the run diagnostics so a replay/dashboard can show it too.
         var logData: [String: String] = [:]
         for (k, v) in fields { logData[k] = v }
-        RunEventLog.shared.record("ambient", info.city ?? (info.lat != nil ? "located" : "no-location"),
+        RunEventLog.shared.record("ambient", info.city ?? (located ? "located" : "no-location"),
                                   data: logData)
+
+        // "Located" only counts when we actually got weather/AQI back — a
+        // located fetch that resolved nothing (offline) should keep retrying.
+        return located && fields.contains { $0.0 != "Time" && $0.0 != "Venue" }
     }
 }

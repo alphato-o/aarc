@@ -82,15 +82,21 @@ export async function ttsHandler(request: Request, env: Env): Promise<Response> 
 
     // CF path: server-side R2 cache — identical text → serve from R2, never
     // re-bill EL (survives client reinstalls + dedupes the hedge).
+    // The R2 READ is best-effort: a transient R2 hiccup must NEVER 500 the
+    // request (it did once mid-run — `R2 binding "VOICES"` errors took down
+    // generation entirely). On any read failure we fall straight through to
+    // ElevenLabs, so the cache is a pure optimisation that can't break TTS.
     const cacheKey = await ttsCacheKey(req);
-    const hit = await env.VOICES.get(cacheKey);
-    if (hit) {
-        return new Response(hit.body, {
-            status: 200,
-            headers: { "content-type": "audio/mpeg", "x-tts-cache": "hit",
-                       "cache-control": "public, max-age=86400" },
-        });
-    }
+    try {
+        const hit = await env.VOICES.get(cacheKey);
+        if (hit) {
+            return new Response(hit.body, {
+                status: 200,
+                headers: { "content-type": "audio/mpeg", "x-tts-cache": "hit",
+                           "cache-control": "public, max-age=86400" },
+            });
+        }
+    } catch { /* R2 read failed — generate fresh below instead of erroring */ }
 
     let audio: ArrayBuffer;
     try {

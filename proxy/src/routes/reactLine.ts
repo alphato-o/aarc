@@ -12,13 +12,26 @@ import { captureMessage, SentryEnv } from "../lib/sentry";
 
 export type Env = LLMEnv & SentryEnv;
 
-// Token ceiling per Jessica length mode. Roughly 4 chars/token, with slack so
-// the model can finish a sentence rather than getting truncated mid-word.
+// Token ceiling per Jessica length mode — a REAL mechanical cap, not just a
+// hint. At ~4 chars/token: quip ≤140c, medium ~220-380c, indulgent ~450-650c,
+// summary ~160-280c. The old ceilings (180/360/700) gave a "quip" ~720 chars
+// of room, so the model ignored the soft length instruction and every line
+// came out a 500-char indulgent monologue (logged quip → 414-557c). These
+// keep just enough slack to finish a sentence, no more.
 const MAX_TOKENS_BY_LENGTH: Record<JessicaLengthMode, number> = {
-    quip: 180,
-    medium: 360,
-    indulgent: 700,
-    summary: 260,
+    quip: 55,
+    medium: 120,
+    indulgent: 220,
+    summary: 95,
+};
+
+// A blunt char budget restated in the USER prompt (the last thing the model
+// reads, and the strongest signal) so the length actually binds.
+const CHAR_BUDGET_BY_LENGTH: Record<JessicaLengthMode, string> = {
+    quip: "HARD LENGTH LIMIT: ONE sentence, at most ~140 characters. A single sharp strike — no scene, no build, no second sentence. If you're describing an act in detail, you've already overrun. Stop after one line.",
+    medium: "HARD LENGTH LIMIT: 2-3 sentences, at most ~380 characters. One vivid idea, landed and out — not a paragraph, not a full fantasy.",
+    indulgent: "LENGTH: a flowing passage, ~450-650 characters. This is the rare long one — build it, but still land and stop; do not run past ~650.",
+    summary: "HARD LENGTH LIMIT: 2 sentences, at most ~280 characters. A short warm sign-off, not a fantasy.",
 };
 
 /// Second-voice reaction. Jessica reacts to a line the primary coach (Ricky)
@@ -56,7 +69,7 @@ export async function reactLineHandler(
         );
     }
 
-    const userPrompt = await buildUserPrompt(req);
+    const userPrompt = await buildUserPrompt(req, lengthMode);
 
     // Cap output by length mode so a quip can't run long and an indulgent
     // passage has room to breathe. Char targets: quip <=140, medium ~220-380,
@@ -132,7 +145,7 @@ export async function reactLineHandler(
     return json({ ok: true, ...response });
 }
 
-async function buildUserPrompt(req: ReactLineRequest): Promise<string> {
+async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthMode): Promise<string> {
     const c = req.runContext;
     const lines: string[] = [];
 
@@ -190,9 +203,10 @@ async function buildUserPrompt(req: ReactLineRequest): Promise<string> {
     }
 
     lines.push("");
+    lines.push(CHAR_BUDGET_BY_LENGTH[lengthMode]);
     lines.push(isMilestone
-        ? "Now give your ONE milestone line — mark his kilometre, fresh and vivid, nothing like the lines above. JSON only."
-        : "Now give your ONE line — a reply that latches onto your chosen hook from Ricky's line, fresh and nothing like the lines above. JSON only.");
+        ? "Now give your ONE milestone line — mark his kilometre, fresh and vivid, nothing like the lines above, WITHIN the length limit. JSON only."
+        : "Now give your ONE line — a reply that latches onto your chosen hook from Ricky's line, fresh and nothing like the lines above, WITHIN the length limit. JSON only.");
     return lines.join("\n");
 }
 

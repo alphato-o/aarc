@@ -28,7 +28,8 @@ interface Resolved {
     isDay?: boolean;
     sunrise?: string;
     sunset?: string;
-    aqi?: number;
+    aqi?: number;          // European AQI — tracks the user's local weather app
+    pm25?: number;         // PM2.5 µg/m³ — the concrete, standard-agnostic number
     aqiCategory?: string;
     pollutant?: string;
     worldNews?: string[];
@@ -52,13 +53,18 @@ function wmo(code: number | undefined): string | undefined {
     return "thunderstorm";
 }
 
-function aqiCat(aqi: number | undefined): string | undefined {
-    if (aqi == null) return undefined;
-    if (aqi <= 50) return "Good";
-    if (aqi <= 100) return "Moderate";
-    if (aqi <= 150) return "Unhealthy for sensitive groups";
-    if (aqi <= 200) return "Unhealthy";
-    if (aqi <= 300) return "Very unhealthy";
+// Category from PM2.5 concentration (µg/m³) — standard-agnostic and the number
+// people actually watch in China. We deliberately do NOT key off US AQI: its
+// ozone weighting put Beijing at "AQI 145" when the user's own weather app
+// (PM/European-style) read ~80, which made the coach sound like it made the
+// number up. PM2.5 µg/m³ removes the which-standard ambiguity.
+function pm25Cat(pm25: number | undefined): string | undefined {
+    if (pm25 == null) return undefined;
+    if (pm25 <= 12) return "Good";
+    if (pm25 <= 35) return "Fair";
+    if (pm25 <= 60) return "Moderate";
+    if (pm25 <= 110) return "Unhealthy";
+    if (pm25 <= 250) return "Very unhealthy";
     return "Hazardous";
 }
 
@@ -114,7 +120,7 @@ export async function fetchAmbient(input: AmbientInput): Promise<Resolved> {
         `&daily=sunrise,sunset&timezone=auto&forecast_days=1`;
     const aqURL =
         `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}` +
-        `&current=us_aqi,pm2_5,pm10,ozone`;
+        `&current=european_aqi,us_aqi,pm2_5,pm10,ozone`;
 
     const [wx, aq, world, city] = await Promise.all([
         getJSON(wxURL),
@@ -135,8 +141,11 @@ export async function fetchAmbient(input: AmbientInput): Promise<Resolved> {
     if (wx?.daily?.sunrise?.[0]) data.sunrise = clockOf(wx.daily.sunrise[0]);
     if (wx?.daily?.sunset?.[0]) data.sunset = clockOf(wx.daily.sunset[0]);
     if (aq?.current) {
-        data.aqi = round(aq.current.us_aqi);
-        data.aqiCategory = aqiCat(data.aqi);
+        // European AQI tracks the user's local weather app far better than US
+        // AQI (which over-weights ozone); PM2.5 is the concrete anchor.
+        data.aqi = round(aq.current.european_aqi);
+        data.pm25 = round(aq.current.pm2_5);
+        data.aqiCategory = pm25Cat(Number(aq.current.pm2_5));
         data.pollutant = dominant(aq.current);
     }
     if (world.length) data.worldNews = world;
@@ -187,8 +196,11 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
         if (r.windKmh != null && r.windKmh >= 12) bits.push(`${r.windKmh} km/h wind`);
         out.push(`- weather: ${bits.join(", ")}`);
     }
-    if (r.aqi != null) {
-        out.push(`- air quality: US AQI ${r.aqi} (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""})`);
+    if (r.pm25 != null || r.aqi != null) {
+        const bits: string[] = [];
+        if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³`);
+        if (r.aqi != null) bits.push(`AQI ${r.aqi}`);
+        out.push(`- air quality: ${bits.join(", ")}${r.aqiCategory ? ` (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""})` : ""}`);
     }
     if (r.sunset || r.sunrise) {
         const light = r.isDay === false ? "it's dark out" : "daylight";
