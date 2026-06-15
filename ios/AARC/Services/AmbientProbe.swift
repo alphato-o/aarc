@@ -83,11 +83,12 @@ final class AmbientProbe {
         if let c = r["conditions"] as? String { fields.append(("Sky", c)) }
         if let h = num("humidity") { fields.append(("Humidity", "\(h)%")) }
         if let w = num("windKmh") { fields.append(("Wind", "\(w) km/h")) }
-        if let p = num("pm25") {
+        if let a = num("aqi") {
             let cat = r["aqiCategory"] as? String ?? ""
-            fields.append(("PM2.5", "\(p) µg/m³\(cat.isEmpty ? "" : " — \(cat)")"))
+            let pol = r["pollutant"] as? String
+            fields.append(("AQI", "\(a)\(cat.isEmpty ? "" : " — \(cat)")\(pol.map { " (\($0))" } ?? "")"))
         }
-        if let a = num("aqi") { fields.append(("AQI", "\(a)")) }
+        if let p = num("pm25") { fields.append(("PM2.5", "\(p) µg/m³")) }
         if let ss = r["sunset"] as? String { fields.append(("Sunset", ss)) }
         if let world = r["worldNews"] as? [String], let first = world.first {
             fields.append(("World", first))
