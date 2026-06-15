@@ -35,6 +35,8 @@ final class WorkoutSessionHost: NSObject {
     var state: WorkoutState = .idle
     var phase: WorkoutPhase = .idle
     var liveMetrics: LiveMetrics = .zero
+    /// Rolling HR/speed samples for the in-run Chart page.
+    var chartSamples: [WatchChartSample] = []
     var lastError: String?
 
     /// Countdown seconds remaining (3, 2, 1, then 0 → start). UI binds.
@@ -607,6 +609,14 @@ final class WorkoutSessionHost: NSObject {
             lastSplit: split,
             state: state
         )
+
+        // Rolling buffer for the in-run Chart page (~last 80 samples).
+        if state == .running {
+            chartSamples.append(WatchChartSample(
+                hr: (hr ?? 0) > 0 ? hr : nil,
+                kmh: (currentPace ?? 0) > 0 ? 3600.0 / currentPace! : nil))
+            if chartSamples.count > 80 { chartSamples.removeFirst(chartSamples.count - 80) }
+        }
 
         // Push to the iPhone over BOTH channels. Mirroring is the modern
         // path (in-order, system-managed, auto-reconnect); WC sendMessage

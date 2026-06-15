@@ -92,6 +92,7 @@ final class LiveSubtitleStore {
             estimatedTotalDwell: estTotalDwell,
             liked: liked
         )
+        pushToWatch()
     }
 
     func finishedPlaying(_ item: VoiceItem) {
@@ -106,6 +107,7 @@ final class LiveSubtitleStore {
             guard let self else { return }
             if self.currentLine?.id == itemId {
                 self.currentLine = nil
+                self.pushToWatch()
             }
         }
     }
@@ -116,6 +118,28 @@ final class LiveSubtitleStore {
         clearTask?.cancel()
         clearTask = nil
         currentLine = nil
+        pushToWatch()
+    }
+
+    // MARK: - Watch mirroring (heart-from-watch)
+
+    /// Mirror the current line to the watch's Coach page (best-effort).
+    private func pushToWatch() {
+        if let l = currentLine {
+            PhoneSession.shared.sendBestEffort(
+                .coachLine(id: l.id, text: l.text, who: l.voice == .jessica ? "jessica" : "ricky"))
+        } else {
+            PhoneSession.shared.sendBestEffort(.coachLine(id: UUID(), text: "", who: ""))
+        }
+    }
+
+    /// The runner hearted the current line from their watch.
+    func likeFromWatch(id: UUID, text: String, who: String) {
+        let personalityId = who.lowercased() == "jessica" ? "jessica" : "roast_coach"
+        _ = LikedLinesStore.shared.like(text: text, source: "watch", personalityId: personalityId)
+        RunEventLog.shared.record("speech.liked", text,
+                                  data: ["voice": personalityId, "source": "watch"])
+        if currentLine?.id == id { currentLine?.liked = true }
     }
 
     // MARK: - Heart toggle

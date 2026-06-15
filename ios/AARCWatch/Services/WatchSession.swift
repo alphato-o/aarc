@@ -20,6 +20,11 @@ final class WatchSession: NSObject {
     var activationState: WCSessionActivationState = .notActivated
     var lastInboundText: String?
 
+    /// The coach line currently on screen (mirrored from the phone). nil = none.
+    var currentCoachLine: CoachLine?
+    /// Line ids the runner has hearted this session (so the heart stays filled).
+    var heartedLineIds: Set<UUID> = []
+
     /// Build number reported by the phone in its envelopes; drives the
     /// drift banner on the idle screen.
     var counterpartBuild: String?
@@ -282,14 +287,38 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
             // Phone is asking us to end (e.g., bigger UI on the phone).
             Task { _ = await WorkoutSessionHost.shared.endRun() }
 
+        case .coachLine(let id, let text, let who):
+            // The current coach line, for the watch's Coach page.
+            if text.isEmpty {
+                currentCoachLine = nil
+            } else {
+                currentCoachLine = CoachLine(id: id, text: text, who: who, receivedAt: Date())
+            }
+
         // Inbound only from the phone-initiation path; ignore all
         // outbound message cases that should never come back to us.
         case .hapticCue, .companionMessageDispatched,
              .prepareWorkout, .workoutStarted, .workoutPaused,
              .workoutResumed, .workoutEnded, .liveMetrics,
-             .startAck, .startDeclined:
+             .heartLine, .startAck, .startDeclined:
             break
         }
+    }
+
+    // MARK: - Coach line (heart-from-watch)
+
+    struct CoachLine: Equatable {
+        let id: UUID
+        let text: String
+        let who: String        // "ricky" | "jessica"
+        let receivedAt: Date
+    }
+
+    /// Send a heart for the current line back to the phone (records the like).
+    func heartCurrentLine() {
+        guard let line = currentCoachLine, !heartedLineIds.contains(line.id) else { return }
+        heartedLineIds.insert(line.id)
+        sendStateEvent(.heartLine(id: line.id, text: line.text, who: line.who))
     }
 
     /// Phone-initiated start, hardened:

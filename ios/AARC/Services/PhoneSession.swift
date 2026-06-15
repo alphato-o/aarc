@@ -100,6 +100,17 @@ final class PhoneSession: NSObject {
         session.sendMessageData(data, replyHandler: nil, errorHandler: onError)
     }
 
+    /// Best-effort live send (sendMessage only, no guaranteed queue) — for
+    /// ephemeral state like the current coach line, where a missed update is
+    /// fine and the queue must not back up.
+    func sendBestEffort(_ event: WCMessage) {
+        guard let session,
+              session.activationState == .activated,
+              session.isReachable,
+              let data = try? encoder.encode(event) else { return }
+        session.sendMessageData(data, replyHandler: nil, errorHandler: { _ in })
+    }
+
     // MARK: - Envelope
 
     /// Wrap an encoded WCMessage with sender build + timestamp. The extra
@@ -263,9 +274,13 @@ final class PhoneSession: NSObject {
                 )
             }
 
+        case .heartLine(let id, let text, let who):
+            // Runner hearted the current line from the watch.
+            LiveSubtitleStore.shared.likeFromWatch(id: id, text: text, who: who)
+
         // Outbound-only on phone side; ignore if echoed somehow.
         case .startWorkout, .cancelStart, .endWorkout, .hapticCue,
-             .companionMessageDispatched, .scriptReady, .scriptFailed:
+             .companionMessageDispatched, .scriptReady, .scriptFailed, .coachLine:
             break
         }
     }

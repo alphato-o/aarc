@@ -21,6 +21,9 @@ public enum WCMessage: Codable, Sendable {
     case hapticCue(kind: HapticCueKind)
     case companionMessageDispatched(messageId: UUID)
     case hello(text: String)
+    /// The coach line currently on screen, mirrored to the watch so the runner
+    /// can read + heart it without the phone. Empty text clears it.
+    case coachLine(id: UUID, text: String, who: String)
 
     // Watch → Phone
     /// Watch received + accepted a startWorkout command and is counting
@@ -39,6 +42,9 @@ public enum WCMessage: Codable, Sendable {
     case workoutResumed
     case workoutEnded(healthKitWorkoutUUID: UUID)
     case liveMetrics(LiveMetrics)
+    /// Runner hearted the current coach line from the watch. Carries text+who
+    /// so the phone can record the like without a lookup.
+    case heartLine(id: UUID, text: String, who: String)
 }
 
 public enum HapticCueKind: String, Codable, Sendable {

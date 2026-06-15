@@ -9,21 +9,24 @@ import AARCKit
 /// - swipe right: Diagnostics
 struct WatchActiveRunView: View {
     @Environment(WorkoutSessionHost.self) private var host
+    @Environment(WatchSession.self) private var session
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedPage: Page = .metrics
     @State private var showEndConfirm = false
     @State private var showSummary = false
 
-    private enum Page: Hashable { case controls, metrics, map, diagnostics }
+    private enum Page: Hashable { case controls, metrics, coach, map, chart, diagnostics }
 
     var body: some View {
         TabView(selection: $selectedPage) {
             controlsPage.tag(Page.controls)
             metricsPage.tag(Page.metrics)
+            coachPage.tag(Page.coach)
             if host.currentRunType == .outdoor {
                 mapPage.tag(Page.map)
             }
+            chartPage.tag(Page.chart)
             diagnosticsPage.tag(Page.diagnostics)
         }
         .tabViewStyle(.page)
@@ -47,6 +50,30 @@ struct WatchActiveRunView: View {
                 showSummary = false
             }
         }
+    }
+
+    // MARK: - Coach (heart the current line)
+
+    private var coachPage: some View {
+        let line = session.currentCoachLine
+        return WatchCoachPage(
+            line: line?.text,
+            who: line?.who,
+            stampSecondsAgo: line.map { max(0, Int(Date().timeIntervalSince($0.receivedAt))) },
+            hearted: line.map { session.heartedLineIds.contains($0.id) } ?? false,
+            onHeart: { session.heartCurrentLine() }
+        )
+    }
+
+    // MARK: - Chart (live HR + speed)
+
+    private var chartPage: some View {
+        WatchChartPage(
+            samples: host.chartSamples,
+            elapsed: host.liveMetrics.elapsed,
+            currentHR: host.liveMetrics.currentHeartRate,
+            distanceMeters: host.liveMetrics.distanceMeters
+        )
     }
 
     // MARK: - Map (outdoor only)

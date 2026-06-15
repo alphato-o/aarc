@@ -6,7 +6,10 @@ struct WatchRootView: View {
     @Environment(WorkoutSessionHost.self) private var host
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var hkAuthorized = HealthKitClient.shared.canHostWorkouts
+    /// Env-gated screenshot hook (never set in production) so the authorized
+    /// launch state can be verified on the simulator without HK auth.
+    private static let previewAuth = ProcessInfo.processInfo.environment["AARC_PREVIEW_AUTH"] == "1"
+    @State private var hkAuthorized = previewAuth || HealthKitClient.shared.canHostWorkouts
     @State private var requestingAuth = false
     @State private var startError: String?
     @State private var mode: RunType = .treadmill
@@ -24,7 +27,9 @@ struct WatchRootView: View {
         // transition to lose. (Apple's multi-device workout sample uses
         // exactly this pattern.)
         Group {
-            if isInActiveSessionPhase {
+            if let preview = ProcessInfo.processInfo.environment["AARC_PREVIEW"], !preview.isEmpty {
+                WatchPreviewGallery(screen: preview)
+            } else if isInActiveSessionPhase {
                 WatchActiveRunView()
             } else {
                 idleRoot
@@ -38,7 +43,7 @@ struct WatchRootView: View {
             if newPhase == .active {
                 // Refresh stale auth state + sweep for a pending start
                 // command that may have landed while no delegate fired.
-                hkAuthorized = HealthKitClient.shared.canHostWorkouts
+                hkAuthorized = Self.previewAuth || HealthKitClient.shared.canHostWorkouts
                 WatchSession.shared.reconsumePendingContext()
                 // Self-heal: if the UI thinks we're idle but HealthKit
                 // has a live workout session for this app (prior process
@@ -54,75 +59,88 @@ struct WatchRootView: View {
     private var idleRoot: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 8) {
-                    // Compact brand header so the START BUTTONS land above
-                    // the fold — no scroll needed to begin a run. The
-                    // diagnostics below are secondary and may scroll.
-                    HStack(spacing: 5) {
-                        Image(systemName: "figure.run")
-                            .font(.system(size: 15, weight: .bold))
-                            .foregroundStyle(.tint)
-                        Text("AARC")
-                            .font(.headline)
-                        Spacer()
-                        Text(AppVersion.build)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                VStack(spacing: 0) {
+                    // ABOVE THE FOLD: brand header + start buttons ONLY. This
+                    // block fills the full visible height, so the diagnostics
+                    // below never peek into the first frame — a clean launch.
+                    VStack(spacing: 10) {
+                        header
+                        contentForCurrentPhase
+                        Spacer(minLength: 0)
                     }
-                    .padding(.top, 2)
+                    .containerRelativeFrame(.vertical, alignment: .top) { length, _ in length + 36 }
+                    .padding(.horizontal)
 
-                    contentForCurrentPhase
-
+                    // BELOW THE FOLD: diagnostics, revealed only on a scroll.
                     if host.phase == .idle {
-                        Divider()
-                        Group {
-                            LabeledContent("Phone reachable", value: session.isReachable ? "Yes" : "No")
-                            if session.buildMismatch {
-                                Text("⚠︎ Phone build \(session.counterpartBuild ?? "?") ≠ watch \(AppVersion.build) — redeploy both")
-                                    .font(.caption2)
-                                    .foregroundStyle(.orange)
-                                    .multilineTextAlignment(.center)
-                            }
-                            if let last = session.lastInboundText {
-                                Text("Last: \(last)")
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(.center)
-                            }
-                        }
-                        .font(.footnote)
-
-                        // On-wrist flight recorder: the persisted launch/
-                        // start breadcrumb trail. After a failed phone→
-                        // watch handover, this answers "did the app even
-                        // launch? did handle() fire? did start() throw?"
-                        // without a Mac.
-                        Button(showBreadcrumbs ? "Hide launch log" : "Launch log") {
-                            showBreadcrumbs.toggle()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
-                        if showBreadcrumbs {
-                            VStack(alignment: .leading, spacing: 2) {
-                                if breadcrumbs.entries.isEmpty {
-                                    Text("no events yet")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.tertiary)
-                                }
-                                ForEach(Array(breadcrumbs.recentFirst.prefix(15).enumerated()), id: \.offset) { _, line in
-                                    Text(line)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-                                Button("Clear") { breadcrumbs.clear() }
-                                    .buttonStyle(.plain)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
+                        diagnosticsSection
+                            .padding(.horizontal)
+                            .padding(.bottom)
                     }
                 }
-                .padding()
+            }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "figure.run")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(.tint)
+            Text("AARC")
+                .font(.headline)
+            Spacer()
+            Text(AppVersion.build)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.top, 2)
+    }
+
+    /// Secondary connection/flight-recorder diagnostics — deliberately below
+    /// the fold so the launch screen is just logo + version + start buttons.
+    private var diagnosticsSection: some View {
+        VStack(spacing: 8) {
+            Divider()
+            Group {
+                LabeledContent("Phone reachable", value: session.isReachable ? "Yes" : "No")
+                if session.buildMismatch {
+                    Text("⚠︎ Phone build \(session.counterpartBuild ?? "?") ≠ watch \(AppVersion.build) — redeploy both")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                }
+                if let last = session.lastInboundText {
+                    Text("Last: \(last)")
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .font(.footnote)
+
+            Button(showBreadcrumbs ? "Hide launch log" : "Launch log") {
+                showBreadcrumbs.toggle()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.mini)
+            if showBreadcrumbs {
+                VStack(alignment: .leading, spacing: 2) {
+                    if breadcrumbs.entries.isEmpty {
+                        Text("no events yet")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                    }
+                    ForEach(Array(breadcrumbs.recentFirst.prefix(15).enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    Button("Clear") { breadcrumbs.clear() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                }
             }
         }
     }
@@ -162,17 +180,25 @@ struct WatchRootView: View {
     @ViewBuilder
     private var idleContent: some View {
         if !hkAuthorized {
-            Button {
-                Task { await requestHK() }
-            } label: {
-                if requestingAuth {
-                    ProgressView()
-                } else {
-                    Text("Allow Health")
+            VStack(spacing: 8) {
+                Text("AARC needs Health to track your runs.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button {
+                    Task { await requestHK() }
+                } label: {
+                    if requestingAuth {
+                        ProgressView()
+                    } else {
+                        Label("Allow Health", systemImage: "heart.fill")
+                            .frame(maxWidth: .infinity)
+                    }
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                .controlSize(.small)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
         } else {
             VStack(spacing: 6) {
                 Button {
