@@ -332,6 +332,12 @@ final class RunSummaryStore {
             await RemoteTTS.shared.prefetch(result.text, voiceId: voiceId)
             guard summary?.runId == s.runId else { return }
             roastReady = true
+            // Log the closing roast to the run so it appears in the dashboard
+            // share dropdown as the "summary line" (it's generated AFTER the
+            // run log sealed, so it goes through the late-append path).
+            RunEventLog.shared.recordSummaryLine(
+                text: result.text, voiceId: voiceId,
+                cacheKey: AudioCache.key(voiceId: voiceId, text: result.text))
         } catch {
             guard summary?.runId == s.runId else { return }
             finalRoastFailed = true

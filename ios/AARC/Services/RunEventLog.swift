@@ -160,6 +160,42 @@ final class RunEventLog {
     /// Record a spoken line. Carries the AudioCache key so post-run replay
     /// can play back the exact audio; the key is added to the per-run audio
     /// manifest and the MP3 is pinned out of the evictable cache at endRun().
+    private(set) var lastEndedRunId: UUID?
+    private var lastEndedStartedAt: Date?
+
+    /// Late-append the post-run closing roast (the "summary line") to the
+    /// just-ended run's log + re-upload, so it shows in the dashboard share
+    /// dropdown. Generated after `endRun()` sealed the log, so it can't go
+    /// through the normal path.
+    func recordSummaryLine(text: String, voiceId: String, cacheKey: String) {
+        guard let runId = lastEndedRunId else { return }
+        let now = Date()
+        let t = lastEndedStartedAt.map { now.timeIntervalSince($0) } ?? -1
+        let event = RunLogEvent(
+            t: (t * 1000).rounded() / 1000,
+            wall: wallFormatter.string(from: now),
+            type: "speech",
+            detail: text,
+            data: ["voiceId": voiceId, "source": "summary", "cacheKey": cacheKey])
+        guard var line = try? encoder.encode(event) else { return }
+        line.append(0x0A)
+        let url = Self.logFileURL(for: runId)
+        guard let handle = try? FileHandle(forWritingTo: url) else { return }
+        try? handle.seekToEnd()
+        try? handle.write(contentsOf: line)
+        try? handle.close()
+
+        let uploadEnabled = !(Self.deviceToken?.isEmpty ?? true)
+        Task.detached(priority: .utility) {
+            await Self.pinRunAudio(runId: runId, keys: [cacheKey])
+            guard uploadEnabled else { return }
+            await Self.uploadRun(runId: runId,
+                                 attempts: Self.uploadAttempts,
+                                 spacing: Self.uploadRetrySpacing)
+            await Self.uploadRunAudio(runId: runId)
+        }
+    }
+
     func recordSpeech(text: String, voiceId: String, source: String, cacheKey: String) {
         if !audioManifest.contains(cacheKey) {
             audioManifest.append(cacheKey)
@@ -209,6 +245,11 @@ final class RunEventLog {
         try? fileHandle?.close()
         fileHandle = nil
         let manifest = audioManifest
+        // Stash so the post-run closing roast (generated AFTER the seal) can be
+        // late-appended to this run's log + re-uploaded — that line is the
+        // "summary line" the dashboard share dropdown needs.
+        lastEndedRunId = runId
+        lastEndedStartedAt = runStartedAt
         activeRunId = nil
         runStartedAt = nil
         audioManifest.removeAll()
