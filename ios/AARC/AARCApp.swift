@@ -38,6 +38,7 @@ struct AARCApp: App {
                 .environment(LiveMetricsConsumer.shared)
                 .preferredColorScheme(.dark)
                 .task {
+                    if ShareCardPreviewHarness.enabled { ShareCardPreviewHarness.run() }
                     PhoneSession.shared.activate()
                     // Pre-warm the audio session so the first companion
                     // utterance doesn't pay activation latency. Initialiser

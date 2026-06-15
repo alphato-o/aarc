@@ -121,18 +121,44 @@ struct RunShareComposer: View {
         guard let s = store.summary else { return nil }
         let q = selectedQuote
         return ShareCardModel(
-            date: s.startedAt.formatted(date: .abbreviated, time: .omitted),
+            date: Self.shareDate(s.startedAt),
             kpis: [
-                ("Distance", String(format: "%.2f km", s.distanceMeters / 1000)),
-                ("Time", RunSummaryStore.fmtDur(s.durationSeconds)),
-                ("Pace", s.avgPaceSecPerKm > 0 ? RunSummaryStore.fmtPace(s.avgPaceSecPerKm) : "\u{2014}"),
-                ("Avg HR", s.avgHR.map { "\(Int($0))" } ?? "\u{2014}"),
+                ("Distance", Self.fmtDist(s.distanceMeters)),
+                ("Time", Self.fmtDur(s.durationSeconds)),
+                ("Pace", Self.fmtPace(s.avgPaceSecPerKm)),
+                ("Avg HR", s.avgHR.map { "\(Int($0.rounded())) bpm" } ?? "\u{2014}"),
             ],
             speed: s.speedSeries, hr: s.hrSeries,
             quote: q.text.strippingAudioTags, who: q.who, heardAtKm: nil, aspect: aspect,
             mapImage: layout == .route ? mapResult?.image : nil,
             mapPoints: layout == .route ? (mapResult?.points ?? []) : [],
             mapColors: layout == .route ? (mapResult?.colors ?? []) : [])
+    }
+
+    // MARK: web-identical KPI / date formatting
+    // These mirror proxy/src/routes/dashboardApp.ts (fmtDist / fmtDur / fmtPace
+    // / shareDateLabel) char-for-char so the iOS card reads exactly like the
+    // dashboard: "2.63 km", "15m39s", "5:58/km", "150 bpm", "Mon, Jun 15, 2026".
+
+    private static func fmtDist(_ m: Double) -> String {
+        guard m.isFinite, m > 0 else { return "\u{2014}" }
+        return m >= 1000 ? String(format: "%.2f km", m / 1000) : "\(Int(m.rounded())) m"
+    }
+    private static func fmtDur(_ sec: Double) -> String {
+        guard sec.isFinite, sec > 0 else { return "\u{2014}" }
+        let m = Int(sec / 60), s = Int((sec - Double(m) * 60).rounded())
+        return "\(m)m\(s < 10 ? "0" : "")\(s)s"
+    }
+    private static func fmtPace(_ secPerKm: Double) -> String {
+        guard secPerKm.isFinite, secPerKm > 0 else { return "\u{2014}" }
+        let m = Int(secPerKm / 60), s = Int((secPerKm - Double(m) * 60).rounded())
+        return "\(m):\(s < 10 ? "0" : "")\(s)/km"
+    }
+    private static func shareDate(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US")
+        f.dateFormat = "EEE, MMM d, yyyy"   // "Mon, Jun 15, 2026"
+        return f.string(from: d)
     }
 
     // MARK: controls

@@ -111,7 +111,7 @@ struct ShareCardView: View {
 
             // quote — now owns the whole band below the map down to the footer
             KaraokeQuote(text: q, progress: progress,
-                         fontSize: ShareCardView.fittedSerifSize(q, boxW: (W - P * 2) * 0.92,
+                         fontSize: ShareCardView.fittedSerifSize(q, boxW: W - P * 2,
                                                                  boxH: qBot - qTop, maxSize: H > 1200 ? 72 : 58))
                 .frame(width: W - P * 2, height: qBot - qTop)
                 .position(x: W / 2, y: (qTop + qBot) / 2)
@@ -224,11 +224,11 @@ struct ShareCardView: View {
     private var quoteBlock: some View {
         let boxW = W - P * 2
         let boxH = quoteBottom - quoteTop
-        // Measure against a tighter width — the karaoke flow adds per-word
-        // padding + inter-word spacing the plain bounding-rect doesn't model,
-        // so this keeps the fitted size conservative (no vertical clipping).
+        // Fit and render at the SAME width — the measurement now models the
+        // FlowLayout's per-word padding + 1.3 pitch, so no fudge factor is
+        // needed (and the quote can no longer overflow or crowd the footer).
         let size = Self.fittedSerifSize("\u{201C}\(model.quote)\u{201D}",
-                                        boxW: boxW * 0.86, boxH: boxH,
+                                        boxW: boxW, boxH: boxH,
                                         maxSize: H > 1200 ? 80 : 64)
         return KaraokeQuote(text: "\u{201C}\(model.quote)\u{201D}", progress: progress, fontSize: size)
             .frame(width: boxW, height: boxH)
@@ -288,24 +288,42 @@ struct ShareCardView: View {
         .position(x: W / 2, y: H - 56)
     }
 
-    /// Mirror of the web's layoutQuote: largest Georgia-italic size at which
-    /// the wrapped quote fits the box. Measured with UIKit so it matches the
-    /// rendered wrapping.
+    /// Per-line pitch — 1.3× the point size, exactly matching the web's
+    /// layoutQuote (`lh = size * 1.3`). The KaraokeQuote renderer below uses
+    /// this same value, so what we MEASURE is what we DRAW.
+    static func quoteLineHeight(_ size: CGFloat) -> CGFloat { size * 1.3 }
+    /// Inter-word gap + per-word horizontal pill padding the renderer adds.
+    /// Kept here so the fit measurement and the FlowLayout render agree.
+    static let quoteWordGap: CGFloat = 0.10        // × size, between words
+    static let quoteWordPad: CGFloat = 0.16        // × size, total (0.08 each side)
+
+    /// Mirror of the web's layoutQuote: the largest Georgia-italic size at
+    /// which the greedily-wrapped quote fits the box. The old version measured
+    /// with `boundingRect` (≈1.15 leading) but the quote RENDERS through
+    /// FlowLayout at a 1.3 pitch + per-word padding, so it under-measured and
+    /// the quote spilled past its box (the cramped, overlapping look). This
+    /// wraps with the EXACT metrics the renderer uses, so the fit is honest.
     static func fittedSerifSize(_ text: String, boxW: CGFloat, boxH: CGFloat, maxSize: CGFloat) -> CGFloat {
         var size = maxSize
-        // Floor low (12) so a long line ALWAYS shrinks to fit and shows in
-        // full — never truncates. The big share card rarely needs to go small;
-        // the small in-run overview box does.
-        while size >= 12 {
-            let font = UIFont(name: "Georgia-Italic", size: size) ?? .italicSystemFont(ofSize: size)
-            let r = (text as NSString).boundingRect(
-                with: CGSize(width: boxW, height: .greatestFiniteMagnitude),
-                options: [.usesLineFragmentOrigin, .usesFontLeading],
-                attributes: [.font: font], context: nil)
-            if r.height <= boxH { return size }
-            size -= 1
+        while size >= 16 {
+            if wrappedQuoteHeight(text, boxW: boxW, size: size) <= boxH { return size }
+            size -= size > 26 ? 2 : 1   // -2 like the web above 26, then finer to never overflow
         }
-        return 12
+        return 16
+    }
+
+    private static func wrappedQuoteHeight(_ text: String, boxW: CGFloat, size: CGFloat) -> CGFloat {
+        let font = UIFont(name: "Georgia-Italic", size: size) ?? .italicSystemFont(ofSize: size)
+        let gap = quoteWordGap * size, pad = quoteWordPad * size
+        var lineW: CGFloat = 0, lines = 1
+        for word in text.split(separator: " ") {
+            let ww = (String(word) as NSString).size(withAttributes: [.font: font]).width + pad
+            if lineW > 0 {
+                if lineW + gap + ww > boxW { lines += 1; lineW = ww }
+                else { lineW += gap + ww }
+            } else { lineW = ww }
+        }
+        return CGFloat(lines) * quoteLineHeight(size)
     }
 }
 
@@ -321,12 +339,15 @@ struct KaraokeQuote: View {
     private var words: [String] { text.split(separator: " ").map(String.init) }
 
     var body: some View {
-        FlowLayout(spacing: 0.28 * fontSize, lineSpacing: 0.30 * fontSize, alignment: .leading) {
+        // Same pitch + inter-word gap the fit measurement assumes, so the quote
+        // renders exactly as sized (no overflow, no cramming).
+        FlowLayout(spacing: ShareCardView.quoteWordGap * fontSize,
+                   lineHeight: ShareCardView.quoteLineHeight(fontSize),
+                   alignment: .leading) {
             ForEach(Array(words.enumerated()), id: \.offset) { i, w in
                 wordView(w, glow: glow(i))
             }
         }
-        .frame(maxHeight: .infinity)
     }
 
     private func glow(_ i: Int) -> Double {
@@ -361,27 +382,35 @@ struct KaraokeQuote: View {
 /// Minimal flow layout (word wrap) with optional per-line centring.
 struct FlowLayout: Layout {
     var spacing: CGFloat = 6
-    var lineSpacing: CGFloat = 6
+    /// Explicit per-line pitch. When > 0 every line is placed on this exact
+    /// stride (matching the web's `lh = size * 1.3`), so the rendered height
+    /// equals `lines × lineHeight` — the same thing fittedSerifSize measures.
+    var lineHeight: CGFloat = 0
     var alignment: HorizontalAlignment = .leading
+
+    private func pitch(_ lines: [Line]) -> CGFloat {
+        lineHeight > 0 ? lineHeight : (lines.map(\.height).max() ?? 0)
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let maxW = proposal.width ?? .infinity
         let lines = wrap(subviews, maxW: maxW)
-        let h = lines.reduce(0) { $0 + $1.height } + CGFloat(max(0, lines.count - 1)) * lineSpacing
+        let h = CGFloat(lines.count) * pitch(lines)
         return CGSize(width: maxW == .infinity ? (lines.map(\.width).max() ?? 0) : maxW, height: h)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let lines = wrap(subviews, maxW: bounds.width)
+        let lh = pitch(lines)
         var y = bounds.minY
         for line in lines {
             var x = bounds.minX + (alignment == .center ? (bounds.width - line.width) / 2 : 0)
             for item in line.items {
                 let s = subviews[item].sizeThatFits(.unspecified)
-                subviews[item].place(at: CGPoint(x: x, y: y + (line.height - s.height) / 2), proposal: .unspecified)
+                subviews[item].place(at: CGPoint(x: x, y: y + (lh - s.height) / 2), proposal: .unspecified)
                 x += s.width + spacing
             }
-            y += line.height + lineSpacing
+            y += lh
         }
     }
 
