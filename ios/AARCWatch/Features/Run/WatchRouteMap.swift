@@ -24,7 +24,9 @@ struct WatchRouteMap: View {
     @State private var camera: MapCameraPosition = .automatic
 
     var body: some View {
-        Map(position: $camera, interactionModes: [.zoom, .pan]) {
+        // No pan/zoom — the map follows the runner, and a static map lets the
+        // page-swipe through (an interactive map would trap the screen).
+        Map(position: $camera, interactionModes: []) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
                 MapPolyline(coordinates: [seg.a, seg.b])
                     .stroke(seg.color, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))

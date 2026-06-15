@@ -12,6 +12,9 @@ struct WatchCoachPage: View {
     let stampSecondsAgo: Int? // when the line was heard, for a subtle echo
     let hearted: Bool
     let onHeart: () -> Void
+    /// When set, the page is an OVERLAY on the main screen and shows a small X
+    /// in the corner to dismiss it (until the next line).
+    var onDismiss: (() -> Void)? = nil
 
     private var speaker: (name: String, color: Color)? {
         switch who?.lowercased() {
@@ -31,7 +34,7 @@ struct WatchCoachPage: View {
 
     private func activeBody(_ line: String) -> some View {
         VStack(spacing: 6) {
-            // Speaker + echo
+            // Speaker + echo + (overlay) dismiss
             HStack(spacing: 5) {
                 if let speaker {
                     Circle().fill(speaker.color).frame(width: 7, height: 7)
@@ -44,6 +47,15 @@ struct WatchCoachPage: View {
                     Text(s < 60 ? "\(s)s" : "\(s / 60)m")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.tertiary)
+                }
+                if let onDismiss {
+                    Button(action: onDismiss) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(.secondary)
+                            .symbolRenderingMode(.hierarchical)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
 

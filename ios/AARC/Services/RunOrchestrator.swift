@@ -101,8 +101,16 @@ final class RunOrchestrator {
     /// CoreLocation + HKWorkoutBuilder (no watch involvement). Same
     /// downstream pipeline (ScriptEngine, ContextualCoach, Live Activity)
     /// because PhoneWorkoutSession publishes the same LiveMetrics shape.
+    /// A run must NOT start while a post-run summary is on screen or another
+    /// run is live — that's how a stray tap (phone OR an accidental watch
+    /// touch) spawned a phantom run on top of the last run's summary. Every
+    /// start path consults this.
+    var canStartNewRun: Bool {
+        !RunSummaryStore.shared.isPresenting && !LiveMetricsConsumer.shared.isRunActive
+    }
+
     func startPhoneOnly(runType: RunType, personalityId: String = "roast_coach") async {
-        guard phase != .generating else { return }
+        guard phase != .generating, canStartNewRun else { return }
         phase = .generating
         lastError = nil
 
@@ -153,7 +161,7 @@ final class RunOrchestrator {
     /// named error. No silent dead ends — that requirement came from two
     /// field incidents where the handover died invisibly.
     func startFromPhone(runType: RunType, personalityId: String = "roast_coach") async {
-        guard phase != .generating, phase != .awaitingWatch else { return }
+        guard phase != .generating, phase != .awaitingWatch, canStartNewRun else { return }
         phase = .generating
         lastError = nil
         watchFailureReason = nil
@@ -365,6 +373,13 @@ final class RunOrchestrator {
         runType: RunType,
         personalityId: String
     ) async {
+        // Refuse a watch-initiated start while the post-run summary is up (or a
+        // run is live) — a stray wrist tap must not spawn a phantom run on top
+        // of the last run's summary. Tell the watch to abandon the handover.
+        guard canStartNewRun else {
+            PhoneSession.shared.sendStateEvent(.cancelStart(runId: runId))
+            return
+        }
         phase = .generating
         lastError = nil
 

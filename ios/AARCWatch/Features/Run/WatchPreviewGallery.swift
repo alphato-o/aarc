@@ -21,6 +21,13 @@ struct WatchPreviewGallery: View {
                            who: "ricky", stampSecondsAgo: 8, hearted: true) {}
         case "coach_empty":
             WatchCoachPage(line: nil, who: nil, stampSecondsAgo: nil, hearted: false) {}
+        case "coach_overlay":
+            ZStack {
+                WatchMetricsView(metrics: Self.mockMetrics(.running), runType: .treadmill)
+                WatchCoachPage(line: "Call that a hill? My nan jogs faster, and she's carrying the shopping.",
+                               who: "ricky", stampSecondsAgo: 4, hearted: false, onHeart: {}, onDismiss: {})
+                    .background(.black.opacity(0.9))
+            }
         case "metrics":
             WatchMetricsView(metrics: Self.mockMetrics(.running), runType: .treadmill)
         case "metrics_paused":

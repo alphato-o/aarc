@@ -15,14 +15,15 @@ struct WatchActiveRunView: View {
     @State private var selectedPage: Page = .metrics
     @State private var showEndConfirm = false
     @State private var showSummary = false
+    /// Coach line the runner dismissed (X) — hidden until the next line.
+    @State private var coachDismissedId: UUID?
 
-    private enum Page: Hashable { case controls, metrics, coach, map, chart, diagnostics }
+    private enum Page: Hashable { case controls, metrics, map, chart, diagnostics }
 
     var body: some View {
         TabView(selection: $selectedPage) {
             controlsPage.tag(Page.controls)
             metricsPage.tag(Page.metrics)
-            coachPage.tag(Page.coach)
             if host.currentRunType == .outdoor {
                 mapPage.tag(Page.map)
             }
@@ -30,6 +31,10 @@ struct WatchActiveRunView: View {
             diagnosticsPage.tag(Page.diagnostics)
         }
         .tabViewStyle(.page)
+        // Coach line OVERLAYS the current screen the moment one lands (like the
+        // phone) — no need to swipe to a separate page to heart it.
+        .overlay { coachOverlay }
+        .animation(.easeInOut(duration: 0.22), value: session.currentCoachLine?.id)
         .navigationBarBackButtonHidden(true)
         .alert("End run?", isPresented: $showEndConfirm) {
             Button("Cancel", role: .cancel) {}
@@ -52,17 +57,22 @@ struct WatchActiveRunView: View {
         }
     }
 
-    // MARK: - Coach (heart the current line)
+    // MARK: - Coach overlay (heart the current line, over the main screen)
 
-    private var coachPage: some View {
-        let line = session.currentCoachLine
-        return WatchCoachPage(
-            line: line?.text,
-            who: line?.who,
-            stampSecondsAgo: line.map { max(0, Int(Date().timeIntervalSince($0.receivedAt))) },
-            hearted: line.map { session.heartedLineIds.contains($0.id) } ?? false,
-            onHeart: { session.heartCurrentLine() }
-        )
+    @ViewBuilder
+    private var coachOverlay: some View {
+        if let line = session.currentCoachLine, line.id != coachDismissedId {
+            WatchCoachPage(
+                line: line.text,
+                who: line.who,
+                stampSecondsAgo: max(0, Int(Date().timeIntervalSince(line.receivedAt))),
+                hearted: session.heartedLineIds.contains(line.id),
+                onHeart: { session.heartCurrentLine() },
+                onDismiss: { coachDismissedId = line.id }
+            )
+            .background(.black.opacity(0.9))
+            .transition(.opacity)
+        }
     }
 
     // MARK: - Chart (live HR + speed)

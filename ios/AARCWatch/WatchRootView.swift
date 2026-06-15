@@ -200,37 +200,20 @@ struct WatchRootView: View {
                 .controlSize(.small)
             }
         } else {
-            VStack(spacing: 6) {
-                Button {
-                    Task {
-                        await host.beginRun(
-                            runType: .treadmill,
-                            personalityId: "roast_coach",
-                            prepareScriptOnPhone: true
-                        )
-                    }
-                } label: {
-                    Label("Treadmill", systemImage: "figure.run.treadmill")
-                        .frame(maxWidth: .infinity)
+            // Slide-to-start (not tap) so a stray touch can't begin a run.
+            VStack(spacing: 8) {
+                WatchSlideToStart(label: "Treadmill", tint: .green,
+                                  systemImage: "figure.run.treadmill") {
+                    Task { await host.beginRun(runType: .treadmill,
+                                               personalityId: "roast_coach",
+                                               prepareScriptOnPhone: true) }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .controlSize(.small)
-
-                Button {
-                    Task {
-                        await host.beginRun(
-                            runType: .outdoor,
-                            personalityId: "roast_coach",
-                            prepareScriptOnPhone: true
-                        )
-                    }
-                } label: {
-                    Label("Outdoor", systemImage: "figure.run")
-                        .frame(maxWidth: .infinity)
+                WatchSlideToStart(label: "Outdoor", tint: .blue,
+                                  systemImage: "figure.run") {
+                    Task { await host.beginRun(runType: .outdoor,
+                                               personalityId: "roast_coach",
+                                               prepareScriptOnPhone: true) }
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
         }
 
