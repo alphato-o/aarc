@@ -39,6 +39,12 @@ struct AARCApp: App {
                 .preferredColorScheme(.dark)
                 .task {
                     if ShareCardPreviewHarness.enabled { ShareCardPreviewHarness.run() }
+                    // Harness A — headless whole-run feedback preview. Runs the
+                    // sim and exits the startup path (no real activation needed).
+                    if let plan = ProcessInfo.processInfo.environment["AARC_RUN_SIM"] {
+                        await SimRunDriver.runAndWrite(planArg: plan)
+                        return
+                    }
                     PhoneSession.shared.activate()
                     // Pre-warm the audio session so the first companion
                     // utterance doesn't pay activation latency. Initialiser

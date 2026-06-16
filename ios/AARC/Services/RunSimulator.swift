@@ -127,6 +127,12 @@ final class RunSimulator {
     /// for triggering the stationary roast).
     var paused = false
 
+    /// Headless mode (SimRunDriver / Harness A): do the full real setup in
+    /// `start()` but DON'T spin up the 1 Hz wall-clock Timer — the feedback
+    /// simulator drives `LiveMetricsConsumer.ingest` itself on a stepped
+    /// virtual clock so a whole run previews in minutes.
+    var headless = false
+
     // Synthetic HR model.
     var targetHeartRate: Double = 150
 
@@ -221,6 +227,8 @@ final class RunSimulator {
         }
 
         ticker?.invalidate()
+        // Headless harness drives ticks itself — no real-time Timer.
+        guard !headless else { return }
         let t = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }

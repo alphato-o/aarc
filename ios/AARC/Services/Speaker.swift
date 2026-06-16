@@ -43,6 +43,12 @@ final class Speaker {
         segmentId: UUID? = nil,
         decisionAt: Date? = nil
     ) {
+        // Harness A (content-mode preview): record the produced line and skip
+        // the queue + TTS entirely. Text is the artifact; no audio, no cost.
+        if RunPreview.shared.active {
+            RunPreview.shared.record(text: text, source: source, priority: priority, voiceId: voiceId)
+            return
+        }
         let item = VoiceItem(
             text: text,
             priority: priority,

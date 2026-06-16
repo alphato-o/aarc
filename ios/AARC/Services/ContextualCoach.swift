@@ -35,6 +35,10 @@ final class ContextualCoach {
     private(set) var lastFiredAt: Date?
     private(set) var lastError: String?
 
+    /// True while a /dynamic-line or /music-comment request is in flight.
+    /// Read by SimRunDriver to await generation between virtual ticks.
+    var isGenerating: Bool { inFlight }
+
     // MARK: - Tunables
 
     private let rollingWindow: TimeInterval = 90

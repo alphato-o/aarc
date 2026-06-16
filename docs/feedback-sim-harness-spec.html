@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AARC — Whole-Run Feedback Simulator (Harness A) — Spec v1</title>
+<style>
+  :root{
+    --ink:#1a1d1a; --mut:#5b6b5f; --faint:#8a978d; --line:#dfe4df;
+    --bg:#fbfcfb; --panel:#f4f7f4; --green:#2f6b46; --greenbg:#e7f1ea;
+    --red:#a23b34; --redbg:#f6e9e7; --amber:#9a6a1a; --amberbg:#f7efdf;
+    --code:#0c140e; --codebg:#f1f3f0;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); background:var(--bg); line-height:1.55; margin:0;
+    font-size:16px;
+  }
+  .wrap{max-width:920px; margin:0 auto; padding:48px 28px 96px}
+  header.doc{border-bottom:3px solid var(--green); padding-bottom:20px; margin-bottom:8px}
+  .kicker{font-size:12px; letter-spacing:.14em; text-transform:uppercase; color:var(--green); font-weight:700}
+  h1{font-size:30px; line-height:1.18; margin:.32em 0 .15em}
+  .sub{color:var(--mut); font-size:16px; margin:0}
+  .meta{color:var(--faint); font-size:13px; margin-top:14px; display:flex; gap:18px; flex-wrap:wrap}
+  .meta b{color:var(--mut); font-weight:600}
+  h2{font-size:21px; margin:42px 0 6px; padding-top:10px; border-top:1px solid var(--line)}
+  h2 .n{color:var(--faint); font-weight:600; margin-right:.5em}
+  h3{font-size:16px; margin:26px 0 6px; color:var(--green)}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0; padding-left:22px}
+  li{margin:5px 0}
+  code{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace; font-size:.86em; background:var(--codebg); padding:1px 5px; border-radius:4px; color:var(--code)}
+  pre{background:var(--code); color:#e7efe9; padding:16px 18px; border-radius:10px; overflow:auto; font-size:13px; line-height:1.5}
+  pre code{background:none; color:inherit; padding:0}
+  aside{background:var(--panel); border-left:4px solid var(--green); padding:12px 16px; border-radius:0 8px 8px 0; margin:16px 0}
+  aside.warn{border-color:var(--amber); background:var(--amberbg)}
+  aside.win{border-color:var(--green); background:var(--greenbg)}
+  table{border-collapse:collapse; width:100%; margin:16px 0; font-size:14px}
+  th,td{border:1px solid var(--line); padding:8px 11px; text-align:left; vertical-align:top}
+  th{background:var(--panel); font-weight:700; font-size:12.5px; letter-spacing:.02em}
+  td code{font-size:.82em}
+  .tag{display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; letter-spacing:.03em}
+  .t-catch{background:var(--greenbg); color:var(--green)}
+  .t-part{background:var(--amberbg); color:var(--amber)}
+  .t-no{background:var(--redbg); color:var(--red)}
+  figure{margin:22px 0; text-align:center}
+  figcaption{color:var(--faint); font-size:12.5px; margin-top:8px}
+  .pill{display:inline-block; background:var(--greenbg); color:var(--green); font-weight:700; font-size:12px; padding:3px 10px; border-radius:20px}
+  .lead{font-size:17px; color:var(--ink)}
+  .two{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px}
+  .card h4{margin:0 0 6px; font-size:14px}
+  hr{border:none; border-top:1px solid var(--line); margin:34px 0}
+  .foot{color:var(--faint); font-size:12.5px; margin-top:40px; border-top:1px solid var(--line); padding-top:14px}
+  @media (max-width:680px){ .two{grid-template-columns:1fr} .wrap{padding:28px 18px 64px} h1{font-size:25px} }
+  @media print{
+    body{background:#fff; font-size:11.5pt}
+    .wrap{max-width:none; padding:0}
+    pre{white-space:pre-wrap; word-break:break-word}
+    h2{break-after:avoid} table,figure,pre,aside{break-inside:avoid}
+    a{color:inherit; text-decoration:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="doc">
+  <div class="kicker">AARC · Test Infrastructure · Spec</div>
+  <h1>Harness&nbsp;A — The Whole-Run Feedback Simulator</h1>
+  <p class="sub">Fast-forward an entire virtual run through the <em>real</em> voice-generation pipeline — text-only, no ElevenLabs — and read everything Ricky &amp; Jessica would say, before anyone laces up.</p>
+  <div class="meta">
+    <span><b>Status:</b> Draft v1 — for approval</span>
+    <span><b>Scope:</b> Harness A only (feedback sim)</span>
+    <span><b>Sibling:</b> Harness B (iOS end-to-end UI tests) — separate spec</span>
+    <span><b>Date:</b> 2026-06-16</span>
+  </div>
+</header>
+
+<h2><span class="n">1</span>Why this exists</h2>
+<p class="lead">Our test loop has been: <strong>change code → fly blind → wait for a real run → discover five bugs at once, by ear, mid-suffering → repeat.</strong> A real run costs a gym trip and two hours. That makes testing rare, late, and high-stakes — exactly backwards for a system whose whole value is the moment-to-moment quality of two AI voices.</p>
+
+<p>The 12&nbsp;km treadmill run on 2026-06-16 (<code>24285006</code>) is the case study. Eight defects surfaced at once, and <strong>every single voice defect was discoverable offline, deterministically, for free</strong> — we just had no way to look:</p>
+<ul>
+  <li>Jessica opened <strong>23 of 23 lines</strong> with the identical <code>&lt;hook&gt; — darling, &lt;contempt&gt;</code> template (a template her prompt explicitly bans).</li>
+  <li>Ricky reused one <code>"X minutes in, you've gone QUIET — just the belt…"</code> shape five times.</li>
+  <li><strong>Zero km milestones</strong> fired: the script-gen call 502'd three times (<code>script.swapRetry</code>) and the Jessica milestone-delivery path never ran despite <code>director.prewarm km:1…6</code>.</li>
+  <li>The Ricky↔Jessica balance was a flat ~50/50 the whole way — none of the intended "Ricky early → Jessica late" hand-off.</li>
+</ul>
+
+<aside class="win">
+  <strong>The principle we're adopting:</strong> the simulator is the gate; the gym is <em>acceptance, not discovery</em>. We exhaust every offline check before a real run is even on the table. Harness&nbsp;A makes that possible for the voice pipeline.
+</aside>
+
+<h2><span class="n">2</span>Goal &amp; scope</h2>
+<h3>Goal</h3>
+<p>Given a plan (<code>"10k"</code>, <code>"60 min"</code>, <code>"open"</code>) and a pace profile, drive the <strong>real</strong> generation pipeline through a fast-forwarded virtual run and emit:</p>
+<ol>
+  <li>a complete, time-stamped <strong>transcript</strong> of every line both voices produce, annotated with voice, length mode, trigger/source, the km it belongs to, and the director's decision context; and</li>
+  <li>an <strong>analysis report</strong> — repetition score, voice-balance curve, milestone coverage, length distribution, arc check, and any generation failures — rendered as a self-contained HTML page.</li>
+</ol>
+
+<div class="two">
+  <div class="card">
+    <h4>In scope</h4>
+    <ul>
+      <li>The real <code>RunDirector</code> / <code>ScriptEngine</code> / <code>ContextualCoach</code> / <code>Conversation</code> logic.</li>
+      <li>Real LLM generation (so repetition is <em>real</em>), text-only.</li>
+      <li>Deterministic virtual clock + seeded RNG.</li>
+      <li>Headless run on the iOS simulator + an in-app "Preview Run" trigger.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Out of scope (v1)</h4>
+    <ul>
+      <li>ElevenLabs <strong>audio generation</strong> — bypassed (text is the artifact). But its <em>latency + playback duration</em> are modelled, because timing shapes the run — see §5.</li>
+      <li>Two fidelity levels: <b>Content mode</b> (v1, idealised timing) and <b>Fidelity mode</b> (v2, full latency/queue simulation). Both specced in §5; v1 ships first.</li>
+      <li>Harness B (iOS UI/e2e) — its own spec.</li>
+      <li>The persona/director <em>fixes</em> themselves — this is the instrument, not the surgery.</li>
+    </ul>
+  </div>
+</div>
+
+<h2><span class="n">3</span>Architecture</h2>
+<p>The non-negotiable design rule: <strong>reuse the exact pipeline the app runs.</strong> We do not re-implement the director or the personas in a test double — that's how sim and prod drift. We drive the real singletons through their real entry point (<code>LiveMetricsConsumer.ingest</code>) and intercept only at the very edges: the clock (front) and the speak sink (back).</p>
+
+<figure>
+<svg viewBox="0 0 900 360" width="100%" role="img" aria-label="Data flow from virtual clock through the real pipeline to the report">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#2f6b46"/>
+    </marker>
+    <style>
+      .box{fill:#f4f7f4; stroke:#cfd9d0; rx:9}
+      .real{fill:#e7f1ea; stroke:#9cc3ab}
+      .edge{fill:#f7efdf; stroke:#d9c08a}
+      .t{font:600 12.5px -apple-system,Segoe UI,sans-serif; fill:#1a1d1a}
+      .s{font:11px -apple-system,Segoe UI,sans-serif; fill:#5b6b5f}
+      .lbl{font:700 10px -apple-system,Segoe UI,sans-serif; fill:#2f6b46; letter-spacing:.04em}
+      .flow{stroke:#2f6b46; stroke-width:2; fill:none; marker-end:url(#ar)}
+      .byp{stroke:#a23b34; stroke-width:1.6; stroke-dasharray:5 4; fill:none}
+    </style>
+  </defs>
+
+  <!-- front edge -->
+  <rect class="box edge" x="12" y="140" width="150" height="74" rx="9"/>
+  <text class="t" x="22" y="166">SimRunDriver</text>
+  <text class="s" x="22" y="184">virtual clock + pace</text>
+  <text class="s" x="22" y="200">steps, no Timer</text>
+
+  <!-- ingest -->
+  <rect class="box real" x="196" y="140" width="158" height="74" rx="9"/>
+  <text class="lbl" x="206" y="134">REAL — UNCHANGED</text>
+  <text class="t" x="206" y="166">LiveMetricsConsumer</text>
+  <text class="s" x="206" y="184">.ingest(metrics)</text>
+  <text class="s" x="206" y="200">1 entry point</text>
+
+  <!-- pipeline cluster -->
+  <rect x="388" y="36" width="280" height="288" rx="12" fill="none" stroke="#9cc3ab" stroke-dasharray="3 3"/>
+  <text class="lbl" x="398" y="30">REAL GENERATION PIPELINE</text>
+
+  <rect class="box real" x="404" y="48" width="248" height="52" rx="9"/>
+  <text class="t" x="414" y="70">RunDirector.processTick</text>
+  <text class="s" x="414" y="88">progress · ETA · milestoneOwner · protect</text>
+
+  <rect class="box real" x="404" y="116" width="120" height="52" rx="9"/>
+  <text class="t" x="414" y="138">ScriptEngine</text>
+  <text class="s" x="414" y="156">km / milestone</text>
+
+  <rect class="box real" x="532" y="116" width="120" height="52" rx="9"/>
+  <text class="t" x="542" y="138">Contextual-</text>
+  <text class="t" x="542" y="154">Coach</text>
+
+  <rect class="box real" x="404" y="184" width="248" height="52" rx="9"/>
+  <text class="t" x="414" y="206">Conversation.tick → startProducing</text>
+  <text class="s" x="414" y="224">length mode · anti-repeat · Jessica</text>
+
+  <rect class="box real" x="404" y="252" width="248" height="52" rx="9"/>
+  <text class="t" x="414" y="274">AIClient → LLM (OpenRouter)</text>
+  <text class="s" x="414" y="292">real text · no TTS</text>
+
+  <!-- back edge: speak sink -->
+  <rect class="box edge" x="700" y="116" width="186" height="74" rx="9"/>
+  <text class="lbl" x="710" y="110">EDGE — INTERCEPT</text>
+  <text class="t" x="710" y="142">Speaker.speak()</text>
+  <text class="s" x="710" y="160">preview sink: record,</text>
+  <text class="s" x="710" y="176">skip queue + synth</text>
+
+  <!-- transcript + report -->
+  <rect class="box" x="700" y="226" width="186" height="44" rx="9"/>
+  <text class="t" x="710" y="253">Transcript (JSON)</text>
+  <rect class="box" x="700" y="286" width="186" height="44" rx="9"/>
+  <text class="t" x="710" y="313">Analyzer → HTML report</text>
+
+  <!-- bypassed TTS -->
+  <rect class="box" x="404" y="316" width="160" height="30" rx="7" fill="#f6e9e7" stroke="#d9aaa4"/>
+  <text class="s" x="414" y="335" fill="#a23b34">RemoteTTS / ElevenLabs — BYPASSED</text>
+
+  <!-- flows -->
+  <path class="flow" d="M162,177 L194,177"/>
+  <path class="flow" d="M354,170 L402,90 L402,74"/>
+  <path class="flow" d="M528,142 L530,142"/>
+  <path class="flow" d="M528,210 L700,165"/>
+  <path class="flow" d="M793,190 L793,224"/>
+  <path class="flow" d="M793,270 L793,284"/>
+  <path class="byp" d="M564,300 Q640,300 690,210"/>
+  <path class="flow" d="M86,214 L86,300 L196,300 L300,300 L300,214" opacity=".0"/>
+</svg>
+<figcaption>The driver and the speak-sink are the only new code touching the run path. Everything in the dashed box is the production pipeline, unmodified.</figcaption>
+</figure>
+
+<h2><span class="n">4</span>The seams (exact integration points)</h2>
+<p>This is the buildable core. Every seam below already exists; the harness either drives it or taps it.</p>
+
+<table>
+  <thead><tr><th>Seam</th><th>Where</th><th>What the harness does</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><b>Pipeline entry</b></td>
+      <td><code>LiveMetricsConsumer.ingest(metrics)</code></td>
+      <td>The single call that drives <code>RunDirector.processTick</code> → <code>ScriptEngine</code> → <code>ContextualCoach</code> → <code>Conversation.tick</code> each tick. The driver calls it directly with synthetic <code>LiveMetrics</code> — no Timer.</td>
+    </tr>
+    <tr>
+      <td><b>Metric source</b></td>
+      <td><code>RunSimulator</code> (RunSimulator.swift:113) — <code>publish()</code> → <code>ingest</code> (:334)</td>
+      <td>Reuse its synthetic <code>LiveMetrics</code> construction, but drive it from a stepped virtual clock instead of the real <code>Timer.scheduledTimer(…1.0…)</code> at :224. Set <code>autoVary = false</code> (:138) to kill the <code>Double.random</code> pace wander → fully deterministic.</td>
+    </tr>
+    <tr>
+      <td><b>Speak sink</b></td>
+      <td><code>Speaker.speak(_:priority:source:…voiceId:…)</code> (Speaker.swift:36)</td>
+      <td>The single dispatch point for every produced line. When <code>RunPreview.active</code> is set, record <code>{t, voice, source, priority, lengthMode, segmentId, text}</code> to the transcript and <strong>return without enqueuing</strong> — bypasses <code>VoiceFeedbackQueue</code> + TTS. Voice is read from <code>voiceId</code> (<code>RemoteTTS.jessicaVoiceId</code> ⇒ Jessica, else Ricky).</td>
+    </tr>
+    <tr>
+      <td><b>Disable prewarm network</b></td>
+      <td><code>RunDirector.prewarmEnabled</code> (RunDirector.swift:68)</td>
+      <td>Set <code>false</code> — the flag already exists for "the Coach Playground's dry Director simulator … without firing network calls." Stops <code>prewarmImminent</code> (:304) from calling <code>RemoteTTS.shared.prefetch</code>.</td>
+    </tr>
+    <tr>
+      <td><b>Milestone ownership</b></td>
+      <td><code>RunDirector.milestoneOwnerIsJessica(km:)</code> (:202)</td>
+      <td>Read-only — already a deterministic seeded hash of <code>km</code> + <code>progressFraction</code>. The harness records the verdict per km to chart the hand-off curve.</td>
+    </tr>
+    <tr>
+      <td><b>Length + anti-repeat</b></td>
+      <td><code>Conversation.pickLengthMode</code> (:293), <code>antiRepeatContext</code> (:90)</td>
+      <td>Read-only — record the chosen length mode per line and the <code>recentDispatched</code> payload actually sent, so we can confirm the anti-repeat context is populated and see whether the model honours it.</td>
+    </tr>
+    <tr>
+      <td><b>Generation</b></td>
+      <td><code>AIClient.reactLine</code> / script gen / <code>generateDynamicLine</code></td>
+      <td>Unmodified — real LLM, text-only. The script-gen retry path (<code>script.swapRetry</code> on HTTP&nbsp;502) runs for real, so the harness surfaces the exact failure that killed today's milestones.</td>
+    </tr>
+    <tr>
+      <td><b>Invocation</b></td>
+      <td>mirror <code>ShareCardPreviewHarness</code> (env-gated <code>AARC_SHARE_PREVIEW=1</code>)</td>
+      <td>New env gate <code>AARC_RUN_SIM=&lt;plan&gt;</code> at launch → run headless, write transcript+report to <code>Documents/</code>, pull via <code>simctl get_app_container … data</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<aside>
+  <strong>New code is small and at the edges:</strong> a <code>SimRunDriver</code> (stepped clock + metric feed), a <code>RunPreview</code> recorder (the speak-sink tap + transcript), and an <code>Analyzer</code> + HTML renderer. No change to director/persona logic.
+</aside>
+
+<h2><span class="n">5</span>Fast-forward, determinism &amp; network variance</h2>
+
+<h3>How virtual time drives it</h3>
+<p>The real run is a 1&nbsp;Hz <code>Timer</code> → <code>ingest</code>. The harness replaces the Timer with a synchronous loop that advances a <em>virtual</em> clock and awaits generation between steps:</p>
+<pre><code>// pseudocode — SimRunDriver
+RunPreview.active = true
+RunDirector.shared.prewarmEnabled = false
+start(plan, paceProfile)              // RunOrchestrator/Director/Conversation start as normal
+var t = 0.0
+while !finished(plan, dist, t) {
+    let m = syntheticMetrics(at: t, dist: dist)   // pace injected ⇒ deterministic speed
+    LiveMetricsConsumer.shared.ingest(m)          // drives the real pipeline for this tick
+    await settleGeneration()                      // await Conversation.produceTask / ScriptEngine in-flight
+    t += dt; dist += stepDistance(paceProfile, dt)
+}
+end()
+writeReport(RunPreview.transcript)</code></pre>
+<p>Each produced line is tagged with the <em>virtual</em> <code>t</code> at production. Generation is real LLM (~1–3&nbsp;s/line); a 10&nbsp;k run yields roughly 40–60 lines, so wall-clock ≈ <strong>1–3 minutes</strong> for a full preview — versus a two-hour gym trip. <code>dt</code> can be coarse (e.g. 3–5&nbsp;s steps) since nothing here needs sub-second fidelity.</p>
+
+<aside class="warn">
+  <strong>Content mode idealises timing — and must not be mistaken for the real timeline.</strong> Awaiting the LLM and tagging the line with the virtual <code>t</code> at production collapses latency to ~0. That faithfully reproduces <em>what is said</em> and the director's content decisions, but NOT <em>when it lands, in what order, or whether it's dropped</em>. For that, see "the timing axis" below.
+</aside>
+
+<h3>The timing axis — why a single fast-forward isn't enough</h3>
+<p>A run is a <strong>time-ordered event stream</strong>, and latency is part of the content. The director pre-warms 25&nbsp;s ahead, protects 15&nbsp;s windows, and only lets Jessica react when there's ≥45&nbsp;s of clear air — all gated on how long generation + TTS <em>actually</em> take. Real numbers from run <code>24285006</code> (we log <code>net.req</code> ms per call):</p>
+<table>
+  <thead><tr><th>Stage</th><th>p50</th><th>p90</th><th>max</th><th>note</th></tr></thead>
+  <tbody>
+    <tr><td>LLM (OpenRouter)</td><td>4.5&nbsp;s</td><td>7.7&nbsp;s</td><td>~37&nbsp;s</td><td>per line</td></tr>
+    <tr><td>ElevenLabs TTS</td><td>11.2&nbsp;s</td><td>18.7&nbsp;s</td><td>32.3&nbsp;s</td><td>scales with length</td></tr>
+  </tbody>
+</table>
+<p>TTS is length-driven: <code>14 chars → 1.4&nbsp;s</code> but <code>~800 chars → 16–32&nbsp;s</code> — and the <em>same</em> 828-char line measured <strong>16&nbsp;s once and 32&nbsp;s another</strong>. So end-to-end lead is routinely <strong>15–50&nbsp;s</strong>, length-dependent, and varies ~2× run-to-run from the network alone. A fixed 6&nbsp;s lead would never reproduce a guillotined milestone, a late-landing line, or Jessica's indulgent passage eating the next split's window. <strong>Timing variance must be modelled, and modelled stochastically.</strong></p>
+
+<h3>Two modes</h3>
+<table>
+  <thead><tr><th></th><th>Content mode (v1)</th><th>Fidelity mode (v2)</th></tr></thead>
+  <tbody>
+    <tr><td><b>Question it answers</b></td><td>What do they <em>say</em>? (repetition, ownership, length, arc)</td><td>What actually <em>plays</em>, when, in what order — and what's dropped?</td></tr>
+    <tr><td><b>Latency</b></td><td>Idealised (LLM fired fast, lead pinned)</td><td>Sampled per call from the latency model below</td></tr>
+    <tr><td><b>Queue</b></td><td>Bypassed — records produced lines</td><td>Real <code>VoiceFeedbackQueue</code> on a virtual clock — records the played stream + drops/preemptions</td></tr>
+    <tr><td><b>Determinism</b></td><td>Deterministic (seed)</td><td>Stochastic → Monte-Carlo (below)</td></tr>
+    <tr><td><b>Cost / speed</b></td><td>~50 LLM calls, ~1–3&nbsp;min</td><td>Same LLM cost; wall-clock decoupled from <em>virtual</em> latency, so still ~minutes per iteration</td></tr>
+  </tbody>
+</table>
+<p>Crucially, fidelity mode still uses the <em>real</em> LLM for text, but its real wall-latency is discarded in favour of a <em>sampled virtual</em> latency — the virtual clock advances by the sampled value, the runner keeps moving, and the line becomes "available" at <code>t₀ + sampledLatency</code>. So we see whether the director's projection was right and whether the line still landed in its window, without the sim taking 50 real seconds per line.</p>
+
+<h3>The latency model (calibrated from our own logs)</h3>
+<p>We already emit everything needed — <code>net.req</code> events carry <code>{svc, ms, chars}</code> and (now) the cache verdict. The model samples:</p>
+<ul>
+  <li><b>LLM latency</b> — distribution by model (p50/p90 from real runs), per call.</li>
+  <li><b>TTS latency</b> — <code>f(chars)</code> + noise, with the all-important <b>cache-hit ≈ 0&nbsp;s</b> branch (the R2 cache means a repeated line is instant — the sim must model hit vs miss, since that radically changes timing).</li>
+  <li><b>TTS audio duration</b> — <code>chars ÷ ~14 chars/s</code>; this plus the queue's 6&nbsp;s music gap is what gates the <em>next</em> line and decides what goes stale.</li>
+  <li><b>The hedge</b> — dual-endpoint race + the length-scaled hedge delay (already shipped); modelled so its effect on "time-to-audio" is real.</li>
+  <li><b>Network profiles</b> — <code>wifi</code> / <code>china-gateway</code> / <code>degraded</code>, each a different distribution, so we can ask "how does the run feel on a bad connection?"</li>
+</ul>
+<p>Sampled latencies are fed back into <code>RunDirector.recordPipelineLatency()</code> (:129) so its <code>pipelineLeadSeconds</code> EMA + <code>projected()</code> adapt exactly as on device.</p>
+
+<h3>Monte-Carlo — characterise variance, don't fake a single timeline</h3>
+<p>Because the same input varies ~2×, one timeline lies. Fidelity mode runs <code>K</code> iterations (sampling the latency profile) and reports the <em>distribution</em> of outcomes: milestone-clean rate, guillotine rate, late-land rate, stale-drop rate, and "did the indulgent line steal the next split." A fix is "good" when the bad-outcome rates fall across the profiles, not when one lucky run looks fine.</p>
+
+<aside class="warn">
+  <strong>The enabler (and the main cost of v2): a <code>Clock</code> seam.</strong> <code>RunDirector.updateSpeed</code> reads <code>Date()</code> (:215) and <code>VoiceFeedbackQueue</code> uses wall-clock + <code>Task.sleep</code> for the music gap / stale-drop. To run the <em>real</em> queue/director logic on virtual time (rather than re-implement it and reintroduce sim-vs-prod drift), inject a tiny <code>Clock</code> protocol (<code>now()</code> + <code>sleep(_:)</code>) they read: the app supplies the system clock, the sim supplies a virtual one. This is the one real refactor v2 requires — and it's the difference between modelling timing and faking it.
+</aside>
+
+<h3>What's deterministic vs not</h3>
+<table>
+  <thead><tr><th>Component</th><th>Deterministic?</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>Speed / progress / ETA / milestone ownership</td><td><span class="tag t-catch">Yes</span></td><td>From injected pace + seeded hash. The <code>Date()</code> path in <code>updateSpeed</code> (:215) is bypassed because synthetic metrics always carry <code>currentPaceSecPerKm</code>.</td></tr>
+    <tr><td>Length-mode pick</td><td><span class="tag t-catch">Yes</span></td><td><code>Conversation.variation()</code> is a seeded splitmix hash of elapsed/distance — reproducible.</td></tr>
+    <tr><td>Sim pace wander / street events</td><td><span class="tag t-part">Optional</span></td><td><code>RunSimulator.autoVary</code> uses <code>Double.random</code>; set <code>false</code> for reproducible runs, or seed it for realistic-but-repeatable variation.</td></tr>
+    <tr><td>LLM line text</td><td><span class="tag t-no">No</span></td><td>This is the point — we want <em>real</em> generation to expose real repetition. Run N times to see the variety envelope; the analyzer scores repetition <em>within</em> a run, which is robust to per-call nondeterminism.</td></tr>
+  </tbody>
+</table>
+
+<h3>Cost</h3>
+<p><span class="pill">LLM: yes · TTS: no</span> &nbsp;~50 cheap OpenRouter calls per 10&nbsp;k preview (cents), zero ElevenLabs characters. Optional <code>--mock-llm</code> mode (canned lines) gives a <em>free</em> pass for testing pure pipeline logic — director ownership, length distribution, milestone coverage — without any spend.</p>
+
+<h2><span class="n">6</span>Output</h2>
+
+<h3>Transcript schema (JSON)</h3>
+<pre><code>{
+  "plan": "10k", "seed": 4231, "pace": "5:40/km", "generatedAt": "...",
+  "lines": [
+    { "t": 312.0, "km": 1, "voice": "ricky", "source": "script:every_km",
+      "lengthMode": null, "milestone": true, "text": "…",
+      "director": { "progress": 0.31, "ownerJessica": false, "etaNextMustPlay": 41.2,
+                    "protected": false } },
+    { "t": 318.5, "km": 1, "voice": "jessica", "source": "jessica:react",
+      "lengthMode": "quip", "milestone": false, "text": "…",
+      "recentDispatchedCount": 6 }
+  ],
+  "events": [ { "t": 0, "type": "script.swapRetry", "detail": "attempt 1/3 HTTP 502" } ]
+}</code></pre>
+
+<h3>Analysis metrics (the auto-verdict)</h3>
+<table>
+  <thead><tr><th>Metric</th><th>What it measures</th><th>Fail signal</th></tr></thead>
+  <tbody>
+    <tr><td><b>Structural repetition</b></td><td>n-gram + opener-shape similarity across each voice's lines (e.g. share opening with the hook word + em-dash; "darling"/<code>[giggles]</code> rate; reused scene/venue).</td><td>Today: Jessica opener-template 23/23, "darling" 18/23. Target: &lt;25% any single shape.</td></tr>
+    <tr><td><b>Voice-balance curve</b></td><td>Ricky vs Jessica share across early/mid/late thirds.</td><td>Today: flat 50/50. Target: a visible Ricky→Jessica gradient.</td></tr>
+    <tr><td><b>Milestone coverage</b></td><td>For each km: did a milestone fire? who owned it? was it delivered?</td><td>Today: 0/12 delivered. Target: every km covered, owner matches the curve.</td></tr>
+    <tr><td><b>Length distribution</b></td><td>quip / medium / indulgent counts vs intent.</td><td>Sanity-check the back-loaded length curve.</td></tr>
+    <tr><td><b>Arc check</b></td><td>Sentiment / admiration markers early vs late (for the planned insult→reward arc).</td><td>Today: cynical throughout. Future: recognition should rise late.</td></tr>
+    <tr><td><b>Generation failures</b></td><td><code>script.swapRetry</code> / schema-validation 502s / empty pools.</td><td>Today: script gen 502'd ×3 → no km pool. Any failure = red.</td></tr>
+  </tbody>
+</table>
+
+<h3>HTML report</h3>
+<p>A self-contained page (same house style as this doc): the verdict banner up top (green/amber/red per metric), the balance + length curves as inline SVG, then the full transcript as a two-column timeline (Ricky left, Jessica right) with km markers and length-mode chips — so the choreography is visible at a glance and the repetition is impossible to miss.</p>
+
+<h2><span class="n">7</span>Invocation</h2>
+<div class="two">
+  <div class="card">
+    <h4>Headless (CI / batch)</h4>
+    <p>Launch on the simulator with <code>SIMCTL_CHILD_AARC_RUN_SIM=10k</code> (+ optional <code>_SEED</code>, <code>_PACE</code>, <code>_MOCK_LLM</code>). The harness runs the preview at launch, writes <code>Documents/run-sim-&lt;plan&gt;.{json,html}</code>, exits. Pull with <code>simctl get_app_container … data</code> — exactly the <code>ShareCardPreviewHarness</code> flow.</p>
+  </div>
+  <div class="card">
+    <h4>In-app (wire to the app)</h4>
+    <p>A "Preview Run" control in the Control Room dev panel: pick plan + pace, tap, watch the transcript stream in, open the report. Same <code>SimRunDriver</code> — this is the "wire it to the actual app so we don't go back and forth" the founder asked for.</p>
+  </div>
+</div>
+
+<h2><span class="n">8</span>Traceability — would it have caught today's run?</h2>
+<table>
+  <thead><tr><th>Issue from <code>24285006</code></th><th>Harness A?</th><th>How</th></tr></thead>
+  <tbody>
+    <tr><td>Jessica 23/23 template repetition</td><td><span class="tag t-catch">CATCH</span></td><td>Structural-repetition metric flags opener template + "darling"/<code>[giggles]</code> rates.</td></tr>
+    <tr><td>Ricky "quiet stretch" shape ×5</td><td><span class="tag t-catch">CATCH</span></td><td>Same metric, per-voice.</td></tr>
+    <tr><td>Zero km milestones (script 502)</td><td><span class="tag t-catch">CATCH</span></td><td>Generation-failures + milestone-coverage metrics; real script-gen path runs.</td></tr>
+    <tr><td>No Ricky→Jessica hand-off</td><td><span class="tag t-catch">CATCH</span></td><td>Voice-balance curve shows the flat split.</td></tr>
+    <tr><td>No insult→admiration arc</td><td><span class="tag t-catch">CATCH</span></td><td>Arc-check metric (once defined).</td></tr>
+    <tr><td>Shadow run on summary page</td><td><span class="tag t-no">Harness&nbsp;B</span></td><td>UI/lifecycle — belongs to the iOS e2e harness.</td></tr>
+    <tr><td>Slow watch→phone stop</td><td><span class="tag t-no">Harness&nbsp;B</span></td><td>UI latency assertion.</td></tr>
+    <tr><td>Treadmill summary chart wonky</td><td><span class="tag t-no">Harness&nbsp;B</span></td><td>View snapshot test.</td></tr>
+  </tbody>
+</table>
+<p><strong>5 of 8</strong> caught by Harness&nbsp;A (every voice issue); the remaining 3 are UI and motivate Harness&nbsp;B.</p>
+
+<h2><span class="n">9</span>Build plan</h2>
+<p><b>Track 1 — Content mode</b> (changes the working rhythm immediately):</p>
+<ol>
+  <li><b>P1 — Driver + sink skeleton.</b> <code>SimRunDriver</code> (stepped clock, synthetic metrics), <code>RunPreview</code> recorder, <code>Speaker.speak</code> tap, <code>prewarmEnabled=false</code>, env gate. Output raw JSON transcript. <em>Proves the pipeline runs headless &amp; deterministically.</em></li>
+  <li><b>P2 — Verify against reality.</b> Run the 10k preview; diff its director decisions (ownership curve, ETAs, length modes) against the logged <code>24285006</code> events to confirm sim ≡ prod. <em>The trust step.</em></li>
+  <li><b>P3 — Analyzer + HTML report.</b> Repetition score, balance curve, milestone coverage, length dist, failures → the verdict page.</li>
+</ol>
+<p><b>Track 2 — Fidelity mode</b> (models timing &amp; network variance — your call to pull forward):</p>
+<ol start="4">
+  <li><b>P4 — <code>Clock</code> seam.</b> Inject the clock protocol into <code>RunDirector</code> + <code>VoiceFeedbackQueue</code>; prod uses the system clock (no behaviour change), the sim a virtual one.</li>
+  <li><b>P5 — Latency model + calibration.</b> Build the <code>f(chars)</code> + cache-hit + hedge + network-profile model; calibrate p50/p90 from real <code>net.req</code> logs. Route the sink through the real queue on the virtual clock → played-stream + drops.</li>
+  <li><b>P6 — Monte-Carlo + variance report.</b> K-iteration runs; report guillotine / late-land / stale-drop / split-stolen rates per network profile.</li>
+</ol>
+<p><b>Polish:</b> in-app "Preview Run" control; arc metric (once the arc feature lands); <code>--mock-llm</code> free mode.</p>
+<p>P1–P3 are the minimum to flip discovery to the machine. P4–P6 are what make the sim trustworthy for <em>timing</em> bugs (drops, guillotines, late lands) — the class you flagged.</p>
+
+<h2><span class="n">10</span>Open decisions</h2>
+<table>
+  <thead><tr><th>#</th><th>Decision</th><th>Recommendation</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Timing fidelity: how do we run the real queue/director logic on virtual time without re-implementing it?</td><td><b>Inject a <code>Clock</code> seam</b> (P4) so the production code runs unchanged on a virtual clock. Re-implementing the queue in the sim was the alternative — rejected, it reintroduces the sim-vs-prod drift this whole design avoids.</td></tr>
+    <tr><td>1b</td><td>Latency: pin a fixed lead, or sample a model?</td><td><b>Both, by mode.</b> Content mode pins it (fast, deterministic); Fidelity mode samples the calibrated model + network profiles and runs Monte-Carlo, because real variance is ~2× and a single timeline misleads.</td></tr>
+    <tr><td>2</td><td>Repetition scoring: heuristic (n-gram/opener) or an LLM-judge pass?</td><td><b>Heuristic first</b> (cheap, deterministic, catches today's case). Add an optional LLM-judge for "structural sameness" later.</td></tr>
+    <tr><td>3</td><td>Default <code>dt</code> step size.</td><td><b>3 s.</b> Coarse enough to be fast, fine enough that no km/protect window is skipped.</td></tr>
+    <tr><td>4</td><td>Where the report lives / is it committed?</td><td>Write to <code>Documents/</code> at runtime; optionally copy the latest into <code>docs/run-previews/</code> for review. Not committed by default.</td></tr>
+  </tbody>
+</table>
+
+<p class="foot">Harness A — Whole-Run Feedback Simulator · Spec v1 · for approval before P1. Sibling: Harness B (iOS end-to-end UI tests). This document is the source of truth for the build; edit it as decisions land.</p>
+
+</div>
+</body>
+</html>
