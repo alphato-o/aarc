@@ -32,12 +32,14 @@ final class RemoteTTS: NSObject {
 
     /// Jessica — the second voice (seductive, explicit, conflicted British
     /// woman who reacts to Ricky). Passed explicitly on her lines.
-    /// PINNED: ElevenLabs "Jessica - British warmth & Exotic twang"
-    /// (jP5jSWhfXz3nfQENMtf4) — founder-approved British accent that holds on
-    /// eleven_v3 (keeps the [screams]/[moans] tags). Do NOT swap back to
-    /// "Blondie" (ShB6BQqbEXZxWO5511Qq, from a stale plan note) — it reads
-    /// American on v3.
-    static let jessicaVoiceId: String = "jP5jSWhfXz3nfQENMtf4"
+    /// PINNED (founder-validated): qXT8GHnNNyIOcyf6WrH9 — chosen for a STABLE
+    /// British accent that stays consistent across content AND through the
+    /// [screams]/[moans] tags on eleven_v3 (and screams convincingly). Earlier
+    /// voices were rejected for accent INSTABILITY, not taste: jP5jSWhfXz3nfQENMtf4
+    /// ("Jessica - British warmth") swung British↔American on the text itself;
+    /// ShB6BQqbEXZxWO5511Qq ("Blondie") read American on v3. The variation was
+    /// the dealbreaker. Don't swap without re-running the 3-tag accent gauntlet.
+    static let jessicaVoiceId: String = "qXT8GHnNNyIOcyf6WrH9"
 
     /// Cumulative bytes pulled from the proxy this session — diagnostic.
     private(set) var bytesFetchedThisSession: Int = 0
