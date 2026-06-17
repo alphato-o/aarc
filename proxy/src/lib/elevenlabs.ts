@@ -12,9 +12,13 @@
  *   eleven_multilingual_v2   — previous default, no tags, more stable.
  *   eleven_turbo_v2_5        — fastest, lowest quality.
  *
- * Voice settings tuned for Roast Coach: v3 handles emotion primarily
- * via inline tags, so the per-line `style` matters less; we keep a
- * moderate value and lean on the model emitting tags where it counts.
+ * Voice settings = the ElevenLabs WEBSITE DEFAULTS, on purpose. v3 handles
+ * emotion via inline tags ([screams], [moans], [laughs]); the `style`
+ * exaggeration knob is NOT for that — pushing it above the default 0 makes the
+ * voice over-perform and DRIFT OFF its native accent (it'd scream in a wandering
+ * accent instead of English-English). So style stays 0 and we lean entirely on
+ * the tags + the voice's own accent. stability 0.5 (Natural) / similarity 0.75 /
+ * speaker_boost on are the playground defaults too.
  *
  * baseUrl is configurable (ELEVENLABS_BASE_URL) so TTS can route through a
  * Concessionaire transparent-carrier gateway (https://<host>/elevenlabs/v1) instead of
@@ -45,7 +49,7 @@ export async function callElevenLabs(params: ElevenLabsParams): Promise<ArrayBuf
         voice_settings: {
             stability: params.stability ?? 0.5,
             similarity_boost: params.similarityBoost ?? 0.75,
-            style: params.style ?? 0.5,
+            style: params.style ?? 0,          // website default — 0.5 drifted the accent
             use_speaker_boost: true,
         },
     };
