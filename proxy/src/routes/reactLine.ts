@@ -137,12 +137,54 @@ export async function reactLineHandler(
         );
     }
 
+    // Anti-tic guard: the persona BANS the "<hook> — darling, …" opener and
+    // opening on "darling", but the model ignores the prose ban (measured at
+    // ~67% / ~63% in the feedback-sim). So enforce it deterministically — if
+    // the draft trips the template, fire ONE corrective rewrite. Bounded cost
+    // (only offending lines), and it forces her OFF the lazy default rather
+    // than relying on her to obey a buried rule.
+    let finalText = validated.data.text;
+    if (req.personalityId === "jessica" && tripsOpenerTic(finalText)) {
+        finalText = await rewriteOffTic(finalText, systemPrompt, userPrompt, maxTokens, env) ?? finalText;
+    }
+
     const response: ReactLineResponse & { provider: string } = {
-        text: validated.data.text,
+        text: finalText,
         model,
         provider,
     };
     return json({ ok: true, ...response });
+}
+
+/// The lazy template: a short hook phrase then an em/en/double dash early in
+/// the line, OR opening on "darling". Strip tags first so "[giggles] darling"
+/// is caught. Mirrors the feedback-sim analyzer's detector.
+function tripsOpenerTic(text: string): boolean {
+    const s = text.replace(/\[[^\]]*\]/g, "").trim();
+    if (/^darling\b/i.test(s)) return true;
+    const m = s.match(/[—–]{1,2}|\s--\s|\.\.\.|…/);
+    return !!m && (m.index ?? 99) <= 55;
+}
+
+/// One corrective rewrite that names the offence and demands a different shape.
+async function rewriteOffTic(
+    draft: string, systemPrompt: string, userPrompt: string, maxTokens: number, env: Env,
+): Promise<string | null> {
+    const correction = `${userPrompt}
+
+YOUR DRAFT WAS: "${draft}"
+That draft used the BANNED opener: a hook word/phrase then a dash, or it opened on "darling". Rewrite it COMPLETELY — same meaning is fine, but a DIFFERENT opening shape (a flat verdict, a question, a command, a number thrown back, pure filth with no preamble, or plain boredom) and do NOT open with the hook word or with "darling". Keep within the same length limit. JSON only.`;
+    try {
+        const result = await callLLM(
+            { purpose: "reply", systemPrompt, userPrompt: correction, maxTokens, cacheSystem: true },
+            env,
+        );
+        const parsed = JSON.parse(stripCodeFences(result.text));
+        const ok = ReactLineModelOutputSchema.safeParse(parsed);
+        return ok.success ? ok.data.text : null;
+    } catch {
+        return null;
+    }
 }
 
 async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthMode): Promise<string> {
