@@ -78,11 +78,19 @@ enum SimRunDriver {
         NSLog("AARC_RUN_SIM full script: \(gotFullScript ? "landed (\(ScriptPreviewStore.shared.latest?.messages.count ?? 0) msgs)" : "FAILED — opener only")")
 
         // --- step the virtual clock through the run ---
+        // Overall wall-clock budget: a single hung/stalled LLM call must NOT
+        // hang the whole preview. When the budget is hit we stop and write
+        // whatever transcript we have (a partial preview is still useful).
+        let runDeadline = Date().addingTimeInterval(15 * 60)
         let dt = 3.0
         let totalMeters = planKm * 1000
         let speed = 1000.0 / max(60, paceSecPerKm)   // m/s
         var t = 0.0, dist = 0.0
         while dist < totalMeters && t < 4 * 3600 {
+            if Date() >= runDeadline {
+                NSLog("AARC_RUN_SIM ⏱ wall-clock budget hit at \(Int(dist))m — writing partial transcript")
+                break
+            }
             t += dt
             dist += speed * dt
             let hr = min(178, 120 + (t / 60) * 0.5)   // gentle cardiac drift
