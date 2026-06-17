@@ -53,6 +53,7 @@ enum SimRunDriver {
         RunSimulator.shared.paceSecPerKm = paceSecPerKm
         RunDirector.shared.prewarmEnabled = false // no TTS prefetch network calls
         RunPreview.shared.begin()
+        RemoteTTS.previewLeakCount = 0             // leak detector baseline
 
         // Install the VIRTUAL clock so ContextualCoach / ScriptEngine /
         // RunDirector run their time-based pacing (cooldowns, sustain, quiet-
@@ -118,6 +119,10 @@ enum SimRunDriver {
         RunPreview.shared.end()
         RunSimulator.shared.headless = false
         RunDirector.shared.prewarmEnabled = true
+
+        // Leak detector verdict — MUST be 0 (sims are text-only / free).
+        let leaks = RemoteTTS.previewLeakCount
+        NSLog("AARC_RUN_SIM 💰 EL leak check: \(leaks) ElevenLabs call(s) during preview (want 0)\(leaks > 0 ? " — ⚠️ LEAK!" : " ✓")")
 
         return RunPreview.shared.transcriptJSON(plan: "\(Int(planKm))k", pace: paceSecPerKm)
     }

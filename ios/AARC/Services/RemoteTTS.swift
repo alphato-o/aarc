@@ -310,6 +310,12 @@ final class RemoteTTS: NSObject {
     /// finished (callers re-check the cache to distinguish success). Never
     /// throws; uses the one-retry fetch so a cellular blip doesn't drop it.
     private func ensureCached(text: String, voiceId: String, key: String) async {
+        // PREVIEW MODE: the feedback simulator is text-only — NEVER call
+        // ElevenLabs. This is the single chokepoint every TTS path funnels
+        // through (play + prefetch), so guarding it here plugs the leak no
+        // matter who calls it (incl. RunOrchestrator's opener / early-line
+        // prefetch that bypasses the Speaker tap). No EL = no money.
+        if RunPreview.shared.active { return }
         if await AudioCache.shared.url(forKey: key) != nil { return }
         if let existing = inFlightSynths[key] {
             await existing.value
@@ -347,6 +353,7 @@ final class RemoteTTS: NSObject {
     /// status panel reflects it.
     func warmMeasured(_ text: String, voiceId: String = RemoteTTS.voiceId) async -> (ms: Int, cached: Bool) {
         guard !text.isEmpty else { return (0, true) }
+        if RunPreview.shared.active { return (0, true) }   // preview = text-only, never bill EL
         let key = AudioCache.key(voiceId: voiceId, text: text)
         if await AudioCache.shared.url(forKey: key) != nil { return (0, true) }
         activity = .synthesizing(chars: text.count)
@@ -466,7 +473,21 @@ final class RemoteTTS: NSObject {
         }
     }
 
+    /// Leak detector: counts any ElevenLabs HTTP call that happened while
+    /// preview mode was active (should ALWAYS be 0 — sims are text-only).
+    /// SimRunDriver reads + logs this at the end of every preview.
+    static var previewLeakCount = 0
+
     private func attemptFetch(text: String, voiceId: String, baseURL: URL, tag: String) async throws -> Data {
+        // TRIPWIRE: the LAST line of defence before money is spent. If we reach
+        // here in preview mode, some path bypassed the guards — block it, count
+        // it, and scream. No silent ElevenLabs spend during a sim, ever.
+        if RunPreview.shared.active {
+            RemoteTTS.previewLeakCount += 1
+            NSLog("⚠️ TTS LEAK: ElevenLabs reached during preview mode (text-only expected). text=\(text.prefix(48))")
+            CrashReporter.captureMessage("TTS leak: ElevenLabs hit during preview mode")
+            throw RemoteTTSError.transport("preview-mode TTS leak blocked")
+        }
         let url = baseURL.appendingPathComponent("tts")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
