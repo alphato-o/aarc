@@ -88,6 +88,17 @@ def analyze_voice(vlines):
             if len(toks) == 4 and not all(x in STOP for x in toks):
                 phrase_lines[g].add(idx)
     repeated_phrases = {g: len(s) for g, s in phrase_lines.items() if len(s) >= 2}
+    # --- v3 audio-tag usage (are we getting our money's worth?) ---
+    tagcounts = [len(TAG.findall(t)) for t in texts]
+    tagged = sum(1 for c in tagcounts if c > 0)
+    total_tags = sum(tagcounts)
+    combo_lines = sum(1 for c in tagcounts if c >= 2)
+    tagkinds = Counter()
+    for t in texts:
+        for m in TAG.findall(t):
+            tagkinds[m.lower()] += 1
+    # broken closing tags ([/...]) should NEVER appear (v3 has no closing tags)
+    closing = sum(1 for t in texts for m in TAG.findall(t) if m.startswith("[/"))
     # score 0..100 (lower = better): weighted blend of the tells the founder
     # flagged. "darling" and the hook-dash opener template carry the most.
     score = min(100, round(
@@ -101,7 +112,9 @@ def analyze_voice(vlines):
                 repeated_first2=repeated_first2,
                 dup_openers=dup_openers, darling=darling, giggle=giggle,
                 god_open=god_open, sim_pairs=sim_pairs[:6], score=score,
-                openers=openers, repeated_phrases=repeated_phrases)
+                openers=openers, repeated_phrases=repeated_phrases,
+                tagged=tagged, total_tags=total_tags, combo_lines=combo_lines,
+                tagkinds=tagkinds, closing=closing)
 
 ricky = [l for l in lines if l["voice"] == "ricky"]
 jess  = [l for l in lines if l["voice"] == "jessica"]
@@ -189,7 +202,11 @@ def voice_card(name, A, color):
         <tr><td>“God/Christ…” opener</td><td>{A['god_open']}</td></tr>
         <tr><td>near-duplicate pairs (≥50% trigram)</td><td>{len(A['sim_pairs'])}</td></tr>
         <tr><td>repeated content phrases / images</td><td>{len(A['repeated_phrases'])}</td></tr>
+        <tr><td><b>v3 tags — lines with a tag</b></td><td><b>{A['tagged']}/{A['n']} ({(A['tagged']/A['n']) if A['n'] else 0:.0%})</b></td></tr>
+        <tr><td>total tags · combos (2+/line) · distinct</td><td>{A['total_tags']} · {A['combo_lines']} · {len(A['tagkinds'])}</td></tr>
+        {('<tr><td style="color:#f0a097">⚠ BROKEN closing tags [/..]</td><td style="color:#f0a097">' + str(A['closing']) + ' (must be 0)</td></tr>') if A['closing'] else ''}
       </table>
+      {('<p class="sub">Tags used:</p><ul class="rep">' + ''.join(f'<li>{esc(k)} ×{c}</li>' for k,c in A['tagkinds'].most_common(10)) + '</ul>') if A['tagkinds'] else '<p class="sub" style="color:#f0a097">No audio tags at all — flat v3 read, wasting the premium model.</p>'}
       {('<p class="sub">Reused images/phrases:</p><ul class="rep">' + ''.join(f'<li>“{esc(g)}” ×{c}</li>' for g,c in sorted(A['repeated_phrases'].items(), key=lambda x:-x[1])[:8]) + '</ul>') if A['repeated_phrases'] else ''}
       {f'<p class="sub">Reused openers:</p><ul class="rep">{dup}</ul>' if dup else ''}
       {f'<p class="sub">Most-similar pairs:</p><ul class="rep">{sims}</ul>' if sims else ''}
@@ -256,6 +273,7 @@ ul.rep{{margin:2px 0;padding-left:18px;font-size:12.5px;color:#d6c0a0}} ul.rep l
   <div class="tile"><div class="muted">Ricky repetition</div><div class="big">{RA['score'] if RA else '—'}<span class="badge {rvc}">{rv}</span></div></div>
   <div class="tile"><div class="muted">Milestone coverage</div><div class="big">{len(covered)}/{plan_km}<span class="badge {ms_v}">{'OK' if ms_v=='g' else 'GAPS' if ms_v=='a' else 'MISSING'}</span></div></div>
   <div class="tile"><div class="muted">Jessica lengths</div><div class="big" style="font-size:15px">{JL['quip']}q · {JL['medium']}m · {JL['indulgent']}i</div></div>
+  <div class="tile"><div class="muted">v3 tags — Ricky / Jessica lines tagged</div><div class="big" style="font-size:17px">{(RA['tagged']/RA['n']) if RA and RA['n'] else 0:.0%} · {(JA['tagged']/JA['n']) if JA and JA['n'] else 0:.0%}<span class="badge {('r' if (RA and RA['closing'])or(JA and JA['closing']) else 'g' if (RA and RA['tagged']/max(1,RA['n'])>=0.35) else 'a')}">{'BROKEN' if (RA and RA['closing'])or(JA and JA['closing']) else 'OK' if (RA and RA['tagged']/max(1,RA['n'])>=0.35) else 'LOW'}</span></div></div>
 </div>
 
 <h2>Voice balance over the run <span class="muted">(grey = Ricky, pink = Jessica · should tilt to Jessica late)</span></h2>
@@ -280,4 +298,6 @@ if JA and JA['repeated_phrases']:
     print("  repeated images:", "; ".join(f"\"{g}\"×{c}" for g,c in sorted(JA['repeated_phrases'].items(), key=lambda x:-x[1])[:6]))
 if RA: print(f"Ricky   repetition {RA['score']}/100  dash-opener {RA['dash_open']}/{RA['n']}  dup-openers {len(RA['dup_openers'])}  sim-pairs {len(RA['sim_pairs'])}")
 print(f"milestones {len(covered)}/{plan_km} covered; Jessica owns {sum(1 for v in km_owner.values() if v=='jessica')}/{len(km_owner)}")
+if RA: print(f"Ricky   tags: {RA['tagged']}/{RA['n']} lines tagged · {RA['total_tags']} tags · {RA['combo_lines']} combos · closing(bad)={RA['closing']}")
+if JA: print(f"Jessica tags: {JA['tagged']}/{JA['n']} lines tagged · {JA['total_tags']} tags · {JA['combo_lines']} combos · closing(bad)={JA['closing']}")
 print(f"→ {out}")
