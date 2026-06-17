@@ -122,8 +122,9 @@ PLAN.html
 .secrets
 .gstack/
 
-# Private: Jessica persona — kept local + deployed, never tracked
+# Private: Jessica persona + content deck — kept local + deployed, never tracked
 proxy/src/lib/personalities.ts
+proxy/src/lib/jessicaDeck.ts
 
 # Private founder<->agent exchange (secrets, infra notes) — never tracked
 private/

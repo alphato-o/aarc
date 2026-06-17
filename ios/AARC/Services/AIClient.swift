@@ -342,6 +342,12 @@ actor AIClient {
         /// Defaulted so the field is additive — existing call sites that
         /// don't set it keep compiling.
         var lengthMode: String? = nil
+        /// Content-deck draw: a per-RUN seed (stable across the run, varies
+        /// between runs) + a per-LINE ordinal (increments each Jessica line).
+        /// The proxy deals a fresh, non-repeating hand of content cards off
+        /// these for her to improvise from.
+        var runSeed: Int? = nil
+        var deckOrdinal: Int? = nil
     }
 
     /// Generate Jessica's reaction to a line Ricky just spoke. Same envelope

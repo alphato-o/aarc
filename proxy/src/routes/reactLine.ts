@@ -5,6 +5,7 @@ import {
     ReactLineResponse,
 } from "../schemas";
 import { reactModeFor, systemPromptFor, JessicaLengthMode } from "../lib/personalities";
+import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
@@ -242,6 +243,13 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
         for (const r of req.recentDispatched) {
             lines.push(`- ${r}`);
         }
+    }
+
+    // Deal her a fresh, non-repeating hand of content cards to improvise off
+    // (Jessica only) — the "play, don't recite" anti-repeat engine.
+    if (req.personalityId === "jessica") {
+        lines.push("");
+        lines.push(deckBlock(lengthMode as DeckMode, req.runSeed ?? 0, req.deckOrdinal ?? 0));
     }
 
     lines.push("");

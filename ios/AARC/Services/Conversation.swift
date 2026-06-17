@@ -65,6 +65,12 @@ final class Conversation {
     /// (it's appended at generation time), so the NEXT line sees it.
     private var recentJessica: [String] = []
 
+    /// Content-deck draw state. `deckRunSeed` is picked once per run (0 = unset)
+    /// so the dealt hands vary between runs; `deckOrdinal` increments per
+    /// produced line so each line gets the NEXT, non-repeating hand.
+    private var deckRunSeed: Int = 0
+    private var deckOrdinal: Int = 0
+
     // MARK: - Tunables
 
     /// BACK-LOADED cadence: seconds between generations, long early (sparse —
@@ -214,6 +220,10 @@ final class Conversation {
         let recent = antiRepeatContext()
         let notes = PersonalContextStore.shared.bullets
         let liked = LikedLinesStore.shared.vibeExemplars(personalityId: "jessica")
+        // Deal the next deck hand: pick a per-run seed once, advance the ordinal.
+        if deckRunSeed == 0 { deckRunSeed = Int.random(in: 1...1_000_000) }
+        let ordinal = deckOrdinal
+        deckOrdinal += 1
         let request = AIClient.ReactLineRequest(
             personalityId: "jessica",
             partnerLine: partner,
@@ -222,7 +232,9 @@ final class Conversation {
             recentDispatched: recent.isEmpty ? nil : recent,
             personalNotes: notes.isEmpty ? nil : notes,
             likedLineExamples: liked.isEmpty ? nil : liked,
-            lengthMode: mode.rawValue
+            lengthMode: mode.rawValue,
+            runSeed: deckRunSeed,
+            deckOrdinal: ordinal
         )
         produceTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -316,5 +328,7 @@ final class Conversation {
         lastIndulgentElapsed = nil
         recentRicky.removeAll()
         recentJessica.removeAll()
+        deckRunSeed = 0
+        deckOrdinal = 0
     }
 }
