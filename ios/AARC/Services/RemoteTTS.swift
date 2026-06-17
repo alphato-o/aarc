@@ -32,6 +32,11 @@ final class RemoteTTS: NSObject {
 
     /// Jessica — the second voice (seductive, explicit, conflicted British
     /// woman who reacts to Ricky). Passed explicitly on her lines.
+    /// PINNED: ElevenLabs "Jessica - British warmth & Exotic twang"
+    /// (jP5jSWhfXz3nfQENMtf4) — founder-approved British accent that holds on
+    /// eleven_v3 (keeps the [screams]/[moans] tags). Do NOT swap back to
+    /// "Blondie" (ShB6BQqbEXZxWO5511Qq, from a stale plan note) — it reads
+    /// American on v3.
     static let jessicaVoiceId: String = "jP5jSWhfXz3nfQENMtf4"
 
     /// Cumulative bytes pulled from the proxy this session — diagnostic.

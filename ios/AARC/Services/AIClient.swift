@@ -200,6 +200,9 @@ actor AIClient {
         /// coach fires the .stationary trigger — gives the model the
         /// "you've been still for X seconds" hook.
         var stationarySeconds: Double?
+        /// 0..1 progress (RunDirector) — drives the emotional arc (contempt
+        /// early → grudging respect late).
+        var progressFraction: Double? = nil
         /// Defaulted so pre-run call sites (opener, Playground) compile
         /// unchanged and send nothing.
         var place: PlaceInfo? = nil
@@ -320,6 +323,8 @@ actor AIClient {
         var currentPaceSecPerKm: Double?
         var planKind: String        // "distance" | "time" | "open"
         var runType: String         // "outdoor" | "treadmill"
+        /// 0..1 progress (RunDirector) — drives Jessica's arc (cold → rewardy).
+        var progressFraction: Double? = nil
         /// Real surroundings (outdoor runs) — see PlaceInfo.
         var place: PlaceInfo? = nil
         var ambient: AmbientInfo? = nil

@@ -403,6 +403,7 @@ final class ContextualCoach {
             planTimeMinutes: plan.timeMinutes,
             runType: runType.rawValue,
             stationarySeconds: stationarySeconds,
+            progressFraction: RunDirector.shared.progressFraction,
             place: PlaceContext.shared.llmInfo,
             ambient: PlaceContext.shared.ambientInfo
         )

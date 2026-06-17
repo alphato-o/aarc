@@ -4,7 +4,7 @@ import {
     DynamicLineRequestSchema,
     DynamicLineResponse,
 } from "../schemas";
-import { systemPromptFor } from "../lib/personalities";
+import { systemPromptFor, runPhaseBlock } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
@@ -101,12 +101,51 @@ export async function dynamicLineHandler(
         );
     }
 
+    // Anti-tic guard (mirror of Jessica's): Ricky's reactive lines — especially
+    // quiet_stretch — kept opening "X minutes in and [here's a thought / I've
+    // been thinking]…". The prose ban is ignored, so enforce it: if the draft
+    // trips the tic, fire ONE corrective rewrite.
+    let finalText = validated.data.text;
+    if (req.personalityId === "roast_coach" && tripsRickyTic(finalText)) {
+        finalText = await rewriteRickyOffTic(finalText, systemPrompt, userPrompt, env) ?? finalText;
+    }
+
     const response: DynamicLineResponse & { provider: string } = {
-        text: validated.data.text,
+        text: finalText,
         model,
         provider,
     };
     return json({ ok: true, ...response });
+}
+
+/// Ricky's reactive tic: announcing elapsed time ("X minutes/k in…") or a
+/// stalling opener ("here's a thought", "I've been thinking/realised", "been
+/// quiet…"). Strip tags first.
+function tripsRickyTic(text: string): boolean {
+    const s = text.replace(/\[[^\]]*\]/g, "").trim();
+    if (/^\S+\s+(minutes?|mins?|k|kilometres?|km)\s+(in|on)\b/i.test(s)) return true;
+    if (/^(so\s+)?(here'?s a thought|i'?ve been thinking|i'?ve (just )?realised|i'?ve realized|been (quiet|silent|dead quiet)|right(,| then)|ok(ay)?,? so)\b/i.test(s)) return true;
+    return false;
+}
+
+async function rewriteRickyOffTic(
+    draft: string, systemPrompt: string, userPrompt: string, env: Env,
+): Promise<string | null> {
+    const correction = `${userPrompt}
+
+YOUR DRAFT WAS: "${draft}"
+That opened with a BANNED tic — either announcing how long it's been ("X minutes in…") or a stalling frame ("here's a thought", "I've been thinking", "been quiet"…). Rewrite it COMPLETELY: open STRAIGHT on the image/joke, a genuinely different shape, and never reference the elapsed time. JSON only.`;
+    try {
+        const result = await callLLM(
+            { purpose: "reply", systemPrompt, userPrompt: correction, maxTokens: 400, cacheSystem: true },
+            env,
+        );
+        const parsed = JSON.parse(stripCodeFences(result.text));
+        const ok = DynamicLineModelOutputSchema.safeParse(parsed);
+        return ok.success ? ok.data.text : null;
+    } catch {
+        return null;
+    }
 }
 
 async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
@@ -148,6 +187,17 @@ async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
             break;
     }
     lines.push(`- run type: ${c.runType}`);
+    // Emotional arc: pure contempt early → grudging respect late.
+    {
+        let progress = c.progressFraction ?? 0;
+        if (progress <= 0) {
+            if (c.planKind === "distance" && c.planDistanceKm) progress = (c.distanceMeters / 1000) / c.planDistanceKm;
+            else if (c.planKind === "time" && c.planTimeMinutes) progress = c.elapsedSeconds / (c.planTimeMinutes * 60);
+            else progress = c.elapsedSeconds / 2400;
+        }
+        lines.push("");
+        lines.push(runPhaseBlock(Math.min(0.999, Math.max(0, progress)), "ricky"));
+    }
     if (c.stationarySeconds !== undefined && c.stationarySeconds > 0) {
         lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (they were running and have now STOPPED — quote the seconds, never a distance)`);
     }

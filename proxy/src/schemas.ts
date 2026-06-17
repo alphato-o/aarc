@@ -206,6 +206,10 @@ export const DynamicLineRequestSchema = z.object({
         planDistanceKm: z.number().positive().optional(),
         planTimeMinutes: z.number().positive().optional(),
         runType: z.enum(["outdoor", "treadmill"]),
+        /// 0..1 how far through the run — drives the emotional arc (contempt
+        /// early → grudging respect late). Server falls back to deriving it
+        /// from the plan when absent.
+        progressFraction: z.number().optional(),
         /// Set by ContextualCoach when firing the `stationary` trigger —
         /// how long the runner has been still. Lets the prompt anchor on
         /// "you've been stood there for 40 seconds".
@@ -312,6 +316,9 @@ export const ReactLineRequestSchema = z.object({
         currentPaceSecPerKm: z.number().positive().optional(),
         planKind: z.enum(["distance", "time", "open"]),
         runType: z.enum(["outdoor", "treadmill"]),
+        /// 0..1 how far through the run — drives Jessica's arc (cold early →
+        /// "rewardy" late). Sent by the client (RunDirector.progressFraction).
+        progressFraction: z.number().optional(),
         place: PlaceSchema.optional(),
         ambient: AmbientSchema.optional(),
     }),

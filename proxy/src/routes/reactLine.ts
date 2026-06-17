@@ -4,7 +4,7 @@ import {
     ReactLineRequestSchema,
     ReactLineResponse,
 } from "../schemas";
-import { reactModeFor, systemPromptFor, JessicaLengthMode } from "../lib/personalities";
+import { reactModeFor, systemPromptFor, runPhaseBlock, JessicaLengthMode } from "../lib/personalities";
 import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
@@ -218,6 +218,12 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
     }
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
+    // Emotional arc: cold early → "rewardy" late.
+    {
+        const p = c.progressFraction ?? Math.min(0.999, c.elapsedSeconds / 2400);
+        lines.push("");
+        lines.push(runPhaseBlock(Math.min(0.999, Math.max(0, p)), "jessica"));
+    }
     pushPlaceBlock(lines, c.place);
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
 

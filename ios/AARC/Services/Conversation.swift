@@ -203,6 +203,7 @@ final class Conversation {
             currentPaceSecPerKm: metrics.currentPaceSecPerKm,
             planKind: plan.kind.rawValue,
             runType: runType.rawValue,
+            progressFraction: RunDirector.shared.progressFraction,
             place: PlaceContext.shared.llmInfo,
             ambient: PlaceContext.shared.ambientInfo
         )
