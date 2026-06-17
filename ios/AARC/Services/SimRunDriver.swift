@@ -23,16 +23,20 @@ enum SimRunDriver {
         let km = parsePlanKm(planArg)
         let pace = 340.0   // 5:40/km — representative
         NSLog("AARC_RUN_SIM ▶ starting headless content-mode preview: \(km)k @ \(pace)s/km")
-        let json = await run(planKm: km, paceSecPerKm: pace)
-        guard let json else { NSLog("AARC_RUN_SIM ✗ no transcript produced"); return }
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let url = dir.appendingPathComponent("run-sim-\(Int(km))k.json")
-        try? json.write(to: url)
-        NSLog("AARC_RUN_SIM ✓ wrote \(RunPreview.shared.lines.count) lines to \(url.path)")
+        await run(planKm: km, paceSecPerKm: pace)
     }
 
-    /// Run a headless content-mode preview and return the transcript JSON.
-    static func run(planKm: Double, paceSecPerKm: Double = 340, runType: RunType = .treadmill) async -> Data? {
+    /// Transcript output path for a plan.
+    private static func outURL(km: Double) -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("run-sim-\(Int(km))k.json")
+    }
+
+    /// Run a headless content-mode preview. Writes the transcript INCREMENTALLY
+    /// (every new line) + a guaranteed final write on ANY exit — so a slow,
+    /// stuck, or aborted run still yields a readable report. Robustness is the
+    /// point: this harness must always finish with something on disk.
+    static func run(planKm: Double, paceSecPerKm: Double = 340, runType: RunType = .treadmill) async {
         // Save persisted settings the harness mutates, so a preview launch can
         // never leave the app stuck in simulate mode / on the wrong plan.
         let prevMode = RunOrchestrator.shared.testMode
@@ -63,6 +67,20 @@ enum SimRunDriver {
         AppClock.override = { clockBase.addingTimeInterval(RunPreview.shared.virtualElapsed) }
         defer { AppClock.override = nil }
 
+        // Write the transcript to disk; called incrementally + guaranteed once
+        // on ANY exit so a slow/stuck/aborted run still leaves a readable report.
+        let url = outURL(km: planKm)
+        func flush() {
+            if let d = RunPreview.shared.transcriptJSON(plan: "\(Int(planKm))k", pace: paceSecPerKm) {
+                try? d.write(to: url)
+            }
+        }
+        defer {
+            flush()
+            let leaks = RemoteTTS.previewLeakCount
+            NSLog("AARC_RUN_SIM ✓ \(RunPreview.shared.lines.count) lines → \(url.lastPathComponent) · EL leak \(leaks)\(leaks > 0 ? " ⚠️ LEAK" : " ✓")")
+        }
+
         // Real setup: opener gen + full-script gen scheduled + ingestStarted
         // (engines started) via RunSimulator.start (headless ⇒ no Timer).
         await RunOrchestrator.shared.startPhoneOnly(runType: runType)
@@ -82,14 +100,14 @@ enum SimRunDriver {
         // Overall wall-clock budget: a single hung/stalled LLM call must NOT
         // hang the whole preview. When the budget is hit we stop and write
         // whatever transcript we have (a partial preview is still useful).
-        let runDeadline = Date().addingTimeInterval(15 * 60)
+        let runDeadline = Date().addingTimeInterval(12 * 60)   // hard wall-clock cap
         let dt = 3.0
         let totalMeters = planKm * 1000
         let speed = 1000.0 / max(60, paceSecPerKm)   // m/s
-        var t = 0.0, dist = 0.0
+        var t = 0.0, dist = 0.0, lastCount = 0
         while dist < totalMeters && t < 4 * 3600 {
             if Date() >= runDeadline {
-                NSLog("AARC_RUN_SIM ⏱ wall-clock budget hit at \(Int(dist))m — writing partial transcript")
+                NSLog("AARC_RUN_SIM ⏱ 12-min budget hit at \(Int(dist))m / \(RunPreview.shared.lines.count) lines — finishing with a partial transcript")
                 break
             }
             t += dt
@@ -109,6 +127,13 @@ enum SimRunDriver {
             )
             LiveMetricsConsumer.shared.ingest(m)
             await settle()   // let line N finish + be remembered before line N+1
+            // Incremental write + progress whenever a new line lands, so the
+            // report on disk is always current even if we're later killed.
+            if RunPreview.shared.lines.count != lastCount {
+                lastCount = RunPreview.shared.lines.count
+                flush()
+                NSLog("AARC_RUN_SIM … \(lastCount) lines · \(Int(dist/1000))k · \(Int(t/60))m virtual")
+            }
         }
 
         // --- teardown WITHOUT the full ingestEnded (no SwiftData / D1 writes) ---
@@ -119,18 +144,15 @@ enum SimRunDriver {
         RunPreview.shared.end()
         RunSimulator.shared.headless = false
         RunDirector.shared.prewarmEnabled = true
-
-        // Leak detector verdict — MUST be 0 (sims are text-only / free).
-        let leaks = RemoteTTS.previewLeakCount
-        NSLog("AARC_RUN_SIM 💰 EL leak check: \(leaks) ElevenLabs call(s) during preview (want 0)\(leaks > 0 ? " — ⚠️ LEAK!" : " ✓")")
-
-        return RunPreview.shared.transcriptJSON(plan: "\(Int(planKm))k", pace: paceSecPerKm)
+        // (final transcript write + leak verdict happen in the guaranteed defer)
     }
 
     /// Await in-flight generation so line N is recorded + folded into the
     /// anti-repeat context before line N+1 is generated (the dependency chain).
+    /// Caps at 20s so a single hung generation can't stall every later tick for
+    /// the full 30s — the run keeps moving and the budget still bounds the rest.
     private static func settle() async {
-        let deadline = Date().addingTimeInterval(30)
+        let deadline = Date().addingTimeInterval(20)
         while (Conversation.shared.isProducing || ContextualCoach.shared.isGenerating),
               Date() < deadline {
             try? await Task.sleep(for: .milliseconds(80))
