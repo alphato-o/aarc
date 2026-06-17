@@ -212,7 +212,7 @@ final class RunDirector {
     // MARK: - Speed
 
     private func updateSpeed(_ metrics: LiveMetrics) {
-        let now = Date()
+        let now = AppClock.now
         var instant: Double?
         if let pace = metrics.currentPaceSecPerKm, pace > 0 {
             instant = 1000.0 / pace

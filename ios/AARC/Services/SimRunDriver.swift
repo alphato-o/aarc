@@ -54,6 +54,14 @@ enum SimRunDriver {
         RunDirector.shared.prewarmEnabled = false // no TTS prefetch network calls
         RunPreview.shared.begin()
 
+        // Install the VIRTUAL clock so ContextualCoach / ScriptEngine /
+        // RunDirector run their time-based pacing (cooldowns, sustain, quiet-
+        // stretch) against fast-forwarded time — otherwise reactive (Ricky)
+        // lines under-fire in a fast sim. Reset on exit.
+        let clockBase = Date()
+        AppClock.override = { clockBase.addingTimeInterval(RunPreview.shared.virtualElapsed) }
+        defer { AppClock.override = nil }
+
         // Real setup: opener gen + full-script gen scheduled + ingestStarted
         // (engines started) via RunSimulator.start (headless ⇒ no Timer).
         await RunOrchestrator.shared.startPhoneOnly(runType: runType)

@@ -371,7 +371,7 @@ final class ScriptEngine {
     }
 
     private func recordDispatch(text: String) {
-        lastDispatchAt = .now
+        lastDispatchAt = AppClock.now
         lastDispatched = text
         dispatchCount += 1
         recentDispatchedLines.append(text)

@@ -172,7 +172,7 @@ final class ContextualCoach {
     func processTick(_ metrics: LiveMetrics) {
         guard isRunning else { return }
         latestMetrics = metrics
-        let now = Date()
+        let now = AppClock.now
 
         // Track distance progress for stationary detection. We don't
         // want to flag tiny GPS jitter as "moving", so require >5m
@@ -375,18 +375,18 @@ final class ContextualCoach {
 
     private func fire(trigger: AIClient.DynamicLineTrigger, metrics: LiveMetrics) {
         inFlight = true
-        lastFireByTrigger[trigger] = .now
+        lastFireByTrigger[trigger] = AppClock.now
         let plan = ScriptPreviewStore.shared.currentPlan
         let avgHR = rollingAverage(hrSamples)
         let avgPace = rollingAverage(paceSamples)
         let stationarySeconds: Double? = {
             guard trigger == .stationary, let last = lastDistanceChangeAt else { return nil }
-            return Date().timeIntervalSince(last)
+            return AppClock.now.timeIntervalSince(last)
         }()
         // Snapshot time + project the distance/elapsed forward by the
         // measured pipeline latency, so when Ricky quotes the runner's
         // progress it's accurate at the moment it's actually heard.
-        let decisionAt = Date()
+        let decisionAt = AppClock.now
         let projected = RunDirector.shared.projected(
             distance: metrics.distanceMeters,
             elapsed: metrics.elapsed
@@ -453,7 +453,7 @@ final class ContextualCoach {
                     metrics: metrics
                 )
                 self.lastFiredTrigger = trigger.rawValue
-                self.lastFiredAt = .now
+                self.lastFiredAt = AppClock.now
                 self.lastError = nil
             } catch {
                 if Task.isCancelled { return }
@@ -461,7 +461,7 @@ final class ContextualCoach {
                 self.log.error("ContextualCoach error: \(error.localizedDescription, privacy: .public)")
                 // Back off so a transient failure doesn't lock the
                 // trigger for its full cooldown.
-                self.lastFireByTrigger[trigger] = .now.addingTimeInterval(-((self.cooldownByTrigger[trigger] ?? 240) - 30))
+                self.lastFireByTrigger[trigger] = AppClock.now.addingTimeInterval(-((self.cooldownByTrigger[trigger] ?? 240) - 30))
             }
         }
     }
@@ -492,7 +492,7 @@ final class ContextualCoach {
                 // Skip if we'd be repeating the same line of the same song.
                 let key = Self.trackKey(track: track)
                 if self.lastMusicTrackKey == key, self.lastMusicLyric == selection.line {
-                    self.lastMusicRiffAt = .now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
+                    self.lastMusicRiffAt = AppClock.now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
                     self.log.info("ContextualCoach music_riff: same lyric on same song, skipping")
                     return
                 }
@@ -504,13 +504,13 @@ final class ContextualCoach {
                 // Track known but no English/Chinese lyric line we can
                 // ride. Skip — try again sooner in case the next song
                 // has lyrics.
-                self.lastMusicRiffAt = .now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
+                self.lastMusicRiffAt = AppClock.now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
                 self.log.info("ContextualCoach music_riff: no usable lyric, short backoff")
 
             case .unknownAudio, .silent:
                 // No Spotify metadata or nothing playing. Per product spec
                 // we don't fire riffs without a real lyric.
-                self.lastMusicRiffAt = .now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
+                self.lastMusicRiffAt = AppClock.now.addingTimeInterval(-(self.musicRiffCooldown - self.musicRiffMissBackoff))
             }
         }
     }
@@ -521,7 +521,7 @@ final class ContextualCoach {
         metrics: LiveMetrics
     ) async {
         let plan = ScriptPreviewStore.shared.currentPlan
-        let decisionAt = Date()
+        let decisionAt = AppClock.now
         let projected = RunDirector.shared.projected(
             distance: metrics.distanceMeters,
             elapsed: metrics.elapsed
@@ -582,12 +582,12 @@ final class ContextualCoach {
                 metrics: metrics
             )
             lastFiredTrigger = "music_riff"
-            lastFiredAt = .now
+            lastFiredAt = AppClock.now
             lastError = nil
         } catch {
             lastError = error.localizedDescription
             log.error("ContextualCoach music_riff error: \(error.localizedDescription, privacy: .public)")
-            lastMusicRiffAt = .now.addingTimeInterval(-(musicRiffCooldown - 60))
+            lastMusicRiffAt = AppClock.now.addingTimeInterval(-(musicRiffCooldown - 60))
         }
     }
 

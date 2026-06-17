@@ -72,19 +72,36 @@ def analyze_voice(vlines):
             s = jaccard(tg[i], tg[j])
             if s >= 0.5: sim_pairs.append((s, i, j))
     sim_pairs.sort(reverse=True)
+    # repeated CONTENT phrases (same image reused across lines) — e.g.
+    # "mouth pulling at my nipples". 4-grams appearing in >=2 distinct lines,
+    # excluding all-stopword runs.
+    STOP = set("the a an and to of in on at it my your you i me he his her she "
+               "that this with for is are was be so but as your you're i'm".split())
+    def ngrams(t, k):
+        w = [re.sub(r"[^a-z0-9]", "", x) for x in strip_tags(t).lower().split()]
+        w = [x for x in w if x]
+        return set(" ".join(w[i:i+k]) for i in range(max(0, len(w)-k+1)))
+    phrase_lines = defaultdict(set)
+    for idx, t in enumerate(texts):
+        for g in ngrams(t, 4):
+            toks = g.split()
+            if len(toks) == 4 and not all(x in STOP for x in toks):
+                phrase_lines[g].add(idx)
+    repeated_phrases = {g: len(s) for g, s in phrase_lines.items() if len(s) >= 2}
     # score 0..100 (lower = better): weighted blend of the tells the founder
     # flagged. "darling" and the hook-dash opener template carry the most.
     score = min(100, round(
-        40 * (dash_open / n) +
-        30 * (darling / n) +
-        20 * (repeated_first2 / n) +
-        15 * (giggle / n) +
-        20 * (len(sim_pairs) / max(1, n))))
+        35 * (dash_open / n) +
+        25 * (darling / n) +
+        15 * (repeated_first2 / n) +
+        12 * (giggle / n) +
+        18 * (len(sim_pairs) / max(1, n)) +
+        30 * (len(repeated_phrases) / max(1, n))))   # repeated content/images
     return dict(n=n, dash_open=dash_open, template_darling=template_darling,
                 repeated_first2=repeated_first2,
                 dup_openers=dup_openers, darling=darling, giggle=giggle,
                 god_open=god_open, sim_pairs=sim_pairs[:6], score=score,
-                openers=openers)
+                openers=openers, repeated_phrases=repeated_phrases)
 
 ricky = [l for l in lines if l["voice"] == "ricky"]
 jess  = [l for l in lines if l["voice"] == "jessica"]
@@ -171,7 +188,9 @@ def voice_card(name, A, color):
         <tr><td>[giggles]/[laughs]</td><td>{A['giggle']}/{A['n']}</td></tr>
         <tr><td>“God/Christ…” opener</td><td>{A['god_open']}</td></tr>
         <tr><td>near-duplicate pairs (≥50% trigram)</td><td>{len(A['sim_pairs'])}</td></tr>
+        <tr><td>repeated content phrases / images</td><td>{len(A['repeated_phrases'])}</td></tr>
       </table>
+      {('<p class="sub">Reused images/phrases:</p><ul class="rep">' + ''.join(f'<li>“{esc(g)}” ×{c}</li>' for g,c in sorted(A['repeated_phrases'].items(), key=lambda x:-x[1])[:8]) + '</ul>') if A['repeated_phrases'] else ''}
       {f'<p class="sub">Reused openers:</p><ul class="rep">{dup}</ul>' if dup else ''}
       {f'<p class="sub">Most-similar pairs:</p><ul class="rep">{sims}</ul>' if sims else ''}
     </div>"""
@@ -256,7 +275,9 @@ ul.rep{{margin:2px 0;padding-left:18px;font-size:12.5px;color:#d6c0a0}} ul.rep l
 open(out, "w").write(HTML)
 # console summary
 print(f"plan={plan}  lines={len(lines)} (R {len(ricky)} / J {len(jess)})")
-if JA: print(f"Jessica repetition {JA['score']}/100  dash-opener {JA['dash_open']}/{JA['n']}  darling {JA['darling']}  dup-openers {len(JA['dup_openers'])}  sim-pairs {len(JA['sim_pairs'])}")
+if JA: print(f"Jessica repetition {JA['score']}/100  dash-opener {JA['dash_open']}/{JA['n']}  darling {JA['darling']}  repeated-phrases {len(JA['repeated_phrases'])}  sim-pairs {len(JA['sim_pairs'])}")
+if JA and JA['repeated_phrases']:
+    print("  repeated images:", "; ".join(f"\"{g}\"×{c}" for g,c in sorted(JA['repeated_phrases'].items(), key=lambda x:-x[1])[:6]))
 if RA: print(f"Ricky   repetition {RA['score']}/100  dash-opener {RA['dash_open']}/{RA['n']}  dup-openers {len(RA['dup_openers'])}  sim-pairs {len(RA['sim_pairs'])}")
 print(f"milestones {len(covered)}/{plan_km} covered; Jessica owns {sum(1 for v in km_owner.values() if v=='jessica')}/{len(km_owner)}")
 print(f"→ {out}")
