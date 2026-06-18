@@ -21,7 +21,7 @@ struct WatchSlideToStart: View {
                 Capsule().fill(tint.opacity(0.22))
                 Text(label)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55 + 0.45 * (1 - dragX / maxX)))
+                    .foregroundStyle(.white.opacity(0.55 + 0.45 * (1 - Double(dragX) / Double(maxX))))
                     .frame(maxWidth: .infinity)
                     .padding(.leading, knob * 0.4)
 
