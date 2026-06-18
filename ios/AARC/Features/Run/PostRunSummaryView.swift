@@ -158,33 +158,8 @@ struct PostRunSummaryView: View {
     // MARK: chart
 
     private func chartCard(_ s: RunSummaryStore.Summary) -> some View {
-        // Normalize EACH series to its own 0…1 range (like the History chart) so
-        // speed (~10 km/h) isn't crushed flat by HR (~150 bpm) sharing one axis.
-        let speedR = SeriesNormalize.range(s.speedSeries)
-        let hrR = SeriesNormalize.range(s.hrSeries)
-        let speed = s.speedSeries.enumerated().map { ($0.offset, SeriesNormalize.unit($0.element, in: speedR)) }
-        let hr = s.hrSeries.enumerated().map { ($0.offset, SeriesNormalize.unit($0.element, in: hrR)) }
-        return card("PACE & HEART RATE") {
-            Chart {
-                ForEach(speed, id: \.0) { i, v in
-                    AreaMark(x: .value("i", i), y: .value("speed", v))
-                        .foregroundStyle(.linearGradient(
-                            colors: [.orange.opacity(0.35), .orange.opacity(0.02)],
-                            startPoint: .top, endPoint: .bottom))
-                }
-                ForEach(speed, id: \.0) { i, v in
-                    LineMark(x: .value("i", i), y: .value("speed", v), series: .value("s", "speed"))
-                        .foregroundStyle(.orange)
-                }
-                ForEach(hr, id: \.0) { i, v in
-                    LineMark(x: .value("i", i), y: .value("hr", v), series: .value("s", "hr"))
-                        .foregroundStyle(.red.opacity(0.8))
-                }
-            }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .chartYScale(domain: 0...1)
-            .frame(height: 150)
+        card("PACE & HEART RATE") {
+            SummaryTelemetryChart(speedSeries: s.speedSeries, hrSeries: s.hrSeries)
         }
     }
 
