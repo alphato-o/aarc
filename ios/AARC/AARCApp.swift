@@ -46,6 +46,14 @@ struct AARCApp: App {
                         await SimRunDriver.runAndWrite(planArg: plan)
                         return
                     }
+                    // UI-TEST mode: skip the system permission prompts + heavy
+                    // launch side-effects (HealthKit dialog blocks automation,
+                    // uploads/backfill add noise). The app still renders fully
+                    // so journeys + screenshots work deterministically.
+                    if ProcessInfo.processInfo.environment["AARC_UITEST"] == "1" {
+                        PhoneSession.shared.activate()
+                        return
+                    }
                     PhoneSession.shared.activate()
                     // Pre-warm the audio session so the first companion
                     // utterance doesn't pay activation latency. Initialiser

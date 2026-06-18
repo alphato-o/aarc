@@ -20,7 +20,7 @@ settings:
     DEVELOPMENT_TEAM: GK7889VKDF
     ENABLE_HARDENED_RUNTIME: NO
     MARKETING_VERSION: "0.2.0"
-    CURRENT_PROJECT_VERSION: "152"
+    CURRENT_PROJECT_VERSION: "153"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 
@@ -146,6 +146,18 @@ targets:
     dependencies:
       - target: AARC
 
+  AARCUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: AARCUITests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: club.aarun.AARC.uitests
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: AARC
+
 schemes:
   AARC:
     build:
@@ -158,6 +170,7 @@ schemes:
       config: Debug
       targets:
         - AARCTests
+        - AARCUITests
     profile:
       config: Release
     analyze:
