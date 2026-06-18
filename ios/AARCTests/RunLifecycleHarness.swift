@@ -77,4 +77,32 @@ struct RunLifecycleHarness {
         #expect(LiveMetricsConsumer.shared.isRunActive == true)
         #expect(RunOrchestrator.shared.canStartNewRun == false)
     }
+
+    /// INSTANT STOP (the >3s freeze fix): `endNow()` must flip `isRunActive`
+    /// false SYNCHRONOUSLY — the UI leaves the run screen immediately, the
+    /// HealthKit/watch teardown happens async behind it. `endNow` is a sync
+    /// func, so asserting right after the call proves the flip is synchronous.
+    /// We leave `currentRunId` nil so `capture()` early-returns and fires NO
+    /// closing-roast network call (the synchronous state flip is independent of
+    /// the run id).
+    @Test("endNow flips isRunActive false synchronously (instant stop)")
+    func endNowIsSynchronous() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        c.latest = runningMetrics()
+        c.currentRunId = nil                // capture() early-returns → no roast/network
+        #expect(c.isRunActive == true)
+
+        c.endNow()                          // synchronous
+
+        #expect(c.isRunActive == false)     // already false by the next line = instant
+    }
+
+    @Test("endNow is a safe no-op when nothing is running")
+    func endNowNoopWhenIdle() {
+        resetToIdle()
+        #expect(LiveMetricsConsumer.shared.isRunActive == false)
+        LiveMetricsConsumer.shared.endNow()
+        #expect(LiveMetricsConsumer.shared.isRunActive == false)
+    }
 }
