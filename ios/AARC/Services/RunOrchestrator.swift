@@ -469,6 +469,10 @@ final class RunOrchestrator {
         runType: RunType,
         personalityId: String
     ) async throws -> GeneratedScript {
+        // UI-test journeys: canned opener, no network (no LLM, no TTS prefetch).
+        if AppEnv.uiTest {
+            return makeStubScript(openerText: "Test run. Let's go.")
+        }
         let openerText = try await resolveOpener(
             plan: plan,
             runType: runType,
@@ -544,6 +548,7 @@ final class RunOrchestrator {
         runType: RunType,
         personalityId: String
     ) {
+        if AppEnv.uiTest { return }   // no background script generation in UI tests
         fullScriptSwapTask?.cancel()
 
         fullScriptSwapTask = Task { @MainActor [weak self] in

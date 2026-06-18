@@ -461,8 +461,21 @@ struct RunHomeView: View {
                 SlideToStart(label: "Treadmill", icon: "figure.run.treadmill", tint: .green) {
                     Task { await startTapped(.treadmill) }
                 }
+                .accessibilityIdentifier("startTreadmill")
                 SlideToStart(label: "Outdoor", icon: "figure.run", tint: .accentColor) {
                     Task { await startTapped(.outdoor) }
+                }
+                .accessibilityIdentifier("startOutdoor")
+
+                // UI-TEST ONLY: plain buttons that invoke the SAME start path,
+                // so the XCUITest journey can start a run deterministically
+                // (synthetic drags don't reliably drive the custom slide
+                // gesture). Never present in a production build.
+                if AppEnv.uiTest {
+                    Button("uitest start treadmill") { Task { await startTapped(.treadmill) } }
+                        .accessibilityIdentifier("uitestStartTreadmill")
+                    Button("uitest start outdoor") { Task { await startTapped(.outdoor) } }
+                        .accessibilityIdentifier("uitestStartOutdoor")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

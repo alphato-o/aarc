@@ -410,6 +410,7 @@ struct ActiveRunView: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("endRun")
     }
 
     private var trackProgress: Double {

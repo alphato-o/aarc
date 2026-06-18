@@ -323,6 +323,7 @@ final class RemoteTTS: NSObject {
         // matter who calls it (incl. RunOrchestrator's opener / early-line
         // prefetch that bypasses the Speaker tap). No EL = no money.
         if RunPreview.shared.active { return }
+        if AppEnv.uiTest { return }   // UI-test journeys are muted (no EL cost)
         if await AudioCache.shared.url(forKey: key) != nil { return }
         if let existing = inFlightSynths[key] {
             await existing.value

@@ -50,8 +50,15 @@ struct AARCApp: App {
                     // launch side-effects (HealthKit dialog blocks automation,
                     // uploads/backfill add noise). The app still renders fully
                     // so journeys + screenshots work deterministically.
-                    if ProcessInfo.processInfo.environment["AARC_UITEST"] == "1" {
+                    if AppEnv.uiTest {
                         PhoneSession.shared.activate()
+                        if AppEnv.uiTestSimulate {
+                            // Tapping a Start control drives a synthetic run,
+                            // sped up so a few real seconds cover enough distance
+                            // for the live-run + summary screens to populate.
+                            RunOrchestrator.shared.testMode = .simulate
+                            RunSimulator.shared.speedMultiplier = 25
+                        }
                         return
                     }
                     PhoneSession.shared.activate()

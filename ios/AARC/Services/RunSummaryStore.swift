@@ -225,6 +225,8 @@ final class RunSummaryStore {
     /// has synced to the cloud — but never longer than 60s, so a stuck
     /// upstream or upload can't trap the runner on the spinner.
     private func awaitReadiness(runId: UUID) async {
+        // UI-test: reveal immediately (skip the cloud-sync gate + audio playback).
+        if AppEnv.uiTest { phase = .ready; return }
         let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         while ContinuousClock.now < deadline {
             // roastReady is set by generateFinalRoast ONLY after the audio is
@@ -272,6 +274,14 @@ final class RunSummaryStore {
 
     private func generateFinalRoast() async {
         guard let s = summary else { return }
+        // UI-test: canned verdict, no network, no audio — so the summary
+        // reveals instantly and deterministically for the journey screenshot.
+        if AppEnv.uiTest {
+            finalRoast = "Test verdict: you ran, the chart works, well done."
+            finalRoastWho = "ricky"
+            roastReady = true
+            return
+        }
         // Coin-flip the closer between the two voices.
         let useJessica = Bool.random()
         let who = useJessica ? "jessica" : "ricky"
