@@ -169,3 +169,29 @@ Domain: **`aarun.club`** (registered, DNS to be moved to Cloudflare in Phase 0).
 - Universal Links need `app.aarun.club/.well-known/apple-app-site-association` published before any link-based feature ships (Phase 3 race-share, etc.).
 - Privacy policy (required for App Store) lives at `aarun.club/privacy`. Stand up a one-pager before App Store submission in Phase 4.
 - Bundle ID `club.aarun.AARC` is consistent with the domain.
+
+---
+
+## D20 — Offline feedback simulator for content QA — **Accepted**
+
+Real gym runs are an expensive, slow loop for tuning the AI coaching. Built a headless **feedback simulator** that fast-forwards a whole run through the real generation pipeline (text-only) + an analyzer that scores the output. A run at the gym is now acceptance, not discovery. A virtual-clock seam makes the time-based reactive coach fire under fast-forward; production is untouched. See [architecture.md → Testing & harnesses](architecture.md#testing--harnesses).
+
+## D21 — iOS test strategy: invariants + snapshots + journeys, not XCUITest-only — **Accepted**
+
+The three run-experience bugs that bit (a phantom run starting on the summary page, a multi-second stop freeze, a crushed summary chart) decompose into 2 lifecycle-invariants + 1 data/render bug. Chosen layering: **fast Swift-Testing invariant tests** (drive the real singletons, assert) for logic/data; **`ImageRenderer` snapshots** for visual correctness; **XCUITest journeys** for navigation/UX + in-context confirmation. XCUITest alone is too flaky/slow to be the only layer, and custom SwiftUI gestures (slide-to-start) can't be reliably driven by synthetic drags — a UI-test-only control on the same code path is used instead.
+
+## D22 — Voice variety via a content "deck", not prompt bans — **Accepted**
+
+Prompt rules that *ban* repetition were ignored by the model. Replaced with a large, founder-seeded **content deck** organized by combinatorial dimensions; the server deals a fresh, non-repeating "hand" per line (seeded by run + line ordinal) and the prompt says *play these, don't recite*. Encouraging beats banning. A deterministic guard still strips a couple of measurable opener tics. The deck + persona prompts are gitignored (deploy-only); the repo ships the dealing machinery. Measured via the feedback-sim repetition score.
+
+## D23 — TTS cost guardrails: R2 cache + leak tripwire — **Accepted**
+
+ElevenLabs bills per generation. Synthesized audio is cached server-side in R2 keyed by sha256(voice+text+params) so repeats never re-bill, and the standalone Node gateway proxies to the same cache. A runtime **tripwire** blocks and counts any ElevenLabs HTTP call made while a preview / UI-test is active, so headless QA is structurally incapable of spending. A double-charge bug (gateway never hit the cache; long lines re-fetched on a fixed hedge) is fixed.
+
+## D24 — Voice selection for accent stability on eleven_v3 — **Accepted**
+
+`eleven_v3` re-colors a voice's accent depending on the text and especially on loud audio tags (`[screams]`), so a "British"-labelled voice could drift American mid-run. The dealbreaker is *variation*, not which accent. Selection rule: vet a candidate with a 3-sample gauntlet (varied content + a loud tag each) and pick one that holds its accent through the tags. Also: send the ElevenLabs **website-default `style: 0`** (not an exaggerated value, which worsens drift). Tag technique: audio tags are an open palette of *sounds*, combos are stronger than single tags (with a word between them), and a scene that obeys real-world physics renders more realistically.
+
+## D25 — Emotional arc across a run — **Accepted**
+
+Both voices shift over the run by progress fraction: pure contempt early → grudging, earned respect late (the "you didn't quit, and that counts" beat unlocks in the back half). Injected as a phase directive into the reactive prompts; gated on `RunDirector.progressFraction`. Tracked by the feedback-sim's voice-balance/late-line view.

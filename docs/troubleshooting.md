@@ -72,3 +72,14 @@ log stream --predicate 'subsystem == "club.aarun.AARC" AND category == "WidgetSn
 ```
 
 A line saying "container URL is nil" means the entitlement hasn't been provisioned. See the previous widget commit message for the steps.
+
+## "It builds on one Mac but fails on another"
+
+Code can author + sim-test on one machine and do the device build on another (an always-on box for headless work; a laptop for the cabled phone/watch install). Two things to know:
+
+- **Xcode versions differ in strictness.** A newer Xcode can flag a latent ambiguity an older one tolerated (e.g. a `CGFloat`/`Double` `.opacity(...)` expression: *"ambiguous use of operator '-'"*). Fix with an explicit conversion — it's correct on every toolchain.
+- **`.xcodeproj` is generated, not committed.** After any `git pull` that added/removed source files, run `xcodegen generate` on the build machine *before* opening Xcode, or you'll get stale "cannot find in scope" errors. (Note `xcodegen` may live at `/opt/homebrew/bin` and not be on a non-login SSH shell's `PATH`.)
+
+## "Headless tests / the feedback sim must never cost money"
+
+They don't, by construction: `RemoteTTS.ensureCached`/`warmMeasured` no-op when a preview (`RunPreview.active`) or UI-test (`AppEnv.uiTest`) is running, and a tripwire in `RemoteTTS.attemptFetch` blocks + counts any ElevenLabs call that slips through. The feedback sim logs `EL leak check: N — want 0` at the end of every run; the external check is a `GET /v1/history` snapshot before/after (delta must be 0). If the count is ever non-zero, a code path bypassed the guards — find it via the logged tripwire.

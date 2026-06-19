@@ -17,8 +17,9 @@ Status: **working product in daily training use.** Marketing site + waitlist at 
 - **Full run replay** — every run's metrics, events and spoken audio are archived (D1 + R2) and replayable end-to-end in a web dashboard: speed/HR chart, clickable voice timeline, and a debug mode with the event log and network waterfall.
 - **Share cards** — turn a run into a social image (quote-centred, four layouts: quote / km-splits / route / elevation) or a short video where the line's actual audio plays back with a karaoke-style word highlight. All rendered client-side (Canvas + MediaRecorder, MP4 on Chromium/Safari).
 - **Test & recovery infrastructure** — a desk simulator (synthetic metrics, operator controls: pace, HR spikes, jumps) and a flagged "real run" test mode, neither of which writes to Apple Health; recently-deleted runs with 30-day retention, cloud-synced soft delete, and an importer that recovers orphaned watch workouts from Apple Health.
+- **Offline QA harnesses** — the whole run experience is verifiable headlessly, so a real gym run is acceptance, not discovery. A **feedback simulator** fast-forwards an entire run through the *real* generation pipeline (text-only, no TTS, no spend) and an analyzer scores the coaching for repetition / voice balance / milestone coverage / audio-tag usage; **UI invariant + journey tests** drive the real app on the simulator and screenshot each beat. See [Testing & content QA](#testing--content-qa).
 
-The coach's persona prompts live in an untracked private module — the repo ships the machinery, not the personality.
+The coach's persona prompts live in an untracked private module — the repo ships the machinery, not the personality. Variety is engineered: the second voice improvises off a large, founder-seeded **content deck** (deal-a-fresh-hand-per-line) rather than relying on prompt bans, and deterministic guards strip recurring opener tics.
 
 ---
 
@@ -143,6 +144,28 @@ open AARC.xcodeproj
 After deploy: check the **build number on the watch home screen** (and iPhone Settings → About). If both match `CURRENT_PROJECT_VERSION` in `ios/project.yml`, you're on the latest build. It's bumped on every code-change push by `scripts/bump-build.sh` (see AGENTS.md).
 
 To exercise the full voice pipeline without leaving your desk: Run screen → enable test mode → **Simulate at my desk**, then drive pace/HR/position from the Control Room. Test runs are flagged, excluded from Apple Health, and batch-deletable.
+
+### Testing & content QA
+
+Three headless harnesses make the run experience verifiable without the gym — all run on the simulator (or host) and emit artifacts you can eyeball.
+
+**1. Feedback simulator** — fast-forwards a whole run through the *real* generation pipeline (Director → ScriptEngine → Conversation → proxy), text-only (no TTS, no ElevenLabs spend), recording every coach line. An analyzer turns the transcript into an HTML verdict.
+
+```sh
+# launch the app with the env gate → writes Documents/run-sim-<km>.json
+SIMCTL_CHILD_AARC_RUN_SIM=10k xcrun simctl launch <booted-sim> club.aarun.AARC
+python3 scripts/analyze-run-sim.py <transcript.json>   # → repetition, voice balance,
+#   milestone coverage, length distribution, v3 audio-tag usage, all as an HTML report
+```
+
+**2. UI invariant + journey tests** — `AARCTests` (Swift Testing) drives the real `@MainActor` singletons headlessly and asserts lifecycle invariants (no run starts while one is active / a summary is up; End is synchronous; the summary chart normalizes each series so neither is crushed). `AARCUITests` (XCUITest) drives the actual app start → live-run → end → summary and screenshots each beat. Both are network-free / cost-free via launch-env mutes.
+
+```sh
+cd ios && xcodegen generate
+xcodebuild test -project AARC.xcodeproj -scheme AARC -destination 'platform=iOS Simulator,name=iPhone 17'
+```
+
+**Cost safety:** the TTS path caches synthesized audio in R2 (keyed by voice+text+params), and a runtime tripwire blocks *any* ElevenLabs call while a preview / UI test is active — so headless QA can never bill the voice provider.
 
 ### Deploying only the watch app
 

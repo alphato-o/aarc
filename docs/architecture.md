@@ -276,3 +276,27 @@ One writer per concern, no shared mutable state outside actors.
 ## Telemetry (later)
 
 Out of scope for V1. When added, MetricKit first; Sentry/PostHog only when user count > 1.
+
+---
+
+## Testing & harnesses
+
+The voice/coaching experience is the hard thing to verify, and a real gym run is an expensive feedback loop. Three headless harnesses move that verification to the desk so a gym run becomes acceptance, not discovery.
+
+### Harness A — feedback simulator (content QA)
+
+`SimRunDriver` (gated by `AARC_RUN_SIM=<plan>`) fast-forwards a whole virtual run through the **real** generation pipeline — `RunOrchestrator.startPhoneOnly(.simulate)` → `LiveMetricsConsumer.ingest` → `RunDirector` → `ScriptEngine` / `ContextualCoach` / `Conversation` → the live proxy — recording every produced line via a `Speaker.speak` tap (`RunPreview`). It is **text-only**: no TTS, no ElevenLabs spend.
+
+- A **virtual clock seam** (`AppClock.now`, overridden only in the sim) drives the time-based pacing (cooldowns, sustain, quiet-stretch) so the reactive coach fires faithfully under fast-forward; production reads the wall clock.
+- The transcript is written **incrementally** (every new line) plus a guaranteed final write, under a hard wall-clock budget — a slow/stuck/aborted run still yields a readable report.
+- A standalone analyzer (`scripts/analyze-run-sim.py`) scores the transcript into an HTML verdict: structural-repetition (opener-template / repeated-image / near-duplicate), voice balance over the run, milestone coverage + ownership, length distribution, and v3 audio-tag usage. Full spec: [`feedback-sim-harness-spec.html`](feedback-sim-harness-spec.html).
+
+### Harness B — iOS UI tests (three layers)
+
+1. **Invariant tests** (`AARCTests`, Swift Testing) — drive the real `@MainActor` singletons headlessly and assert lifecycle invariants: a run cannot start while one is active/paused or a summary presents (the phantom-run guard, `RunOrchestrator.canStartNewRun`); `endNow()` flips `isRunActive` synchronously (instant stop); the summary chart normalizes each series to its own 0…1 range so speed isn't crushed by HR. Network-free.
+2. **Snapshot harness** (`SummarySnapshotHarness`, env-gated) — renders a real SwiftUI component to a PNG with controlled data, so layout/chart correctness is eyeballable without driving the GUI. The chart was extracted into a standalone view (`SummaryTelemetryChart`) so the snapshot has no drift from production.
+3. **Journey tests** (`AARCUITests`, XCUITest) — drive the actual app on the simulator through home → start → live-run → end → summary, screenshotting each beat. `AppEnv.uiTest` mutes all network (TTS + the opener/closing-verdict LLM calls) and short-circuits the summary's readiness gate, so the journey is deterministic, offline, and cost-free.
+
+### Cost & safety guards
+
+TTS audio is cached in R2 (sha256 of voice+text+params), so repeated lines never re-bill. A runtime **tripwire** in `RemoteTTS` blocks (and counts) any ElevenLabs HTTP call that happens while a preview / UI-test is active — headless QA can never reach the voice provider.
