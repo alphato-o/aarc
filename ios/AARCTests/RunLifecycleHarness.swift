@@ -105,4 +105,26 @@ struct RunLifecycleHarness {
         LiveMetricsConsumer.shared.endNow()
         #expect(LiveMetricsConsumer.shared.isRunActive == false)
     }
+
+    /// THE PHANTOM RUN (2026-06-21): a ghost watch session re-announced a run
+    /// while the summary was up and the phone started a zero'd tracker. Cause:
+    /// the WATCH-driven start paths (MirroringReceiver `.identity`, the WC start
+    /// message) call `ingestStarted` directly, bypassing `canStartNewRun` — the
+    /// phone-only sim + the earlier guard tests never exercised them. This
+    /// reproduces it at the choke point: a stale start while a run is active
+    /// must be REFUSED, not adopted. (Fails before the ingestStarted guard;
+    /// passes after.)
+    @Test("a stale watch/mirror start is refused while a run is active (phantom guard)")
+    func phantomStartRefusedWhileActive() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        let activeRun = UUID()
+        c.currentRunId = activeRun
+        c.latest = runningMetrics()                      // isRunActive → canStartNewRun false
+        #expect(RunOrchestrator.shared.canStartNewRun == false)
+
+        c.ingestStarted(runId: UUID(), startedAt: Date())  // ghost re-announces a DIFFERENT run
+
+        #expect(c.currentRunId == activeRun)             // phantom NOT adopted
+    }
 }

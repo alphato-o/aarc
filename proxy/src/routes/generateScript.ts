@@ -5,7 +5,7 @@ import {
     ScriptSchema,
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
-import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
 export type Env = LLMEnv & SentryEnv;
@@ -40,24 +40,38 @@ export async function generateScriptHandler(
 
     const userPrompt = buildUserPrompt(req);
 
-    let raw: string;
+    let validated: { data: ReturnType<typeof ScriptSchema.parse> };
     let provider: "openrouter" | "anthropic";
     let model: string;
     try {
-        const result = await callLLM(
-            {
-                purpose: "script",
-                systemPrompt,
-                userPrompt,
-                maxTokens: 4096,
-                cacheSystem: true,
-            },
+        const out = await callLLMJSON(
+            { purpose: "script", systemPrompt, userPrompt, maxTokens: 4096, cacheSystem: true },
             env,
+            (raw) => {
+                const parsed = JSON.parse(stripCodeFences(raw));
+                const v = ScriptSchema.safeParse(parsed);
+                if (!v.success) {
+                    throw new Error(
+                        "output is not a valid run script: " +
+                            JSON.stringify(v.error.issues.slice(0, 2)),
+                    );
+                }
+                return v.data;
+            },
         );
-        raw = result.text;
-        provider = result.provider;
-        model = result.model;
+        validated = { data: out.data };
+        provider = out.provider;
+        model = out.model;
     } catch (e) {
+        if (e instanceof LLMOutputError) {
+            await captureMessage(env, `script output rejected after retry: ${e.detail}`, "error", {
+                route: "/generate-script",
+            });
+            return json(
+                { ok: false, error: "model output failed schema validation after retry", raw: e.raw.slice(0, 500) },
+                { status: 502 },
+            );
+        }
         const desc = describeUpstreamError(e);
         if (desc.httpStatus >= 500) {
             await captureMessage(env, `upstream LLM failure: ${desc.message}`, "error", {
@@ -65,38 +79,7 @@ export async function generateScriptHandler(
                 status: desc.httpStatus,
             });
         }
-        return json(
-            { ok: false, error: "upstream", detail: desc.message },
-            { status: desc.httpStatus },
-        );
-    }
-
-    const jsonText = stripCodeFences(raw);
-    let parsedScript: unknown;
-    try {
-        parsedScript = JSON.parse(jsonText);
-    } catch {
-        return json(
-            {
-                ok: false,
-                error: "model did not return valid JSON",
-                raw: raw.slice(0, 500),
-            },
-            { status: 502 },
-        );
-    }
-
-    const validated = ScriptSchema.safeParse(parsedScript);
-    if (!validated.success) {
-        return json(
-            {
-                ok: false,
-                error: "model output failed schema validation",
-                details: validated.error.format(),
-                raw: raw.slice(0, 500),
-            },
-            { status: 502 },
-        );
+        return json({ ok: false, error: "upstream", detail: desc.message }, { status: desc.httpStatus });
     }
 
     const response: GenerateScriptResponse & { provider: string } = {

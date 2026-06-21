@@ -95,6 +95,24 @@ final class LiveMetricsConsumer {
         // of the current run must not reset the engines mid-run.
         if currentRunId == runId, isRunActive { return }
 
+        // PHANTOM-RUN GUARD (the bug that started a ghost run on the summary
+        // page). `startPhoneOnly` checks `canStartNewRun`, but the WATCH-driven
+        // start paths — MirroringReceiver (.identity) and the WC start message —
+        // funnel straight here with no guard. A stale/ghost watch session
+        // re-announcing a run while a summary is presenting (or a different run
+        // is active) must NOT kick off a new tracker. A *new* runId while
+        // canStartNewRun is false == phantom → refuse, and tell the watch to
+        // stop the ghost so it doesn't keep re-announcing.
+        if runId != currentRunId, !RunOrchestrator.shared.canStartNewRun {
+            RunEventLog.shared.record(
+                "run.phantomBlocked",
+                "stale start ignored (summary up / run active)",
+                data: ["runId": runId.uuidString])
+            PhoneSession.shared.sendStateEvent(.endWorkout)
+            MirroringReceiver.shared.endFromPhone()
+            return
+        }
+
         // Anti-double-tracking: if the user already fell back to
         // phone-only and the watch starts LATE (delayed delivery of the
         // original command), end the watch's run instead of running two

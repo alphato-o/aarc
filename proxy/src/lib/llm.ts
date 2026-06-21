@@ -132,6 +132,51 @@ export class LLMConfigError extends Error {
     }
 }
 
+/** Thrown by callLLMJSON when the model's output still can't be parsed/validated
+ *  after a corrective retry. Carries the last raw text for diagnostics. */
+export class LLMOutputError extends Error {
+    constructor(public detail: string, public raw: string) {
+        super(detail);
+        this.name = "LLMOutputError";
+    }
+}
+
+/**
+ * Call the LLM and turn its text into a validated object via `parse` (which
+ * strips fences, JSON.parses, and schema-validates — throwing on any failure).
+ *
+ * RESILIENCE: a real run on 2026-06-21 lost EVERY milestone because
+ * /generate-script 502'd 3/3 — the model returned output that failed schema
+ * validation and there was no retry. Here, on a parse/schema failure we
+ * re-prompt ONCE telling the model exactly what was wrong and demanding clean
+ * JSON, before giving up. Turns most transient bad-output 502s into 200s for
+ * the script (milestones) AND the reactive lines (Jessica/Ricky). Genuine
+ * upstream/network errors from callLLM still propagate immediately.
+ */
+export async function callLLMJSON<T>(
+    params: CallParams,
+    env: LLMEnv,
+    parse: (raw: string) => T,
+): Promise<{ data: T; provider: "openrouter" | "anthropic"; model: string; text: string }> {
+    let lastErr = "", lastRaw = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const userPrompt = attempt === 0
+            ? params.userPrompt
+            : `${params.userPrompt}\n\n[YOUR PREVIOUS RESPONSE WAS REJECTED: ${lastErr}]\nReturn ONLY the required JSON — no prose, no explanation, no markdown code fences, nothing before or after it.`;
+        const r = await callLLM(
+            { ...params, userPrompt, cacheSystem: attempt === 0 ? params.cacheSystem : false },
+            env,
+        );
+        try {
+            return { data: parse(r.text), provider: r.provider, model: r.model, text: r.text };
+        } catch (e) {
+            lastErr = e instanceof Error ? e.message : String(e);
+            lastRaw = r.text;
+        }
+    }
+    throw new LLMOutputError(lastErr, lastRaw);
+}
+
 /** Common error-narrowing helper for route handlers. */
 export function describeUpstreamError(e: unknown): {
     httpStatus: number;
