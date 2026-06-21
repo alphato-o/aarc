@@ -3,6 +3,7 @@ import { dynamicLineHandler } from "./routes/dynamicLine";
 import { reactLineHandler } from "./routes/reactLine";
 import { musicCommentHandler } from "./routes/musicComment";
 import { ttsHandler } from "./routes/tts";
+import { liveHandler } from "./routes/live";
 import {
     ingestRunHandler,
     ingestAudioHandler,
@@ -40,6 +41,11 @@ interface Env {
     VOICES?: R2Bucket;
     /// Shared secret for ingest writes + replay reads (wrangler secret).
     DEVICE_TOKEN?: string;
+    /// Live in-run channel tokens. DEVICE = the app (start/events/end/inject-GET);
+    /// ADMIN = the agent ("home", /live/status + POST /live/inject). Both are
+    /// Worker secrets distinct from the ingest DEVICE_TOKEN.
+    LIVE_DEVICE_TOKEN?: string;
+    LIVE_ADMIN_TOKEN?: string;
 }
 
 const json = (data: unknown, init: ResponseInit = {}): Response =>
@@ -112,6 +118,10 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
 
     if (request.method === "POST" && url.pathname === "/dash/auth/approve") {
         return dashAuthApproveHandler(request, env);
+    }
+
+    if (url.pathname.startsWith("/live/")) {
+        return liveHandler(request, url, env);
     }
 
     if (request.method === "POST" && url.pathname === "/ingest-run") {
