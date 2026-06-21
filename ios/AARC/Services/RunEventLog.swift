@@ -146,6 +146,9 @@ final class RunEventLog {
             recent.removeFirst(recent.count - Self.maxRecent)
         }
 
+        // Mirror into the live "back home" feed (no-op unless sharing is on).
+        LiveShareController.shared.append(type: type, detail: detail, t: event.t)
+
         guard activeRunId != nil, let handle = fileHandle else { return }
         guard var line = try? encoder.encode(event) else { return }
         line.append(0x0A) // "\n"

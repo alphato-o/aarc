@@ -4,6 +4,8 @@
 <dict>
 	<key>AARCDeviceToken</key>
 	<string>10466ddbd114663371f83bb38825de3db6d231c5b6501b07</string>
+	<key>AARCLiveDeviceToken</key>
+	<string>livedev_9c967bddf65d839568d0fbee8f61cbb0ccb5263c</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleExecutable</key>
@@ -43,11 +45,11 @@
 	<string>AARC uses the microphone to record short voice notes you send to your AI companion mid-run.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>AARC reads motion data to confirm step count and cadence on indoor (treadmill) runs.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>AARC saves your run share cards and videos to your photo library. It only ever adds — it never reads your photos.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>AARC transcribes your voice notes on-device so it can pass the text to the AI companion for a reply.</string>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-		<string>AARC saves your run share cards and videos to your photo library. It only ever adds — it never reads your photos.</string>
-		<key>NSSupportsLiveActivities</key>
+	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UIBackgroundModes</key>
 	<array>

@@ -133,6 +133,10 @@ final class LiveMetricsConsumer {
 
         // Open the per-run diagnostics log (events + voice archive).
         RunEventLog.shared.startRun(runId: runId)
+
+        // Live "share back home" — REAL runs only (guarded inside).
+        LiveShareController.shared.startIfEnabled(
+            runId: runId, isTest: RunOrchestrator.shared.isTestRun, startedAt: startedAt)
         let runTitle = RunTitleGenerator.title(forRunId: runId, date: startedAt, runType: pendingRunType)
         // The DEVICE's timezone is the source of truth for displaying run times
         // (the dashboard renders in this tz, not the viewer's browser / UTC).
@@ -228,6 +232,7 @@ final class LiveMetricsConsumer {
         RunDirector.shared.stop()
         PlaceContext.shared.stop()
         LiveActivityController.shared.end()
+        LiveShareController.shared.end()
 
         // Seal + upload the per-run diagnostics (events JSONL, pinned
         // voice audio). Fire-and-forget with retries inside.

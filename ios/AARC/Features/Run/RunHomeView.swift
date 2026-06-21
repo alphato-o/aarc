@@ -24,6 +24,7 @@ struct RunHomeView: View {
     @State private var phoneSession = PhoneSession.shared
     @State private var summaryStore = RunSummaryStore.shared
     @AppStorage("aarc.trackingSource") private var trackingSourceRaw: String = TrackingSource.watch.rawValue
+    @AppStorage("aarc.liveShare") private var liveShare = false
 
     private var trackingSource: TrackingSource {
         TrackingSource(rawValue: trackingSourceRaw) ?? .watch
@@ -72,6 +73,7 @@ struct RunHomeView: View {
                 .layoutPriority(1)
             trackingSourcePicker
             testRunToggle
+            liveShareToggle
             watchUnreachableBanner
             startButtons
                 .frame(maxHeight: .infinity)
@@ -86,6 +88,26 @@ struct RunHomeView: View {
     /// Sticky "test run" toggle. When on, the run is tagged as test data
     /// (TEST badge in History, sweepable via "Delete all test runs"). Stays
     /// where the user left it, and shows its state so it's never a surprise.
+    /// Opt-in: stream a REAL run's data "back home" so the agent can watch live,
+    /// fix/improve the proxy mid-run, and speak a line back (in a distinct voice).
+    @ViewBuilder
+    private var liveShareToggle: some View {
+        Toggle(isOn: $liveShare) {
+            Label {
+                Text("Share live running data back home")
+                    .font(.subheadline)
+            } icon: {
+                Image(systemName: "dot.radiowaves.left.and.right")
+            }
+            .foregroundStyle(liveShare ? .teal : .secondary)
+        }
+        .tint(.teal)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(liveShare ? Color.teal.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 10))
+    }
+
     @ViewBuilder
     private var testRunToggle: some View {
         VStack(spacing: 8) {
