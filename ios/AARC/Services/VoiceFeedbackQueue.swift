@@ -132,6 +132,10 @@ final class VoiceFeedbackQueue {
     private(set) var droppedDuplicate: Int = 0
     /// Items interrupted by a higher-priority enqueue.
     private(set) var preempted: Int = 0
+    /// The "oops — where was I…" recovery cue is a nice touch ONCE; repeated it
+    /// becomes its own tic (run BFDD0366: heard it 3×, near-verbatim each time).
+    /// Cap it to the first preemption per run; later resumes play silently.
+    private var resumePreambleUsed = false
     /// When the last spoken line FINISHED (audio done). Drives the music
     /// breathing-room gap so voices don't pile up wall-to-wall — the floor
     /// returns to music between speakers, like a radio show. nil = none yet.
@@ -222,18 +226,23 @@ final class VoiceFeedbackQueue {
             // Resumes aren't themselves resumed (no stacked prefixes), and
             // we don't bother resuming a line already near its expiry.
             if !cur.isResumed, !cur.isStale() {
+                // First preemption of the run gets the spoken "oops, where was
+                // I" cue; after that the line resumes silently (the cue itself
+                // was turning into a repeated phrase).
+                let usePreamble = !resumePreambleUsed
+                if usePreamble { resumePreambleUsed = true }
                 let resume = VoiceItem(
                     text: cur.text,
                     priority: cur.priority,
                     source: cur.source + ".resumed",
                     expiresAfter: cur.expiresAfter,
                     voiceId: cur.voiceId,
-                    resumePrefix: Self.resumePrefix(forVoiceId: cur.voiceId),
+                    resumePrefix: usePreamble ? Self.resumePrefix(forVoiceId: cur.voiceId) : nil,
                     isResumed: true
                 )
                 pending.insert(resume, at: 1)   // right after the milestone
                 RunEventLog.shared.record("voice.resume", String(cur.text.prefix(80)),
-                                          data: ["source": resume.source])
+                                          data: ["source": resume.source, "cue": usePreamble ? "1" : "0"])
             }
             gapTask?.cancel()
             kickNext()
@@ -314,6 +323,7 @@ final class VoiceFeedbackQueue {
         droppedStale = 0
         droppedDuplicate = 0
         preempted = 0
+        resumePreambleUsed = false
         // Fresh run: no prior voice, so the opener plays without waiting on
         // the music gap.
         lastVoiceEndedAt = nil

@@ -19,6 +19,7 @@ struct ActiveRunView: View {
     @State private var nowPlaying = NowPlayingStore.shared
     @State private var chartStore = LiveRunChartStore.shared
     @State private var subtitleStore = LiveSubtitleStore.shared
+    @State private var venueConfirm = VenueConfirm.shared
     @State private var showEndConfirm = false
 
     var onDismiss: () -> Void = {}
@@ -92,6 +93,15 @@ struct ActiveRunView: View {
                     InRunFeedbackCard(line: line) { subtitleStore.toggleLike() }
                         .id(line.id)
                         .transition(.opacity)
+                } else if let venue = venueConfirm.pending {
+                    // Takes the chart slot during quiet moments until the runner
+                    // answers — never covers a live coach line above.
+                    InRunVenueConfirmCard(
+                        venue: venue,
+                        onYes: { venueConfirm.confirmYes() },
+                        onNo: { venueConfirm.confirmNo() })
+                        .id(venue)
+                        .transition(.opacity)
                 } else {
                     VStack(spacing: 8) {
                         liveChart                       // fills the slack
@@ -104,6 +114,7 @@ struct ActiveRunView: View {
             endLink
         }
         .animation(.easeInOut(duration: 0.3), value: subtitleStore.currentLine?.id)
+        .animation(.easeInOut(duration: 0.3), value: venueConfirm.pending)
         .padding(.horizontal, 20)
         .padding(.top, 4)  // breathing room under the iOS clock / Dynamic Island
     }

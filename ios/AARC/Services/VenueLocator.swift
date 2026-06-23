@@ -17,13 +17,16 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     }
 
-    /// Returns (coord, city, venue) — any of which may be nil. venue is the
-    /// nearest hotel/gym, the "wild but likely guess" (e.g. Park Hyatt gym).
-    func capture() async -> (coord: CLLocationCoordinate2D, city: String?, venue: String?)? {
+    /// Returns (coord, city, venues) — city may be nil, venues may be empty.
+    /// `venues` is the nearby hotels/gyms ranked nearest-first, so the in-run
+    /// confirm popup can walk them ("Are you at X? / Y? / Z?") instead of
+    /// asserting one wrong guess. We DON'T pick one as fact here — the runner
+    /// confirms, which is the whole point (a wrong venue kills the vibe).
+    func capture() async -> (coord: CLLocationCoordinate2D, city: String?, venues: [String])? {
         guard let loc = await oneShot() else { return nil }
         async let city = reverseCity(loc)
-        async let venue = nearestVenue(loc)
-        return (loc.coordinate, await city, await venue)
+        async let venues = nearbyVenues(loc)
+        return (loc.coordinate, await city, await venues)
     }
 
     private func oneShot() async -> CLLocation? {
@@ -48,16 +51,27 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         return marks?.first?.locality ?? marks?.first?.subAdministrativeArea
     }
 
-    private func nearestVenue(_ loc: CLLocation) async -> String? {
+    /// Up to 5 nearby hotels/gyms, ranked nearest-first, de-duped by name.
+    /// A slightly wider radius (500m) than the old single-guess (350m) so the
+    /// actual venue (e.g. a hotel gym set back from the road) makes the list.
+    private func nearbyVenues(_ loc: CLLocation) async -> [String] {
         let req = MKLocalSearch.Request()
         req.naturalLanguageQuery = "hotel gym fitness"
         req.region = MKCoordinateRegion(center: loc.coordinate,
-                                        latitudinalMeters: 350, longitudinalMeters: 350)
-        guard let resp = try? await MKLocalSearch(request: req).start() else { return nil }
-        let nearest = resp.mapItems.min {
+                                        latitudinalMeters: 500, longitudinalMeters: 500)
+        guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
+        let ranked = resp.mapItems.sorted {
             ($0.placemark.location?.distance(from: loc) ?? .greatestFiniteMagnitude)
                 < ($1.placemark.location?.distance(from: loc) ?? .greatestFiniteMagnitude)
         }
-        return nearest?.name
+        var seen = Set<String>()
+        var names: [String] = []
+        for item in ranked {
+            guard let name = item.name, !seen.contains(name) else { continue }
+            seen.insert(name)
+            names.append(name)
+            if names.count == 5 { break }
+        }
+        return names
     }
 }

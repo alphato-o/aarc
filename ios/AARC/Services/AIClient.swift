@@ -179,7 +179,8 @@ actor AIClient {
         var lat: Double? = nil
         var lon: Double? = nil
         var city: String? = nil
-        var venue: String? = nil        // treadmill venue guess
+        var venue: String? = nil        // treadmill venue (confirmed or guess)
+        var venueConfirmed: Bool? = nil // true once the runner taps "yes" in the in-run confirm popup → server treats it as FACT
         var localClock: String? = nil   // "18:42"
         var weekday: String? = nil      // "Sunday"
         var monthDay: String? = nil     // "15 June"

@@ -173,11 +173,14 @@ final class LiveMetricsConsumer {
                 PlaceContext.shared.start()
             }
         } else {
-            // Treadmill: one-shot coarse location → city + venue guess for the
-            // ambient context (no continuous tracking, so no bogus route).
+            // Treadmill: one-shot coarse location → city for ambient context
+            // (no continuous tracking, so no bogus route). The VENUE is not
+            // asserted from the guess — we seed the confirm popup with the
+            // nearby candidates and let the runner tap the real one.
             Task { @MainActor in
                 if let v = await VenueLocator.shared.capture() {
-                    PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city, venue: v.venue)
+                    PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city)
+                    VenueConfirm.shared.begin(candidates: v.venues)
                 }
             }
         }
@@ -248,6 +251,7 @@ final class LiveMetricsConsumer {
         Conversation.shared.stop()
         RunDirector.shared.stop()
         PlaceContext.shared.stop()
+        VenueConfirm.shared.reset()
         LiveActivityController.shared.end()
         LiveShareController.shared.end()
 

@@ -42,7 +42,10 @@ final class ScriptEngine {
     /// Ring buffer of the most recent dispatched lines. Sent to the
     /// /dynamic-line endpoint so the model knows what NOT to repeat.
     private(set) var recentDispatchedLines: [String] = []
-    private let recentRingCapacity = 5
+    // 12, not 5: the proxy's cross-line repetition guard needs enough history to
+    // SEE fixation (a word across ≥3 lines, a phrase ≥3×). A 5-line window was
+    // too short to catch the run-wide over-use measured in run BFDD0366.
+    private let recentRingCapacity = 12
 
     // MARK: - Run state
 

@@ -87,6 +87,10 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
     /// Treadmill venue guess + city from a one-shot lookup (indoor runs have
     /// no continuous GPS; this is a single coarse fix, no trail pollution).
     var treadmillVenue: String?
+    /// True only once the runner taps "yes" in the in-run confirm popup. Until
+    /// then a venue is NOT asserted to the coaches (a wrong venue kills the vibe
+    /// — see the confirm flow in VenueConfirm).
+    private(set) var venueConfirmed = false
     private var ambientCity: String?
     /// The path travelled so far with per-point metrics (display space).
     private(set) var trail: [TrailPoint] = []
@@ -305,15 +309,30 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
             lat: lastWGS?.latitude, lon: lastWGS?.longitude,
             city: snapshot?.area ?? ambientCity,
             venue: treadmillVenue,
+            venueConfirmed: treadmillVenue != nil ? venueConfirmed : nil,
             localClock: clock, weekday: wd, monthDay: md)
     }
 
-    /// Seed location/city/venue from the treadmill one-shot (no continuous
-    /// tracking indoors → no trail, no gps logging).
-    func setTreadmillContext(coord: CLLocationCoordinate2D, city: String?, venue: String?) {
+    /// Seed location/city from the treadmill one-shot (no continuous tracking
+    /// indoors → no trail, no gps logging). The VENUE is deliberately NOT set
+    /// here — it's confirmed by the runner via the in-run popup; until then the
+    /// coaches get no venue (the server then forbids inventing one).
+    func setTreadmillContext(coord: CLLocationCoordinate2D, city: String?) {
         lastWGS = coord
         ambientCity = city
-        treadmillVenue = venue
+    }
+
+    /// The runner tapped "yes" on a candidate → it's now FACT for the coaches.
+    func setConfirmedVenue(_ name: String) {
+        treadmillVenue = name
+        venueConfirmed = true
+    }
+
+    /// All candidates rejected (or flow reset) → assert nothing. No fabricated
+    /// context is better than wrong context.
+    func clearVenue() {
+        treadmillVenue = nil
+        venueConfirmed = false
     }
 
     var llmInfo: AIClient.PlaceInfo? {
