@@ -7,7 +7,7 @@ import {
 import { systemPromptFor } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
-import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
 export type Env = LLMEnv & SentryEnv;
@@ -73,36 +73,30 @@ export async function musicCommentHandler(
         );
     }
 
-    const jsonText = stripCodeFences(raw);
-    let parsedObj: unknown;
+    // Salvage-first (in-run hot path): play the partial text on a truncated/
+    // fenced output rather than dropping the line; no retry (the extra LLM
+    // round-trip causes client timeouts mid-run — proven on react-line).
+    let validatedData: ReturnType<typeof MusicCommentModelOutputSchema.parse>;
     try {
-        parsedObj = JSON.parse(jsonText);
+        const obj = JSON.parse(stripCodeFences(raw));
+        const v = MusicCommentModelOutputSchema.safeParse(obj);
+        if (!v.success) throw new Error("schema validation failed");
+        validatedData = v.data;
     } catch {
-        return json(
-            {
-                ok: false,
-                error: "model did not return valid JSON",
-                raw: raw.slice(0, 500),
-            },
-            { status: 502 },
-        );
-    }
-
-    const validated = MusicCommentModelOutputSchema.safeParse(parsedObj);
-    if (!validated.success) {
-        return json(
-            {
-                ok: false,
-                error: "model output failed schema validation",
-                details: validated.error.format(),
-                raw: raw.slice(0, 500),
-            },
-            { status: 502 },
-        );
+        const salvaged = salvageText(raw);
+        if (!salvaged) {
+            await captureMessage(env, `music-comment unparseable, nothing to salvage`, "error", { route: "/music-comment" });
+            return json(
+                { ok: false, error: "model did not return valid JSON", raw: raw.slice(0, 500) },
+                { status: 502 },
+            );
+        }
+        await captureMessage(env, `music-comment salvaged (no retry): ${raw.slice(0, 80)}`, "warning", { route: "/music-comment" });
+        validatedData = { text: salvaged };
     }
 
     const response: MusicCommentResponse & { provider: string } = {
-        text: validated.data.text,
+        text: validatedData.text,
         model,
         provider,
     };

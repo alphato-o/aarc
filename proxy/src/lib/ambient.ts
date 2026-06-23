@@ -13,7 +13,8 @@ export interface AmbientInput {
     lat?: number;
     lon?: number;
     city?: string;
-    venue?: string;       // treadmill venue guess from the phone
+    venue?: string;       // treadmill venue from the phone
+    venueConfirmed?: boolean; // user tapped "yes" in the in-run confirm popup → FACT, not a guess
     localClock?: string;  // "18:42"
     weekday?: string;     // "Sunday"
     monthDay?: string;    // "15 June"
@@ -204,7 +205,19 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
         out.push(`- daylight: ${light}${r.sunset ? `, sunset ${r.sunset}` : ""}${r.sunrise ? `, sunrise ${r.sunrise}` : ""}`);
     }
     if (input?.venue) {
-        out.push(`- venue (treadmill — wild but likely guess): they're probably working out at ${input.venue}. You may tease the guess.`);
+        if (input.venueConfirmed) {
+            // The runner CONFIRMED this venue in the in-run popup → it is FACT.
+            // Anchor to it and DO NOT invent other venues (the run-BFDD0366 bug:
+            // given only a city, the model confabulated luxury hotels it wasn't at).
+            out.push(`- venue (CONFIRMED by the runner — this is FACT, not a guess): they are at ${input.venue}. Reference it as real when it sharpens a line. Do NOT invent or name any OTHER venue, hotel, bar, or building — ${input.venue} is the only place they are.`);
+        } else {
+            out.push(`- venue (treadmill — UNCONFIRMED guess): maybe ${input.venue}, maybe not. Do NOT assert it as fact and do NOT invent a different specific venue/hotel/building in its place — if unsure, stay generic ("the gym", "that treadmill") rather than naming somewhere they may not be.`);
+        }
+    } else {
+        // No venue (e.g. city-only treadmill fix). The model used to fill this
+        // void by inventing posh venues — explicitly forbid that. Neutral
+        // wording so it reinforces (not contradicts) the outdoor place block.
+        out.push(`- venue: UNKNOWN beyond the city. Do NOT invent or name any specific venue, hotel, bar, or building you haven't been given — naming a place they may not be is worse than staying unspecific.`);
     }
     if (r.worldNews?.length) out.push(`- world headlines: ${r.worldNews.map((h) => `"${h}"`).join("; ")}`);
     if (r.cityNews?.length) out.push(`- ${input?.city || "local"} headlines: ${r.cityNews.map((h) => `"${h}"`).join("; ")}`);

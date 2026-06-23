@@ -8,7 +8,8 @@ import { reactModeFor, systemPromptFor, runPhaseBlock, JessicaLengthMode } from 
 import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
-import { callLLM, callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { buildRepetitionBan } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
 export type Env = LLMEnv & SentryEnv;
@@ -77,18 +78,21 @@ export async function reactLineHandler(
     // indulgent ~450-650.
     const maxTokens = MAX_TOKENS_BY_LENGTH[lengthMode];
 
-    // callLLMJSON does the parse + schema validate inside, and on failure
-    // fires ONE corrective retry ("JSON only, no markdown fences") before
-    // giving up. This kills the live 502 class seen mid-run: the model wraps
-    // its reply in a ```json fence against instructions, and that fence
-    // overhead eats the tight token budget (quip=55 / medium=120), truncating
-    // the JSON mid-string so it won't parse. The retry's no-fence instruction
-    // frees those tokens so the line lands whole.
+    // SALVAGE-FIRST (in-run hot path). react-line fires DURING the run on a
+    // tight client timeout. A corrective retry (a 2nd LLM round-trip) was the
+    // first fix for the ```json-fence truncation 502s, but its added latency
+    // pushed the request past the client timeout — 3 timeout-DROPS in the field.
+    // So here we do ONE call and, if it won't parse, SALVAGE the partial text
+    // immediately (no second call). The truncation is almost always near the
+    // end, so the salvaged line is near-complete — and a near-complete line
+    // delivered fast beats both a slow retry and a silent drop. (The slower
+    // retry path still lives in callLLMJSON for run-start endpoints like
+    // /generate-script, where the timeout budget is loose.)
     let validatedData: ReturnType<typeof ReactLineModelOutputSchema.parse>;
     let provider: "openrouter" | "anthropic";
     let model: string;
     try {
-        const out = await callLLMJSON(
+        const result = await callLLM(
             {
                 purpose: "reply",
                 systemPrompt,
@@ -99,59 +103,44 @@ export async function reactLineHandler(
                 cacheSystem: true,
             },
             env,
-            (raw) => {
-                const obj = JSON.parse(stripCodeFences(raw));
-                const v = ReactLineModelOutputSchema.safeParse(obj);
-                if (!v.success) {
-                    throw new Error(
-                        "react-line output failed schema: " +
-                            JSON.stringify(v.error.issues.slice(0, 2)),
-                    );
-                }
-                return v.data;
-            },
         );
-        validatedData = out.data;
-        provider = out.provider;
-        model = out.model;
-    } catch (e) {
-        if (e instanceof LLMOutputError) {
-            // Both attempts failed to yield parseable JSON — almost always a
-            // truncation (a ```json fence overran the token budget, cutting the
-            // line off mid-string). Rather than DROP the line (silence mid-run,
-            // which the founder hates), SALVAGE whatever text the model did
-            // produce and play that. A cut-off Jessica line beats no line.
-            const salvaged = salvageText(e.raw);
+        provider = result.provider;
+        model = result.model;
+        try {
+            const obj = JSON.parse(stripCodeFences(result.text));
+            const v = ReactLineModelOutputSchema.safeParse(obj);
+            if (!v.success) throw new Error("schema validation failed");
+            validatedData = v.data;
+        } catch {
+            const salvaged = salvageText(result.text);
             if (salvaged) {
-                await captureMessage(env, `react-line salvaged truncated output: ${e.detail}`, "warning", {
+                await captureMessage(env, `react-line salvaged (no retry): ${result.text.slice(0, 80)}`, "warning", {
                     route: "/react-line",
                 });
                 validatedData = { text: salvaged };
-                provider = "anthropic";
-                model = "salvage";
-                // fall through to the normal response path below
+                model = `${model} (salvaged)`;
             } else {
-                await captureMessage(env, `react-line output rejected after retry: ${e.detail}`, "error", {
+                await captureMessage(env, `react-line unparseable, nothing to salvage`, "error", {
                     route: "/react-line",
                 });
                 return json(
-                    { ok: false, error: "model did not return valid JSON", raw: e.raw.slice(0, 500) },
+                    { ok: false, error: "model did not return valid JSON", raw: result.text.slice(0, 500) },
                     { status: 502 },
                 );
             }
-        } else {
-            const desc = describeUpstreamError(e);
-            if (desc.httpStatus >= 500) {
-                await captureMessage(env, `upstream LLM failure: ${desc.message}`, "error", {
-                    route: "/react-line",
-                    status: desc.httpStatus,
-                });
-            }
-            return json(
-                { ok: false, error: "upstream", detail: desc.message },
-                { status: desc.httpStatus },
-            );
         }
+    } catch (e) {
+        const desc = describeUpstreamError(e);
+        if (desc.httpStatus >= 500) {
+            await captureMessage(env, `upstream LLM failure: ${desc.message}`, "error", {
+                route: "/react-line",
+                status: desc.httpStatus,
+            });
+        }
+        return json(
+            { ok: false, error: "upstream", detail: desc.message },
+            { status: desc.httpStatus },
+        );
     }
 
     // Anti-tic guard: the persona BANS the "<hook> — darling, …" opener and
@@ -265,6 +254,14 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
         for (const r of req.recentDispatched) {
             lines.push(`- ${r}`);
         }
+        // Deterministic over-use ban: pull the words/phrases actually being
+        // repeated across recent lines and forbid them outright. The prose plea
+        // above gets ignored; this names the offenders.
+        const ban = buildRepetitionBan(req.recentDispatched);
+        if (ban) {
+            lines.push("");
+            lines.push(ban);
+        }
     }
 
     // Deal her a fresh, non-repeating hand of content cards to improvise off
@@ -303,24 +300,6 @@ function stripCodeFences(text: string): string {
         return withoutOpen.replace(/\n?```\s*$/, "").trim();
     }
     return trimmed;
-}
-
-/// Last-resort recovery from output that won't parse as JSON even after the
-/// corrective retry — almost always a truncation (fence overran the token
-/// budget, so the `{"text":"…` was cut off mid-string). Pull the (possibly
-/// unterminated) value of the "text" field and unescape it. Returns null if
-/// there's nothing substantive to salvage. A cut-off line beats a silent drop.
-function salvageText(raw: string): string | null {
-    const m = raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
-    if (!m || m[1] === undefined) return null;
-    let s = m[1].replace(/\\$/, ""); // drop a dangling escape from the cut
-    try {
-        s = JSON.parse(`"${s}"`);
-    } catch {
-        s = s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-    }
-    s = s.trim();
-    return s.length >= 12 ? s : null;
 }
 
 function json(data: unknown, init: ResponseInit = {}): Response {

@@ -177,6 +177,26 @@ export async function callLLMJSON<T>(
     throw new LLMOutputError(lastErr, lastRaw);
 }
 
+/// Last-resort recovery from output that won't parse as JSON — almost always a
+/// truncation (a ```json fence overran the token budget, cutting the
+/// `{"text":"…` off mid-string). Pull the (possibly unterminated) value of the
+/// "text" field and unescape it. Returns null if there's nothing substantive to
+/// salvage. Used by the in-run hot-path routes (react/dynamic/music line) which
+/// salvage-first instead of retrying — a near-complete partial line beats both a
+/// slow corrective retry (which times out mid-run) and a silent drop.
+export function salvageText(raw: string): string | null {
+    const m = raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
+    if (!m || m[1] === undefined) return null;
+    let s = m[1].replace(/\\$/, ""); // drop a dangling escape from the cut
+    try {
+        s = JSON.parse(`"${s}"`);
+    } catch {
+        s = s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+    }
+    s = s.trim();
+    return s.length >= 12 ? s : null;
+}
+
 /** Common error-narrowing helper for route handlers. */
 export function describeUpstreamError(e: unknown): {
     httpStatus: number;

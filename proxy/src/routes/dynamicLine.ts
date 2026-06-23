@@ -7,7 +7,8 @@ import {
 import { systemPromptFor, runPhaseBlock } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
-import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
+import { buildRepetitionBan } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
 export type Env = LLMEnv & SentryEnv;
@@ -73,39 +74,35 @@ export async function dynamicLineHandler(
         );
     }
 
-    const jsonText = stripCodeFences(raw);
-    let parsedObj: unknown;
+    // Salvage-first (in-run hot path): if the output won't parse — almost always
+    // a ```json fence overrunning the token budget and truncating the JSON —
+    // play the partial text rather than drop the line. No corrective retry:
+    // react-line proved the extra LLM round-trip pushes in-run requests past the
+    // client timeout. A near-complete salvaged line beats a slow retry or silence.
+    let validatedData: ReturnType<typeof DynamicLineModelOutputSchema.parse>;
     try {
-        parsedObj = JSON.parse(jsonText);
+        const obj = JSON.parse(stripCodeFences(raw));
+        const v = DynamicLineModelOutputSchema.safeParse(obj);
+        if (!v.success) throw new Error("schema validation failed");
+        validatedData = v.data;
     } catch {
-        return json(
-            {
-                ok: false,
-                error: "model did not return valid JSON",
-                raw: raw.slice(0, 500),
-            },
-            { status: 502 },
-        );
-    }
-
-    const validated = DynamicLineModelOutputSchema.safeParse(parsedObj);
-    if (!validated.success) {
-        return json(
-            {
-                ok: false,
-                error: "model output failed schema validation",
-                details: validated.error.format(),
-                raw: raw.slice(0, 500),
-            },
-            { status: 502 },
-        );
+        const salvaged = salvageText(raw);
+        if (!salvaged) {
+            await captureMessage(env, `dynamic-line unparseable, nothing to salvage`, "error", { route: "/dynamic-line" });
+            return json(
+                { ok: false, error: "model did not return valid JSON", raw: raw.slice(0, 500) },
+                { status: 502 },
+            );
+        }
+        await captureMessage(env, `dynamic-line salvaged (no retry): ${raw.slice(0, 80)}`, "warning", { route: "/dynamic-line" });
+        validatedData = { text: salvaged };
     }
 
     // Anti-tic guard (mirror of Jessica's): Ricky's reactive lines — especially
     // quiet_stretch — kept opening "X minutes in and [here's a thought / I've
     // been thinking]…". The prose ban is ignored, so enforce it: if the draft
     // trips the tic, fire ONE corrective rewrite.
-    let finalText = validated.data.text;
+    let finalText = validatedData.text;
     if (req.personalityId === "roast_coach" && tripsRickyTic(finalText)) {
         finalText = await rewriteRickyOffTic(finalText, systemPrompt, userPrompt, env) ?? finalText;
     }
@@ -230,6 +227,11 @@ async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
         lines.push("RECENTLY SPOKEN LINES (do NOT repeat ideas or phrasing):");
         for (const r of req.recentDispatched) {
             lines.push(`- ${r}`);
+        }
+        const ban = buildRepetitionBan(req.recentDispatched);
+        if (ban) {
+            lines.push("");
+            lines.push(ban);
         }
     }
 

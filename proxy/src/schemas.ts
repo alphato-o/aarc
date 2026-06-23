@@ -173,7 +173,8 @@ export const AmbientSchema = z.object({
     lat: z.number().optional(),
     lon: z.number().optional(),
     city: softString(120),
-    venue: softString(160),     // treadmill venue guess
+    venue: softString(160),     // treadmill venue (guess, unless venueConfirmed)
+    venueConfirmed: z.boolean().optional(), // user tapped "yes" in the in-run confirm popup → treat as FACT
     localClock: softString(16), // "18:42"
     weekday: softString(20),    // "Sunday"
     monthDay: softString(40),   // "15 June"
