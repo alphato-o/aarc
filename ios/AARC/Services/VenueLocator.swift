@@ -60,14 +60,24 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         req.region = MKCoordinateRegion(center: loc.coordinate,
                                         latitudinalMeters: 500, longitudinalMeters: 500)
         guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
-        let ranked = resp.mapItems.sorted {
-            ($0.placemark.location?.distance(from: loc) ?? .greatestFiniteMagnitude)
-                < ($1.placemark.location?.distance(from: loc) ?? .greatestFiniteMagnitude)
-        }
+        // MKLocalSearch's region is only a HINT — it returns POIs far outside it
+        // (the field bug: "Kerry Hotel" was a real venue MILES away, offered as
+        // if the runner could be in it). Hard-cap to a distance you could
+        // plausibly be STANDING IN — a building/immediate block — so we never ask
+        // "are you at X?" about somewhere it's physically impossible to be.
+        let maxMeters: CLLocationDistance = 400
+        let near = resp.mapItems
+            .compactMap { item -> (String, CLLocationDistance)? in
+                guard let name = item.name,
+                      let d = item.placemark.location?.distance(from: loc),
+                      d <= maxMeters else { return nil }
+                return (name, d)
+            }
+            .sorted { $0.1 < $1.1 }
         var seen = Set<String>()
         var names: [String] = []
-        for item in ranked {
-            guard let name = item.name, !seen.contains(name) else { continue }
+        for (name, _) in near {
+            guard !seen.contains(name) else { continue }
             seen.insert(name)
             names.append(name)
             if names.count == 5 { break }
