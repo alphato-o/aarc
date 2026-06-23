@@ -47,6 +47,23 @@ final class LiveMetricsConsumer {
     }
 
     func ingest(_ metrics: LiveMetrics) {
+        // PHANTOM-RUN DEFENSE (phone side). A mirrored `.metrics` packet flips
+        // the phone into "running" directly — it never passes through
+        // `ingestStarted`, so that guard can't see it. If metrics arrive with NO
+        // run started here (currentRunId == nil) AND we couldn't start one
+        // anyway (a summary is presenting / another run is active), this is a
+        // zombie watch session re-mirroring an ended run. Refuse, kill the
+        // ghost, and log it — the watch-side fix should prevent this ever firing,
+        // so a hit here on the next run pinpoints a path we missed.
+        if currentRunId == nil, !RunOrchestrator.shared.canStartNewRun {
+            RunEventLog.shared.record(
+                "run.phantomMetrics",
+                "mirrored metrics refused — no active run while !canStartNewRun",
+                data: ["state": String(describing: metrics.state)])
+            MirroringReceiver.shared.endFromPhone()
+            PhoneSession.shared.sendStateEvent(.endWorkout)
+            return
+        }
         self.latest = metrics
         self.lastUpdateAt = .now
         // Director runs FIRST so its predictions (next-milestone ETA,

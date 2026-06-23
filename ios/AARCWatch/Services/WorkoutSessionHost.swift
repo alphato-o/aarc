@@ -419,6 +419,7 @@ final class WorkoutSessionHost: NSObject {
 
     private static let persistedRunIdKey = "aarc.run.persistedRunId"
     private static let persistedRunTypeKey = "aarc.run.persistedRunType"
+    private static let lastEndedAtKey = "aarc.run.lastEndedAt"
     private let mirrorEncoder = JSONEncoder()
 
     /// Best-effort send over the mirrored session's data channel.
@@ -452,7 +453,23 @@ final class WorkoutSessionHost: NSObject {
                     return
                 }
                 guard let session else { return }
-                WatchBreadcrumbs.shared.drop("recovered live session (HK state \(session.state.rawValue))")
+                // PHANTOM-RUN ROOT FIX. `start()` sets persistedRunId; `endRun()`
+                // clears it. An ABSENT persistedRunId therefore means no run should
+                // be active — we ended cleanly (or never started). Any HK session
+                // surfacing here in that state is a ZOMBIE from a finished run, and
+                // adopting it IS the phantom: a wrist-raise (scenePhase → .active
+                // fires recoverActiveSession) resurrects the ended run, flips
+                // phase → .running, and re-mirrors zeros to the phone. Kill it
+                // instead of adopting. Genuine mid-run crash recovery is unaffected
+                // because persistedRunId is still SET in that case (endRun never ran).
+                guard UserDefaults.standard.string(forKey: Self.persistedRunIdKey) != nil else {
+                    let endedAt = UserDefaults.standard.object(forKey: Self.lastEndedAtKey) as? Double
+                    let ago = endedAt.map { Int(Date().timeIntervalSince1970 - $0) } ?? -1
+                    WatchBreadcrumbs.shared.drop("recovery REFUSED: no persisted run → zombie (HK state \(session.state.rawValue), ended \(ago)s ago); ending session")
+                    session.end()
+                    return
+                }
+                WatchBreadcrumbs.shared.drop("recovery ACCEPTED: persisted run present → genuine crash recovery (HK state \(session.state.rawValue))")
                 let builder = session.associatedWorkoutBuilder()
                 session.delegate = self
                 builder.delegate = self
@@ -566,6 +583,10 @@ final class WorkoutSessionHost: NSObject {
         try? await builder.addMetadata(metadata)
 
         UserDefaults.standard.removeObject(forKey: Self.persistedRunIdKey)
+        // Stamp the deliberate end so recoverActiveSession can log how long ago
+        // we ended when it refuses to resurrect a zombie (phantom diagnostics).
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastEndedAtKey)
+        WatchBreadcrumbs.shared.drop("endRun: cleared persistedRunId — HK session recovery now blocked")
 
         if skipHealthKitWriteForCurrentRun {
             // Do NOT call finishWorkout. Abandon the builder; nothing is written.
