@@ -36,6 +36,12 @@ final class VenueConfirm {
         self.resolved = candidates.isEmpty
         self.paused = false
         PlaceContext.shared.clearVenue()   // assert nothing until a "yes"
+        // Log WHAT MapKit offered (not just the outcome) so the venue search can
+        // be calibrated from real runs — e.g. did the actual venue even make the
+        // list, or was the radius/query wrong?
+        RunEventLog.shared.record(
+            "venue.candidates",
+            candidates.isEmpty ? "(none found)" : candidates.joined(separator: " | "))
     }
 
     /// "Yes" — this candidate is where they are. It becomes fact.
