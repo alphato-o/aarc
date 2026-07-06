@@ -52,20 +52,21 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
     }
 
     /// Up to 5 nearby hotels/gyms, ranked nearest-first, de-duped by name.
-    /// A slightly wider radius (500m) than the old single-guess (350m) so the
-    /// actual venue (e.g. a hotel gym set back from the road) makes the list.
     private func nearbyVenues(_ loc: CLLocation) async -> [String] {
         let req = MKLocalSearch.Request()
         req.naturalLanguageQuery = "hotel gym fitness"
         req.region = MKCoordinateRegion(center: loc.coordinate,
-                                        latitudinalMeters: 500, longitudinalMeters: 500)
+                                        latitudinalMeters: 2500, longitudinalMeters: 2500)
         guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
-        // MKLocalSearch's region is only a HINT — it returns POIs far outside it
-        // (the field bug: "Kerry Hotel" was a real venue MILES away, offered as
-        // if the runner could be in it). Hard-cap to a distance you could
-        // plausibly be STANDING IN — a building/immediate block — so we never ask
-        // "are you at X?" about somewhere it's physically impossible to be.
-        let maxMeters: CLLocationDistance = 400
+        // Hard-cap by ACTUAL distance so we never ask "are you at X?" about a
+        // venue that's physically impossible to be in (MKLocalSearch's region is
+        // only a hint — it returned "Kerry Hotel" from MILES away). But the cap
+        // must survive real error: indoor GPS is coarse (~100-300m off) AND a big
+        // hotel's map pin sits at its tower/entrance, not the gym — so the TRUE
+        // venue can read 400-600m away while you're standing in it. 1000m clears
+        // that headroom (real venue makes the list) while still excluding the
+        // km-away impostors. The runner confirms the right one from the list.
+        let maxMeters: CLLocationDistance = 1000
         let near = resp.mapItems
             .compactMap { item -> (String, CLLocationDistance)? in
                 guard let name = item.name,
