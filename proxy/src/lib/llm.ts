@@ -73,8 +73,8 @@ const DEFAULT_OPENROUTER_MODELS: Record<Purpose, string> = {
 
 const DEFAULT_ANTHROPIC_MODELS: Record<Purpose, string> = {
     script: "claude-opus-4-8",
-    reply: "claude-sonnet-4-6",
-    summary: "claude-sonnet-4-6",
+    reply: "claude-sonnet-5",
+    summary: "claude-sonnet-5",
 };
 
 export async function callLLM(

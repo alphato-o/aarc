@@ -52,7 +52,7 @@ export async function dynamicLineHandler(
                 purpose: "reply",
                 systemPrompt,
                 userPrompt,
-                maxTokens: 400,
+                maxTokens: 260,
                 cacheSystem: true,
             },
             env,
@@ -134,7 +134,7 @@ YOUR DRAFT WAS: "${draft}"
 That opened with a BANNED tic — either announcing how long it's been ("X minutes in…") or a stalling frame ("here's a thought", "I've been thinking", "been quiet"…). Rewrite it COMPLETELY: open STRAIGHT on the image/joke, a genuinely different shape, and never reference the elapsed time. JSON only.`;
     try {
         const result = await callLLM(
-            { purpose: "reply", systemPrompt, userPrompt: correction, maxTokens: 400, cacheSystem: true },
+            { purpose: "reply", systemPrompt, userPrompt: correction, maxTokens: 260, cacheSystem: true },
             env,
         );
         const parsed = JSON.parse(stripCodeFences(result.text));
@@ -236,7 +236,7 @@ async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
     }
 
     lines.push("");
-    lines.push("Generate ONE reactive line for THIS event right now. JSON only.");
+    lines.push("Generate ONE reactive line for THIS event right now. BREVITY IS BITE: 1-2 sentences, at most ~260 characters — one idea, landed, out. Never restate the idea a second way in the same line. JSON only.");
     return lines.join("\n");
 }
 

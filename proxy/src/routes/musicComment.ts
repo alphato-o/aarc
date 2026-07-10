@@ -51,7 +51,7 @@ export async function musicCommentHandler(
                 purpose: "reply",
                 systemPrompt,
                 userPrompt,
-                maxTokens: 400,
+                maxTokens: 260,
                 cacheSystem: true,
             },
             env,
@@ -178,9 +178,9 @@ async function buildUserPrompt(req: MusicCommentRequest): Promise<string> {
 
     lines.push("");
     if (req.currentLyric) {
-        lines.push("Generate ONE DJ commentary line reacting to the lyric line above. JSON only.");
+        lines.push("Generate ONE DJ commentary line reacting to the lyric line above. BREVITY IS BITE: 1-2 sentences, at most ~260 characters — one joke, landed, out. JSON only.");
     } else {
-        lines.push("Generate ONE DJ commentary line about the current track. JSON only.");
+        lines.push("Generate ONE DJ commentary line about the current track. BREVITY IS BITE: 1-2 sentences, at most ~260 characters — one joke, landed, out. JSON only.");
     }
     return lines.join("\n");
 }

@@ -20,10 +20,13 @@ export type Env = LLMEnv & SentryEnv;
 // of room, so the model ignored the soft length instruction and every line
 // came out a 500-char indulgent monologue (logged quip → 414-557c). These
 // keep just enough slack to finish a sentence, no more.
+// Tightened 2026-07-10 (founder: "shorter lines in one go — saves tokens AND
+// kills repetition"): a shorter ceiling forces one idea per line instead of
+// an idea plus two restatements of it, which is where the milking lived.
 const MAX_TOKENS_BY_LENGTH: Record<JessicaLengthMode, number> = {
     quip: 55,
-    medium: 120,
-    indulgent: 220,
+    medium: 100,
+    indulgent: 180,
     summary: 95,
 };
 
@@ -31,8 +34,8 @@ const MAX_TOKENS_BY_LENGTH: Record<JessicaLengthMode, number> = {
 // reads, and the strongest signal) so the length actually binds.
 const CHAR_BUDGET_BY_LENGTH: Record<JessicaLengthMode, string> = {
     quip: "HARD LENGTH LIMIT: ONE sentence, at most ~140 characters. A single sharp strike — no scene, no build, no second sentence. If you're describing an act in detail, you've already overrun. Stop after one line.",
-    medium: "HARD LENGTH LIMIT: 2-3 sentences, at most ~380 characters. One vivid idea, landed and out — not a paragraph, not a full fantasy.",
-    indulgent: "LENGTH: a flowing passage, ~450-650 characters. This is the rare long one — build it, but still land and stop; do not run past ~650.",
+    medium: "HARD LENGTH LIMIT: 2 sentences, at most ~300 characters. ONE vivid idea, landed and out — never restate the idea a second way, never add a trailing flourish that repeats the point.",
+    indulgent: "LENGTH: a flowing passage, ~400-550 characters. This is the rare long one — build it ONCE and land; no circling back, do not run past ~550.",
     summary: "HARD LENGTH LIMIT: 2 sentences, at most ~280 characters. A short warm sign-off, not a fantasy.",
 };
 
