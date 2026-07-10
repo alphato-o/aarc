@@ -2,6 +2,7 @@ import { generateScriptHandler } from "./routes/generateScript";
 import { dynamicLineHandler } from "./routes/dynamicLine";
 import { reactLineHandler } from "./routes/reactLine";
 import { musicCommentHandler } from "./routes/musicComment";
+import { roastPoolHandler } from "./routes/roastPool";
 import { ttsHandler } from "./routes/tts";
 import { liveHandler } from "./routes/live";
 import {
@@ -98,6 +99,10 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
 
     if (request.method === "POST" && url.pathname === "/react-line") {
         return reactLineHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/roast-pool") {
+        return roastPoolHandler(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/music-comment") {

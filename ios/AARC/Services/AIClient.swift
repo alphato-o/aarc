@@ -267,6 +267,82 @@ actor AIClient {
         return try await generateDynamicLine(request)
     }
 
+    // MARK: - Roast pool (batched in-run library)
+
+    struct RoastPoolRequest: Codable, Sendable {
+        struct Context: Codable, Sendable {
+            var planKind: String
+            var planDistanceKm: Double?
+            var planTimeMinutes: Double?
+            var runType: String
+        }
+        var personalityId: String
+        var poolSize: Int
+        var runContext: Context
+        var ambient: AmbientInfo?
+        var personalNotes: [String]?
+        var likedLineExamples: [String]?
+    }
+
+    private struct RoastPoolResponse: Codable {
+        var ok: Bool
+        var lines: [String]?
+    }
+
+    /// One batched call at run start: 12-20 short roasts for the in-run pool.
+    /// Generated as a single set so the model enforces variety across the
+    /// batch (the founder's insight: batch generation IS the dedup).
+    func generateRoastPool(
+        personalityId: String,
+        planKind: String,
+        planDistanceKm: Double?,
+        planTimeMinutes: Double?,
+        runType: String,
+        ambient: AmbientInfo?,
+        personalNotes: [String],
+        likedLineExamples: [String]
+    ) async throws -> [String] {
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("roast-pool")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        // Run-start path: latency is absorbed (the run proceeds while the
+        // pool generates), so a generous timeout beats a dropped pool.
+        urlRequest.timeoutInterval = 40
+        urlRequest.httpBody = try encoder.encode(RoastPoolRequest(
+            personalityId: personalityId,
+            poolSize: 16,
+            runContext: .init(planKind: planKind, planDistanceKm: planDistanceKm,
+                              planTimeMinutes: planTimeMinutes, runType: runType),
+            ambient: ambient,
+            personalNotes: personalNotes.isEmpty ? nil : personalNotes,
+            likedLineExamples: likedLineExamples.isEmpty ? nil : likedLineExamples
+        ))
+
+        let net = await NetworkActivityMonitor.shared.begin(service: "LLM", label: "roast-pool")
+        await NetworkActivityMonitor.shared.awaiting(net)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await withOneRetry { [session, urlRequest] in
+                try await session.data(for: urlRequest)
+            }
+        } catch {
+            await NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            throw error
+        }
+        await NetworkActivityMonitor.shared.finish(net, bytes: data.count)
+        guard let http = response as? HTTPURLResponse else {
+            throw AIError.transport("non-HTTP response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw AIError.httpStatus(http.statusCode, body: body.prefix(500).description)
+        }
+        let decoded = try decoder.decode(RoastPoolResponse.self, from: data)
+        return decoded.lines ?? []
+    }
+
     func generateDynamicLine(_ request: DynamicLineRequest) async throws -> DynamicLineResult {
         let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("dynamic-line")
         var urlRequest = URLRequest(url: url)

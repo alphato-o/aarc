@@ -6,7 +6,7 @@ import { z } from "zod";
 /// long, should degrade gracefully, never 400 the line. (Tight `.max()`
 /// caps here were the repeated source of Jessica's avalanche 400s.) Keep
 /// the limits generous AND non-fatal.
-const softStrings = (maxItems: number, maxLen: number) =>
+export const softStrings = (maxItems: number, maxLen: number) =>
     z.preprocess(
         (v) =>
             Array.isArray(v)
@@ -154,7 +154,7 @@ export interface GenerateScriptResponse {
 /// ("The PuLi (hotel, 140m)"), and the geometric pattern of the route so
 /// far ("circling the same ~400m loop, on lap 3 now"). Names only — raw
 /// coordinates never reach the proxy.
-const softString = (maxLen: number) =>
+export const softString = (maxLen: number) =>
     z.preprocess((v) => (typeof v === "string" ? v.slice(0, maxLen) : undefined),
                  z.string().optional());
 

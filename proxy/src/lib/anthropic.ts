@@ -35,6 +35,13 @@ export async function callAnthropic(params: AnthropicCallParams): Promise<string
     const body = {
         model: params.model,
         max_tokens: params.maxTokens,
+        // Thinking OFF, always. Sonnet 5 thinks by default and the thinking
+        // spends from max_tokens — on a batched call it consumed the entire
+        // 2000-token budget and returned an empty completion; on tight reply
+        // budgets it would truncate lines instead. Coaching lines are quips,
+        // not proofs. (Same doctrine as reasoning:{enabled:false} on the
+        // OpenRouter path.)
+        thinking: { type: "disabled" as const },
         system: systemBlock,
         messages: [
             {

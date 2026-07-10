@@ -206,6 +206,10 @@ final class LiveMetricsConsumer {
         // Live "share back home" — REAL runs only (guarded inside).
         LiveShareController.shared.startIfEnabled(
             runId: runId, isTest: RunOrchestrator.shared.isTestRun, startedAt: startedAt)
+
+        // In-run roast library: one batched call, cached for quiet-stretch
+        // dispatch (intra-batch variety + no per-line LLM round-trip).
+        RoastPool.shared.fetchIfNeeded(runType: pendingRunType)
         let runTitle = RunTitleGenerator.title(forRunId: runId, date: startedAt, runType: pendingRunType)
         // The DEVICE's timezone is the source of truth for displaying run times
         // (the dashboard renders in this tz, not the viewer's browser / UTC).
@@ -308,6 +312,7 @@ final class LiveMetricsConsumer {
         RunDirector.shared.stop()
         PlaceContext.shared.stop()
         VenueConfirm.shared.reset()
+        RoastPool.shared.reset()
         LiveActivityController.shared.end()
         LiveShareController.shared.end()
 

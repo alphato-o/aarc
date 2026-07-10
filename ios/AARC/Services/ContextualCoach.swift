@@ -381,6 +381,35 @@ final class ContextualCoach {
     private func fire(trigger: AIClient.DynamicLineTrigger, metrics: LiveMetrics) {
         inFlight = true
         lastFireByTrigger[trigger] = AppClock.now
+
+        // Quiet stretches draw from the batched roast POOL first: no network
+        // round-trip, no per-line tokens, and intra-batch variety already
+        // enforced at generation time. Data-reactive triggers (HR, pace,
+        // stationary) still generate live — their numbers ARE the joke.
+        // Pool exhausted or not yet fetched → fall through to the live path.
+        if trigger == .quietStretch, let pooled = RoastPool.shared.draw() {
+            defer { inFlight = false }
+            RunEventLog.shared.record("coach.trigger", "quiet_stretch (pool, \(RoastPool.shared.remaining) left)")
+            let segment = UUID()
+            ScriptEngine.shared.tryInject(
+                text: pooled,
+                source: "pool:quiet_stretch",
+                priority: .coaching,
+                expiresAfter: 120,
+                segmentId: segment,
+                decisionAt: AppClock.now
+            )
+            Conversation.shared.rickySpoke(
+                text: pooled,
+                source: "pool:quiet_stretch",
+                priority: .coaching,
+                segmentId: segment,
+                metrics: metrics
+            )
+            lastFiredTrigger = "quiet_stretch(pool)"
+            lastFiredAt = AppClock.now
+            return
+        }
         let plan = ScriptPreviewStore.shared.currentPlan
         let avgHR = rollingAverage(hrSamples)
         let avgPace = rollingAverage(paceSamples)
