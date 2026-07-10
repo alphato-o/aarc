@@ -224,9 +224,9 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
 
     if (!out.length) return;
     lines.push("");
-    lines.push("LIVE AMBIENT CONTEXT (real + current — this is AARC's whole point: be relevant. Weave AT MOST ONE fresh ambient detail into a line when it sharpens the joke; rotate which kind you use; NEVER recite this list or stack multiple facts):");
+    lines.push("LIVE AMBIENT CONTEXT (real + current; this is AARC's whole point: be RELEVANT to this exact moment, not generic):");
     lines.push(...out);
-    lines.push("A passing, knowing reference (the smog, the heat, the headline, the hour) lands harder than generic abuse. Don't force it into every line.");
+    lines.push("USE THIS MORE THAN YOU THINK: roughly one line in three should carry ONE ambient detail (the smog number, the heat, the hour, a headline, the season). Rules: (1) never more than ONE fact per line, never recite the list; (2) ROTATE the kind, if a recent line already used weather then reach for AQI, the clock, or a headline instead; (3) make the detail do comedic work (a knowing, specific jab), not decoration. A runner hearing his real AQI or the actual hour thinks the coach is watching him; that feeling is the product.");
 }
 
 function daypart(clock: string): string {

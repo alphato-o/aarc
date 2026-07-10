@@ -76,6 +76,16 @@ final class RemoteTTS: NSObject {
         playbackDuration = nil
         playbackStartedAt = nil
     }
+    /// Seconds of audio left in the line currently playing, or nil when
+    /// nothing is playing / duration unknown (Apple fallback has no timing).
+    /// Feeds the voice queue's graceful-yield: a milestone arriving with only
+    /// a few seconds of the current line left lets it finish instead of
+    /// cutting it mid-sentence.
+    var playbackRemaining: TimeInterval? {
+        guard let d = playbackDuration, let s = playbackStartedAt else { return nil }
+        let left = d - Date().timeIntervalSince(s)
+        return left > 0 ? left : nil
+    }
     /// Fetch latency of the last non-cached synth, in milliseconds.
     private(set) var lastLatencyMs: Int?
     /// Character count of the last line — latency on v3 scales with this.

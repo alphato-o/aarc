@@ -20,6 +20,7 @@ struct ActiveRunView: View {
     @State private var chartStore = LiveRunChartStore.shared
     @State private var subtitleStore = LiveSubtitleStore.shared
     @State private var venueConfirm = VenueConfirm.shared
+    @State private var earpiece = EarpieceBattery.shared
     @State private var showEndConfirm = false
 
     var onDismiss: () -> Void = {}
@@ -39,10 +40,12 @@ struct ActiveRunView: View {
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = true
             nowPlaying.start()
+            earpiece.start()
         }
         .onDisappear {
             UIApplication.shared.isIdleTimerDisabled = false
             nowPlaying.stop()
+            earpiece.stop()
         }
         .alert("End this run?", isPresented: $showEndConfirm) {
             Button("End", role: .destructive) { endRun() }
@@ -163,9 +166,38 @@ struct ActiveRunView: View {
                     .foregroundStyle(.orange)
             }
             Spacer(minLength: 0)
+            // Earpiece battery, iOS-widget style: a quiet line of small icons.
+            ForEach(earpiece.devices) { d in
+                HStack(spacing: 3) {
+                    Image(systemName: "earbuds")
+                    Image(systemName: batterySymbol(d.level))
+                    Text("\(d.level)%")
+                        .font(.caption2.monospacedDigit())
+                }
+                .font(.caption2)
+                .foregroundStyle(batteryTint(d.level))
+            }
         }
         .frame(minHeight: 8)
         .padding(.bottom, 4)
+    }
+
+    private func batterySymbol(_ level: Int) -> String {
+        switch level {
+        case 88...: "battery.100percent"
+        case 63...: "battery.75percent"
+        case 38...: "battery.50percent"
+        case 13...: "battery.25percent"
+        default:    "battery.0percent"
+        }
+    }
+
+    private func batteryTint(_ level: Int) -> Color {
+        switch level {
+        case 50...: .secondary
+        case 20...: .yellow
+        default:    .red
+        }
     }
 
     // MARK: - A. Performance cockpit

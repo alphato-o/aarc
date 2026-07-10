@@ -35,6 +35,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>AARC shows your Bluetooth earphones battery level on the run screen.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>AARC reads workouts your Apple Watch records so it can show your run history and personalise your AI companion. AARC does not write its own workouts on the phone.</string>
 	<key>NSHealthUpdateUsageDescription</key>

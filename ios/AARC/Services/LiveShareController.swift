@@ -80,7 +80,12 @@ final class LiveShareController {
               let voiceId = line["voiceId"] as? String, !text.isEmpty
         else { return }
         NSLog("[live] playing line from home (\(voiceId.prefix(8)))")
-        Speaker.shared.speak(text, priority: .milestone, source: "home", voiceId: voiceId)
+        // .coaching, NOT .milestone: a home line is a guest in the run, it must
+        // never cut Ricky/Jessica mid-sentence (only km-split milestones may
+        // preempt). It queues and plays in the next natural gap. Generous
+        // expiry so a busy stretch delays it rather than dropping it.
+        Speaker.shared.speak(text, priority: .coaching, source: "home",
+                             expiresAfter: 240, voiceId: voiceId)
     }
 
     private func send(_ path: String, _ body: [String: Any]) async {

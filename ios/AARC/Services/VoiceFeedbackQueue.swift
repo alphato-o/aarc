@@ -201,6 +201,19 @@ final class VoiceFeedbackQueue {
         // preempted her"). Only a .milestone (split/halfway/finish) may
         // interrupt, because it has to land on the marker.
         if let cur = currentlyPlaying, item.priority == .milestone, cur.priority < .milestone {
+            // GRACEFUL YIELD: if the playing line has only a few seconds left
+            // (real audio timing from RemoteTTS), let it FINISH and slot the
+            // milestone in right behind it, instead of guillotining a nearly
+            // done sentence just to announce a km a breath earlier. A split
+            // landing ~4s late is unnoticeable; a voice cut mid-word is not.
+            // Unknown timing (Apple fallback) keeps the hard preempt below.
+            if let remaining = RemoteTTS.shared.playbackRemaining, remaining <= 5.0 {
+                RunEventLog.shared.record("voice.gracefulYield", String(item.text.prefix(80)),
+                                          data: ["behind": cur.source, "remaining": String(format: "%.1f", remaining)])
+                log.info("VoiceQueue graceful yield: milestone waits \(String(format: "%.1f", remaining), privacy: .public)s for \(cur.source, privacy: .public)")
+                pending.insert(item, at: 0)
+                return
+            }
             log.info("VoiceQueue preempt cur=\(cur.source, privacy: .public)(\(cur.priority.rawValue)) by milestone=\(item.source, privacy: .public)")
             preempted += 1
             RunEventLog.shared.record("voice.preempt", String(item.text.prefix(80)),
