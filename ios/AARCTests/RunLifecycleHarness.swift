@@ -35,6 +35,44 @@ struct RunLifecycleHarness {
     }
     private func runningMetrics() -> LiveMetrics { metrics(.running) }
 
+    /// A LiveMetrics with EXPLICIT hr/distance, for the frozen-stream tests.
+    private func metricsHR(_ hr: Double?, dist: Double) -> LiveMetrics {
+        LiveMetrics(elapsed: 120, distanceMeters: dist,
+                    currentPaceSecPerKm: 360, avgPaceSecPerKm: 360,
+                    currentHeartRate: hr, energyKcal: 30,
+                    cadenceStepsPerMinute: 160, lastSplit: nil, state: .running)
+    }
+
+    @Test("a dead sensor stream (HR pinned + distance stuck 45s) is flagged frozen")
+    func frozenStreamDetected() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        let t0 = Date()
+        // Field case C9F4129B: HR bit-identical, distance parked, for minutes.
+        // The first sample only PRIMES the probe; the 45s freeze window is
+        // measured from the second identical sample, so drive a full minute.
+        for s in stride(from: 0.0, through: 60.0, by: 10.0) {
+            c.updateFrozenDetection(metricsHR(97.0, dist: 0), now: t0.addingTimeInterval(s))
+        }
+        #expect(c.watchDataFrozen == true)
+        // Stream comes alive → flag clears immediately.
+        c.updateFrozenDetection(metricsHR(101.0, dist: 0), now: t0.addingTimeInterval(60))
+        #expect(c.watchDataFrozen == false)
+    }
+
+    @Test("a healthy stream (HR varying) is never flagged frozen")
+    func healthyStreamNotFrozen() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        let t0 = Date()
+        // Same stuck distance (runner mid-pause) but LIVE heart data — this is
+        // a real human standing still, not a dead stream. Must NOT flag.
+        for (i, hr) in [97.0, 98.0, 97.0, 99.0, 101.0, 100.0].enumerated() {
+            c.updateFrozenDetection(metricsHR(hr, dist: 50), now: t0.addingTimeInterval(Double(i) * 10))
+        }
+        #expect(c.watchDataFrozen == false)
+    }
+
     @Test("idle → a new run is allowed")
     func idleAllowsStart() {
         resetToIdle()

@@ -252,6 +252,11 @@ final class ContextualCoach {
     }
 
     private func checkStationary(now: Date, metrics: LiveMetrics) -> AIClient.DynamicLineTrigger? {
+        // Dead sensor stream (HR pinned + distance stuck) means the DATA is
+        // broken, not the runner. Roasting "you've stopped" off a stalled
+        // stream is wrong twice over (field case: run C9F4129B, HR frozen at
+        // 97.0, roasted at 0:20). The banner tells the runner instead.
+        guard !LiveMetricsConsumer.shared.watchDataFrozen else { return nil }
         // Can't have "stopped" if you never started. Suppress until the
         // runner has actually moved at least once — kills the "stationary
         // for 0 metres" roast that fired while they set up the treadmill.

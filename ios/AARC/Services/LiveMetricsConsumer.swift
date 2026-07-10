@@ -46,6 +46,57 @@ final class LiveMetricsConsumer {
         return Date().timeIntervalSince(lastUpdateAt) > 10
     }
 
+    // MARK: - Frozen-stream detection (run C9F4129B take one)
+    //
+    // The watch can deliver a DEAD data stream that still ticks: packets keep
+    // arriving, but HR is frozen to the exact same value and distance never
+    // moves (field case: HR pinned at 97.0 for 3 straight minutes, zero
+    // distance; the coach then roasted "stationary" on broken data). A live
+    // human's HR never flatlines to the decimal, so identical-HR + no-distance
+    // over a sustained window means the SENSOR STREAM is stalled, not the
+    // runner. Surfaced as a banner ("Watch sensors stalled") and used by
+    // ContextualCoach to suppress the stationary roast.
+    private(set) var watchDataFrozen = false
+    private var frozenProbeHR: Double?
+    private var frozenProbeDistance: Double = 0
+    private var frozenProbeSince: Date?
+    /// Identical HR + <1m distance for this long ⇒ frozen. HK HR updates
+    /// every ~5s with natural variation; 45s of bit-identical readings is
+    /// implausible for a live stream.
+    private let frozenAfterSeconds: TimeInterval = 45
+
+    /// Internal (not private) so Harness B can drive it with synthetic clocks.
+    func updateFrozenDetection(_ metrics: LiveMetrics, now: Date = .now) {
+        guard metrics.state == .running, let hr = metrics.currentHeartRate, hr > 0 else {
+            // No HR yet (warm-up) or paused/ended: no basis to judge.
+            frozenProbeSince = nil
+            watchDataFrozen = false
+            return
+        }
+        let hrIdentical = frozenProbeHR == hr
+        let distStuck = abs(metrics.distanceMeters - frozenProbeDistance) < 1
+        if hrIdentical && distStuck {
+            if frozenProbeSince == nil { frozenProbeSince = now }
+            let stalled = now.timeIntervalSince(frozenProbeSince ?? now) >= frozenAfterSeconds
+            if stalled && !watchDataFrozen {
+                watchDataFrozen = true
+                RunEventLog.shared.record(
+                    "watch.dataFrozen",
+                    "sensor stream stalled: HR pinned at \(hr), distance stuck at \(Int(metrics.distanceMeters))m",
+                    data: ["hr": String(hr), "d": String(format: "%.1f", metrics.distanceMeters)])
+            }
+        } else {
+            // Stream came alive (HR moved or distance advanced) — reset.
+            if watchDataFrozen {
+                RunEventLog.shared.record("watch.dataRecovered", "sensor stream resumed")
+            }
+            frozenProbeHR = hr
+            frozenProbeDistance = metrics.distanceMeters
+            frozenProbeSince = nil
+            watchDataFrozen = false
+        }
+    }
+
     func ingest(_ metrics: LiveMetrics) {
         // PHANTOM-RUN DEFENSE (phone side). A mirrored `.metrics` packet flips
         // the phone into "running" directly — it never passes through
@@ -66,6 +117,7 @@ final class LiveMetricsConsumer {
         }
         self.latest = metrics
         self.lastUpdateAt = .now
+        updateFrozenDetection(metrics)
         // Director runs FIRST so its predictions (next-milestone ETA,
         // protect window) are fresh when ScriptEngine fires and
         // ContextualCoach decides whether there's room for banter.
@@ -177,10 +229,14 @@ final class LiveMetricsConsumer {
             // (no continuous tracking, so no bogus route). The VENUE is not
             // asserted from the guess — we seed the confirm popup with the
             // nearby candidates and let the runner tap the real one.
-            Task { @MainActor in
-                if let v = await VenueLocator.shared.capture() {
-                    PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city)
-                    VenueConfirm.shared.begin(candidates: v.venues)
+            // Skipped in UI-test journeys: the one-shot triggers the system
+            // location prompt, which breaks deterministic screenshots.
+            if !AppEnv.uiTest {
+                Task { @MainActor in
+                    if let v = await VenueLocator.shared.capture() {
+                        PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city)
+                        VenueConfirm.shared.begin(candidates: v.venues)
+                    }
                 }
             }
         }

@@ -11,9 +11,6 @@
 const ANTHROPIC_VERSION = "2023-06-01";
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 
-export const SCRIPT_MODEL = "claude-sonnet-4-6";
-export const REPLY_MODEL = "claude-haiku-4-5-20251001";
-
 export interface AnthropicCallParams {
     apiKey: string;
     model: string;

@@ -37,6 +37,12 @@ final class EarpieceBattery: NSObject {
     /// system Bluetooth permission prompt.
     func start() {
         active = true
+        // Journey/screenshot mode: the simulator has no Bluetooth at all, so
+        // inject a deterministic mock device to prove the UI renders.
+        if AppEnv.uiTest {
+            devices = [Device(id: UUID(), name: "Mock Buds", level: 45)]
+            return
+        }
         if central == nil {
             // queue: .main so every delegate callback lands on the main
             // actor, matching this class's isolation.
@@ -70,6 +76,15 @@ final class EarpieceBattery: NSObject {
     private func refresh() {
         guard let central, central.state == .poweredOn else { return }
         let found = central.retrieveConnectedPeripherals(withServices: [Self.batteryService])
+        // Telemetry: record what CoreBluetooth actually surfaced, so a run
+        // where the row stays empty is diagnosable from the event log ("no
+        // devices expose the battery service" vs "found but read failed").
+        // Field context: Apple H1 earphones (AirPods / Powerbeats Pro) will
+        // ALWAYS be absent here; their battery rides a private protocol.
+        RunEventLog.shared.record(
+            "earpiece.scan",
+            found.isEmpty ? "no BLE peripherals expose battery service 0x180F"
+                          : found.map { $0.name ?? "unnamed" }.joined(separator: " | "))
         for p in found {
             if peripherals[p.identifier] == nil {
                 peripherals[p.identifier] = p

@@ -186,23 +186,35 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
     if (date && input?.city) {
         out.push(`- date+place: it's ${date} in ${input.city} — use the SEASON, weather, and any notable local timing (holidays, festivals, exam season, plum rain, smog season, etc.) for this place + date when it sharpens a line.`);
     }
+    // ROTATING FEATURE: exactly ONE data fact is exposed per request, cycling
+    // by wall-clock minute. Asking the model to self-rotate failed in the
+    // field (run 98E24DA9: AQI woven into 32 of 73 lines, clock once,
+    // headlines never — the model locks onto the juiciest fact and milks it).
+    // If it can only SEE one kind at a time, the variety is structural.
+    const facts: string[] = [];
     if (r.tempC != null) {
         const bits = [`${r.tempC}°C`];
         if (r.feelsC != null && Math.abs(r.feelsC - r.tempC) >= 2) bits.push(`feels ${r.feelsC}°`);
         if (r.conditions) bits.push(r.conditions);
         if (r.humidity != null) bits.push(`${r.humidity}% humidity`);
         if (r.windKmh != null && r.windKmh >= 12) bits.push(`${r.windKmh} km/h wind`);
-        out.push(`- weather: ${bits.join(", ")}`);
+        facts.push(`- weather: ${bits.join(", ")}`);
     }
     if (r.aqi != null || r.pm25 != null) {
         const bits: string[] = [];
         if (r.aqi != null) bits.push(`US AQI ${r.aqi}${r.aqiCategory ? ` (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""})` : ""}`);
         if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³`);
-        out.push(`- air quality: ${bits.join(", ")}`);
+        facts.push(`- air quality: ${bits.join(", ")}`);
     }
     if (r.sunset || r.sunrise) {
         const light = r.isDay === false ? "it's dark out" : "daylight";
-        out.push(`- daylight: ${light}${r.sunset ? `, sunset ${r.sunset}` : ""}${r.sunrise ? `, sunrise ${r.sunrise}` : ""}`);
+        facts.push(`- daylight: ${light}${r.sunset ? `, sunset ${r.sunset}` : ""}${r.sunrise ? `, sunrise ${r.sunrise}` : ""}`);
+    }
+    if (r.worldNews?.length) facts.push(`- world headlines: ${r.worldNews.map((h) => `"${h}"`).join("; ")}`);
+    if (r.cityNews?.length) facts.push(`- ${input?.city || "local"} headlines: ${r.cityNews.map((h) => `"${h}"`).join("; ")}`);
+    if (facts.length > 0) {
+        const pick = Math.floor(Date.now() / 60_000) % facts.length;
+        out.push(facts[pick]!);
     }
     if (input?.venue) {
         if (input.venueConfirmed) {
@@ -219,14 +231,11 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
         // wording so it reinforces (not contradicts) the outdoor place block.
         out.push(`- venue: UNKNOWN beyond the city. Do NOT invent or name any specific venue, hotel, bar, or building you haven't been given — naming a place they may not be is worse than staying unspecific.`);
     }
-    if (r.worldNews?.length) out.push(`- world headlines: ${r.worldNews.map((h) => `"${h}"`).join("; ")}`);
-    if (r.cityNews?.length) out.push(`- ${input?.city || "local"} headlines: ${r.cityNews.map((h) => `"${h}"`).join("; ")}`);
-
     if (!out.length) return;
     lines.push("");
     lines.push("LIVE AMBIENT CONTEXT (real + current; this is AARC's whole point: be RELEVANT to this exact moment, not generic):");
     lines.push(...out);
-    lines.push("USE THIS MORE THAN YOU THINK: roughly one line in three should carry ONE ambient detail (the smog number, the heat, the hour, a headline, the season). Rules: (1) never more than ONE fact per line, never recite the list; (2) ROTATE the kind, if a recent line already used weather then reach for AQI, the clock, or a headline instead; (3) make the detail do comedic work (a knowing, specific jab), not decoration. A runner hearing his real AQI or the actual hour thinks the coach is watching him; that feeling is the product.");
+    lines.push("Roughly one line in three should carry ONE ambient detail, and it must come from the facts above ONLY — do not reach back for an ambient fact you remember from earlier lines (if you already made that joke, make a different kind of joke). Never more than one fact per line, never recite the list. Make the detail do comedic work (a knowing, specific jab), not decoration. A runner hearing his real conditions thinks the coach is watching him; that feeling is the product.");
 }
 
 function daypart(clock: string): string {

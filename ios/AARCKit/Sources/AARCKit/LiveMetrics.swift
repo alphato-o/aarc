@@ -29,6 +29,11 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
     public let cadenceStepsPerMinute: Double?
     public let lastSplit: Split?
     public let state: WorkoutState
+    /// Watch battery 0-1 (WKInterfaceDevice), so the phone's run screen can
+    /// show the battery of the device actually tracking the workout. nil on
+    /// older watch builds (optional keeps the WC payload back-compatible)
+    /// and on phone-only runs.
+    public let watchBatteryLevel: Double?
 
     public init(
         elapsed: TimeInterval,
@@ -39,7 +44,8 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         energyKcal: Double,
         cadenceStepsPerMinute: Double? = nil,
         lastSplit: Split?,
-        state: WorkoutState
+        state: WorkoutState,
+        watchBatteryLevel: Double? = nil
     ) {
         self.elapsed = elapsed
         self.distanceMeters = distanceMeters
@@ -50,6 +56,7 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         self.cadenceStepsPerMinute = cadenceStepsPerMinute
         self.lastSplit = lastSplit
         self.state = state
+        self.watchBatteryLevel = watchBatteryLevel
     }
 
     /// Zero-state snapshot. Used as a stand-in when a consumer needs a

@@ -51,10 +51,32 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         return marks?.first?.locality ?? marks?.first?.subAdministrativeArea
     }
 
-    /// Up to 5 nearby hotels/gyms, ranked nearest-first, de-duped by name.
+    /// Up to 5 nearby venues, ranked nearest-first, de-duped by name.
+    ///
+    /// TWO searches, because one can't cover both worlds: the gym-category
+    /// query ("hotel gym fitness") returns GYM POIs, and a hotel's own gym is
+    /// not separately indexed — two real runs proved Park Hyatt never appears
+    /// while its neighbours' fitness centres do. So a second query surfaces
+    /// nearby HOTELS by name; hotel results rank first (the founder's usual
+    /// venue is a hotel gym), then gyms, all nearest-first within each group.
     private func nearbyVenues(_ loc: CLLocation) async -> [String] {
+        async let hotels = searchNames("hotel", near: loc)
+        async let gyms = searchNames("hotel gym fitness", near: loc)
+        let ranked = (await hotels) + (await gyms)
+        var seen = Set<String>()
+        var names: [String] = []
+        for name in ranked {
+            guard !seen.contains(name) else { continue }
+            seen.insert(name)
+            names.append(name)
+            if names.count == 5 { break }
+        }
+        return names
+    }
+
+    private func searchNames(_ query: String, near loc: CLLocation) async -> [String] {
         let req = MKLocalSearch.Request()
-        req.naturalLanguageQuery = "hotel gym fitness"
+        req.naturalLanguageQuery = query
         req.region = MKCoordinateRegion(center: loc.coordinate,
                                         latitudinalMeters: 2500, longitudinalMeters: 2500)
         guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
@@ -67,7 +89,7 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         // that headroom (real venue makes the list) while still excluding the
         // km-away impostors. The runner confirms the right one from the list.
         let maxMeters: CLLocationDistance = 1000
-        let near = resp.mapItems
+        return resp.mapItems
             .compactMap { item -> (String, CLLocationDistance)? in
                 guard let name = item.name,
                       let d = item.placemark.location?.distance(from: loc),
@@ -75,14 +97,6 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
                 return (name, d)
             }
             .sorted { $0.1 < $1.1 }
-        var seen = Set<String>()
-        var names: [String] = []
-        for (name, _) in near {
-            guard !seen.contains(name) else { continue }
-            seen.insert(name)
-            names.append(name)
-            if names.count == 5 { break }
-        }
-        return names
+            .map { $0.0 }
     }
 }

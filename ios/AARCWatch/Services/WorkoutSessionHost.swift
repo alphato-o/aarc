@@ -689,7 +689,8 @@ final class WorkoutSessionHost: NSObject {
             energyKcal: energy,
             cadenceStepsPerMinute: cadence,
             lastSplit: split,
-            state: state
+            state: state,
+            watchBatteryLevel: Self.batteryLevel()
         )
 
         // Rolling buffer for the in-run Chart page (~last 80 samples).
@@ -709,6 +710,15 @@ final class WorkoutSessionHost: NSObject {
         WatchSession.shared.sendLiveMetrics(liveMetrics)
 
         _ = startedAt  // silence unused for now
+    }
+
+    /// Watch battery 0-1 for the phone's run-screen battery row. Monitoring
+    /// is enabled lazily on first read; -1 (unknown) maps to nil.
+    private static func batteryLevel() -> Double? {
+        let device = WKInterfaceDevice.current()
+        if !device.isBatteryMonitoringEnabled { device.isBatteryMonitoringEnabled = true }
+        let level = device.batteryLevel
+        return level >= 0 ? Double(level) : nil
     }
 
     private func quantitySum(_ id: HKQuantityTypeIdentifier, unit: HKUnit) -> Double {

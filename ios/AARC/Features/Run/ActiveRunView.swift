@@ -165,21 +165,56 @@ struct ActiveRunView: View {
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
+            if consumer.watchDataFrozen {
+                Label("Watch sensors stalled — restart run", systemImage: "exclamationmark.applewatch")
+                    .font(.caption2.bold())
+                    .foregroundStyle(.red)
+            }
             Spacer(minLength: 0)
-            // Earpiece battery, iOS-widget style: a quiet line of small icons.
+            // Battery row, iOS-widget style: a quiet line of small icons for
+            // the devices that matter mid-run. Watch (the tracker) comes off
+            // the live-metrics stream; iPhone via UIDevice. Earpiece appears
+            // only for headsets exposing the standard GATT battery service.
+            // Apple H1 earphones (AirPods / Powerbeats Pro) keep battery on a
+            // private protocol with NO public API, so they can never show.
+            if let wb = watchBatteryPercent {
+                batteryChip(icon: "applewatch", level: wb)
+            }
+            if let pb = phoneBatteryPercent {
+                batteryChip(icon: "iphone", level: pb)
+            }
             ForEach(earpiece.devices) { d in
-                HStack(spacing: 3) {
-                    Image(systemName: "earbuds")
-                    Image(systemName: batterySymbol(d.level))
-                    Text("\(d.level)%")
-                        .font(.caption2.monospacedDigit())
-                }
-                .font(.caption2)
-                .foregroundStyle(batteryTint(d.level))
+                batteryChip(icon: "earbuds", level: d.level)
             }
         }
         .frame(minHeight: 8)
         .padding(.bottom, 4)
+    }
+
+    private func batteryChip(icon: String, level: Int) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+            Image(systemName: batterySymbol(level))
+            Text("\(level)%")
+                .font(.caption2.monospacedDigit())
+        }
+        .font(.caption2)
+        .foregroundStyle(batteryTint(level))
+    }
+
+    /// Watch battery, mirrored from the tracking device at 1Hz.
+    private var watchBatteryPercent: Int? {
+        if AppEnv.uiTest { return 82 }   // deterministic for journey screenshots
+        guard let level = consumer.latest?.watchBatteryLevel else { return nil }
+        return Int((level * 100).rounded())
+    }
+
+    /// iPhone battery. -1 on the simulator (no battery), hence nil there.
+    private var phoneBatteryPercent: Int? {
+        if AppEnv.uiTest { return 64 }   // deterministic for journey screenshots
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        let level = UIDevice.current.batteryLevel
+        return level >= 0 ? Int((level * 100).rounded()) : nil
     }
 
     private func batterySymbol(_ level: Int) -> String {

@@ -57,6 +57,13 @@ export async function callOpenRouter(params: OpenRouterParams): Promise<string> 
     const body = {
         model: params.model,
         max_tokens: params.maxTokens,
+        // Reasoning OFF, always. Hidden reasoning tokens count against
+        // max_tokens, and the reply budgets are tiny (a quip is 55): a
+        // reasoning model silently eats the whole budget thinking and the
+        // spoken line arrives truncated or empty. Non-reasoning models
+        // ignore this field. (Added live during the 2026-07-10 run when the
+        // credit outage forced a fallback onto a free reasoning model.)
+        reasoning: { enabled: false },
         messages: [
             { role: "system" as const, content: systemContent },
             { role: "user" as const, content: params.userPrompt },

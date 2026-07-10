@@ -185,16 +185,49 @@ export async function callLLMJSON<T>(
 /// salvage-first instead of retrying — a near-complete partial line beats both a
 /// slow corrective retry (which times out mid-run) and a silent drop.
 export function salvageText(raw: string): string | null {
-    const m = raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)"?/);
-    if (!m || m[1] === undefined) return null;
-    let s = m[1].replace(/\\$/, ""); // drop a dangling escape from the cut
+    // 1) Complete JSON with the WRONG KEY (free/fallback models return
+    //    {"line": ...} / {"reply": ...} instead of {"text": ...}): parse and
+    //    take the expected key first, else the longest string value.
     try {
-        s = JSON.parse(`"${s}"`);
-    } catch {
-        s = s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        const obj = JSON.parse(stripFences(raw));
+        if (obj && typeof obj === "object") {
+            const o = obj as Record<string, unknown>;
+            const preferred = ["text", "line", "reply", "response", "message", "content"];
+            for (const k of preferred) {
+                if (typeof o[k] === "string" && (o[k] as string).trim().length >= 12) {
+                    return (o[k] as string).trim();
+                }
+            }
+            const strings = Object.values(o).filter((v): v is string => typeof v === "string");
+            const longest = strings.sort((a, b) => b.length - a.length)[0];
+            if (longest && longest.trim().length >= 12) return longest.trim();
+        }
+    } catch { /* fall through to the truncation path */ }
+
+    // 2) TRUNCATED output (fence overran the token budget, string cut mid-way):
+    //    regex out the (possibly unterminated) value of any known key.
+    for (const key of ["text", "line", "reply", "response", "message", "content"]) {
+        const m = raw.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"?`));
+        if (!m || m[1] === undefined) continue;
+        let s = m[1].replace(/\\$/, ""); // drop a dangling escape from the cut
+        try {
+            s = JSON.parse(`"${s}"`);
+        } catch {
+            s = s.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        }
+        s = s.trim();
+        if (s.length >= 12) return s;
     }
-    s = s.trim();
-    return s.length >= 12 ? s : null;
+    return null;
+}
+
+/// Local fence strip (routes have their own copies; salvage needs one here).
+function stripFences(text: string): string {
+    const trimmed = text.trim();
+    if (trimmed.startsWith("```")) {
+        return trimmed.replace(/^```(?:json)?\s*\n?/, "").replace(/\n?```\s*$/, "").trim();
+    }
+    return trimmed;
 }
 
 /** Common error-narrowing helper for route handlers. */

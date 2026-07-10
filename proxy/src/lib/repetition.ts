@@ -23,6 +23,12 @@ const STOP = new Set([
     "its", "it's", "his", "her", "she", "him", "out", "now", "got", "get",
     "one", "two", "all", "can", "cant", "dont", "didnt", "isnt", "more", "some",
     "kilometre", "kilometres", "kilometer", "kilometers", "run", "running",
+    // 3-letter function words (min token length is 3 so AQI-class tokens are
+    // catchable; these must not trip the ban).
+    "who", "why", "how", "any", "our", "off", "own", "too", "yet", "let",
+    "did", "does", "very", "much", "many", "each", "even", "only", "also",
+    // persona catchphrases — signature ticks, not fixation
+    "mate", "love", "darling", "christ", "god",
 ]);
 
 /// Build a DO-NOT-REUSE block from the recent lines, or null if nothing is being
@@ -38,9 +44,12 @@ export function buildRepetitionBan(recentLines: string[] | undefined): string | 
     const bigramCount = new Map<string, number>();
 
     clean.forEach((line, i) => {
-        const words = line.match(/[a-z']{3,}/g) ?? [];
+        // Digits included so number-facts ("152", "97") count as tokens; the
+        // v1 pattern missed them and the coaches milked the same number for a
+        // whole run. Min length 3 so short distinctive tokens (AQI) count too.
+        const words = line.match(/[a-z0-9']{3,}/g) ?? [];
         for (const w of words) {
-            if (STOP.has(w) || w.length < 4) continue;
+            if (STOP.has(w)) continue;
             if (!wordLines.has(w)) wordLines.set(w, new Set());
             wordLines.get(w)!.add(i);
         }
@@ -56,15 +65,20 @@ export function buildRepetitionBan(recentLines: string[] | undefined): string | 
     const banned: string[] = [];
     // A content word leaned on across ≥3 distinct recent lines.
     for (const [w, lines] of wordLines) if (lines.size >= 3) banned.push(w);
-    // A phrase (bigram) repeated ≥3× across the window — the "because unlike",
-    // "forty minutes", "little prick" tells.
-    for (const [bg, c] of bigramCount) if (c >= 3) banned.push(`"${bg}"`);
+    // A repeated phrase. Distinctive bigrams (a long content token in them,
+    // e.g. "six layovers", "forty quid") get banned at TWO uses — the field
+    // case milked one personal-note hook 7 times, and by the second repeat it
+    // already reads mechanical. Ordinary bigrams still need 3.
+    for (const [bg, c] of bigramCount) {
+        const distinctive = bg.split(" ").some((t) => t.length >= 6 && !STOP.has(t));
+        if (c >= (distinctive ? 2 : 3)) banned.push(`"${bg}"`);
+    }
 
     if (banned.length === 0) return null;
     // De-dup (a banned bigram may also contain a banned word) and cap.
-    const top = [...new Set(banned)].slice(0, 12);
+    const top = [...new Set(banned)].slice(0, 14);
     return [
-        "OVERUSED ALREADY THIS RUN — you have leaned on these exact words/phrases too many times; using any of them again is the single most mechanical, mutable-the-runner thing you can do. For THIS line: do NOT use any of them, and avoid the sentence SHAPE you've been repeating (e.g. a contrast connector, a diminutive-insult template). Reach for different vocabulary, a different image, a different structure:",
+        "OVERUSED ALREADY THIS RUN — you have leaned on these exact words, numbers, or phrases too many times. HARD RULES for THIS line: (1) do NOT use any item below, not even reworded around the same fact or hook (if \"six layovers\" is banned, the whole layover story is spent — find a DIFFERENT angle, don't say \"half a dozen connections\"); (2) avoid the repeated sentence SHAPE too (a contrast connector, a diminutive-insult template); (3) if the banned item came from the runner's personal notes, that bullet is USED UP for now — pick a different bullet or none. Repeating a hook is the single most mechanical thing you can do:",
         top.join(", "),
     ].join("\n");
 }
