@@ -32,6 +32,7 @@ final class EarpieceBattery: NSObject {
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var pollTask: Task<Void, Never>?
     private var active = false
+    private var lastScanSummary: String?
 
     /// Begin watching. Safe to call repeatedly; first call triggers the
     /// system Bluetooth permission prompt.
@@ -81,10 +82,14 @@ final class EarpieceBattery: NSObject {
         // devices expose the battery service" vs "found but read failed").
         // Field context: Apple H1 earphones (AirPods / Powerbeats Pro) will
         // ALWAYS be absent here; their battery rides a private protocol.
-        RunEventLog.shared.record(
-            "earpiece.scan",
-            found.isEmpty ? "no BLE peripherals expose battery service 0x180F"
-                          : found.map { $0.name ?? "unnamed" }.joined(separator: " | "))
+        // Log ONLY on change — the 45s poll spammed 17+ identical rows per
+        // window in run 3588B1AB.
+        let scanSummary = found.isEmpty ? "no BLE peripherals expose battery service 0x180F"
+                                        : found.map { $0.name ?? "unnamed" }.joined(separator: " | ")
+        if scanSummary != lastScanSummary {
+            lastScanSummary = scanSummary
+            RunEventLog.shared.record("earpiece.scan", scanSummary)
+        }
         for p in found {
             if peripherals[p.identifier] == nil {
                 peripherals[p.identifier] = p

@@ -73,6 +73,42 @@ struct RunLifecycleHarness {
         #expect(c.watchDataFrozen == false)
     }
 
+    @Test("a dead metrics stream (>150s, .running) is salvage-ended (lost watch-End)")
+    func lostWatchEndIsSalvaged() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        c.currentRunId = UUID()
+        c.latest = runningMetrics()
+        c.lastUpdateAt = Date().addingTimeInterval(-200)   // stream dead 200s
+        #expect(c.endReconciliationCheck() == true)
+        #expect(c.isRunActive == false)                     // run finalised
+        // The salvage presents a summary (capture()); dismiss so the other
+        // invariants' idle baseline (canStartNewRun == true) still holds.
+        RunSummaryStore.shared.dismiss()
+    }
+
+    @Test("a live stream is never salvage-ended")
+    func liveStreamNotSalvaged() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        c.currentRunId = UUID()
+        c.latest = runningMetrics()
+        c.lastUpdateAt = Date().addingTimeInterval(-20)     // fresh
+        #expect(c.endReconciliationCheck() == false)
+        #expect(c.isRunActive == true)
+    }
+
+    @Test("a paused run is never salvage-ended, however stale")
+    func pausedRunNotSalvaged() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        c.currentRunId = UUID()
+        c.latest = metrics(.paused)
+        c.lastUpdateAt = Date().addingTimeInterval(-600)
+        #expect(c.endReconciliationCheck() == false)
+        #expect(c.isRunActive == true)
+    }
+
     @Test("idle → a new run is allowed")
     func idleAllowsStart() {
         resetToIdle()

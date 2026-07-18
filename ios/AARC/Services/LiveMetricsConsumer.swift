@@ -210,6 +210,10 @@ final class LiveMetricsConsumer {
         // In-run roast library: one batched call, cached for quiet-stretch
         // dispatch (intra-batch variety + no per-line LLM round-trip).
         RoastPool.shared.fetchIfNeeded(runType: pendingRunType)
+
+        // Safety net for the lost watch-End (run 3588B1AB): force-finalise a
+        // run whose metrics stream has been dead for minutes.
+        startEndSweep()
         let runTitle = RunTitleGenerator.title(forRunId: runId, date: startedAt, runType: pendingRunType)
         // The DEVICE's timezone is the source of truth for displaying run times
         // (the dashboard renders in this tz, not the viewer's browser / UTC).
@@ -270,6 +274,51 @@ final class LiveMetricsConsumer {
         )
     }
 
+    // MARK: - End reconciliation (run 3588B1AB: the lost watch-End)
+    //
+    // Run-end delivery had a SINGLE point of failure: tapping End on the
+    // watch sends `.workoutEnded` over WatchConnectivity, and the mirror's
+    // `.ended` transition deliberately leaves finalisation to that message.
+    // With WC down at that exact moment ("watch not connected"), the end
+    // signal is simply LOST — the phone sat on a live run screen for an hour,
+    // never uploaded, and kept pinging ambient. This sweep is the safety net:
+    // a run whose metrics stream has been dead for minutes while nominally
+    // .running is over, whether or not anyone told us. Salvage-end it.
+    private var endSweepTask: Task<Void, Never>?
+    /// Dead-stream threshold before force-ending. Generous: WC hiccups of
+    /// 10-60s happen mid-run (the "watch reconnecting" banner); 2.5 minutes
+    /// of TOTAL silence while .running means the workout is gone.
+    private let endSalvageAfterSeconds: TimeInterval = 150
+
+    private func startEndSweep() {
+        endSweepTask?.cancel()
+        endSweepTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self, !Task.isCancelled else { return }
+                _ = self.endReconciliationCheck()
+            }
+        }
+    }
+
+    /// Internal (not private) so Harness B can drive it with synthetic clocks.
+    /// Returns true when it salvage-ended the run.
+    @discardableResult
+    func endReconciliationCheck(now: Date = .now) -> Bool {
+        guard isRunActive, let last = lastUpdateAt else { return false }
+        // A paused run may legitimately stop streaming — never salvage pause.
+        guard latest?.state == .running else { return false }
+        let gap = now.timeIntervalSince(last)
+        guard gap >= endSalvageAfterSeconds else { return false }
+        RunEventLog.shared.record(
+            "run.endLost",
+            "no metrics for \(Int(gap))s while running — watch end signal lost; salvage-ending",
+            data: ["gapS": String(Int(gap))])
+        endNow()
+        ingestEnded(workoutUUID: nil, salvagedRealRun: !RunOrchestrator.shared.isTestRun)
+        return true
+    }
+
     func ingestPaused() {
         latest = latest?.with(state: .paused)
     }
@@ -293,7 +342,9 @@ final class LiveMetricsConsumer {
         RunSummaryStore.shared.capture()
     }
 
-    func ingestEnded(workoutUUID: UUID?) {
+    func ingestEnded(workoutUUID: UUID?, salvagedRealRun: Bool = false) {
+        endSweepTask?.cancel()
+        endSweepTask = nil
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
         AmbientProbe.shared.stop()
@@ -322,10 +373,13 @@ final class LiveMetricsConsumer {
         RunEventLog.shared.endRun()
 
         guard let workoutUUID else {
-            // Test / simulated run — no HealthKit workout. Persist a record
-            // straight from the live metrics so it still shows in History
-            // (flagged test) and replays its diagnostics.
-            persistTestRunFromLive()
+            // No HealthKit workout UUID. Two cases: (a) test/sim runs, which
+            // never write to Health; (b) a SALVAGED real run whose watch end
+            // signal was lost — persist it from live metrics NOW (not flagged
+            // test) so the run isn't hostage to a message that already died.
+            // The watch still wrote the workout to Health; RunHistoryBackfill
+            // can reconcile the HK record later.
+            persistRunFromLive(isTest: !salvagedRealRun)
             return
         }
         // Kick off persistence in the background. HK may take a few
@@ -334,9 +388,10 @@ final class LiveMetricsConsumer {
         Task { await persistRun(workoutUUID: workoutUUID) }
     }
 
-    /// Persist a RunRecord for a test/sim run (no HK workout) from the last
-    /// live metrics. Flagged `isTestData`, no `healthKitWorkoutUUID`.
-    private func persistTestRunFromLive() {
+    /// Persist a RunRecord straight from live metrics (no HK workout UUID):
+    /// test/sim runs (isTest: true) and SALVAGED real runs whose watch end
+    /// signal was lost (isTest: false).
+    private func persistRunFromLive(isTest: Bool) {
         let context = PersistenceStore.shared.container.mainContext
         let id = currentRunId ?? UUID()
         if let existing = try? context.fetch(FetchDescriptor<RunRecord>(
@@ -358,7 +413,7 @@ final class LiveMetricsConsumer {
             startedAt: startedAt ?? .now,
             endedAt: .now,
             personality: pendingPersonalityId,
-            isTestData: true,
+            isTestData: isTest,
             healthKitWorkoutUUID: nil,
             runTypeRaw: pendingRunType.rawValue,
             cachedDistanceMeters: dist,
