@@ -67,6 +67,11 @@ struct RunDetailView: View {
             Text(run.startedAt, format: .dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if let city = run.city, !city.isEmpty {
+                Label(city, systemImage: "mappin.and.ellipse")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if isNike {
                 Text("Imported from Nike Run Club · view only")
                     .font(.caption2)

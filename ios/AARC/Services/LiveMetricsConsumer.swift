@@ -25,6 +25,9 @@ final class LiveMetricsConsumer {
     /// Defaults to outdoor when unknown.
     var pendingRunType: RunType = .outdoor
     var pendingPersonalityId: String = "roast_coach"
+    /// City resolved for the run in progress, captured at run-end (before
+    /// PlaceContext tears down) and stamped onto the persisted RunRecord.
+    private var pendingRunCity: String?
 
     /// HK workout UUID supplied by `workoutEnded`.
     var lastFinishedWorkoutUUID: UUID?
@@ -358,6 +361,12 @@ final class LiveMetricsConsumer {
         // the closing roast — before we tear the engines down below.
         RunSummaryStore.shared.capture()
 
+        // Capture the city BEFORE PlaceContext tears down, so the persisted
+        // RunRecord notes where the run happened — including TREADMILL runs,
+        // whose one-shot fix resolves a city even without a GPS trail (the
+        // thing Nike never recorded indoors).
+        pendingRunCity = PlaceContext.shared.runCity
+
         // Wind down the script engine — the "finish" trigger should
         // already have fired during a normal run. If the user ended
         // early, any unspoken lines just go quiet.
@@ -426,6 +435,7 @@ final class LiveMetricsConsumer {
             cachedEnergyKcal: 0,
             seriesBlob: try? JSONEncoder().encode(series)
         )
+        record.city = pendingRunCity
         context.insert(record)
         try? context.save()
     }
@@ -484,7 +494,8 @@ final class LiveMetricsConsumer {
                 cachedAvgPaceSecPerKm: avgPace,
                 cachedEnergyKcal: energy
             )
-            context.insert(record)
+            record.city = pendingRunCity
+        context.insert(record)
             savedRecord = record
         }
 
@@ -526,6 +537,7 @@ final class LiveMetricsConsumer {
             cachedAvgPaceSecPerKm: latest?.avgPaceSecPerKm ?? 0,
             cachedEnergyKcal: latest?.energyKcal ?? 0
         )
+        record.city = pendingRunCity
         context.insert(record)
         try? context.save()
 

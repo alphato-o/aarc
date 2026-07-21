@@ -39,7 +39,7 @@ enum UISnapshotHarness {
         // Nike archive rows: badge + real Nike title vs a normal AARC row.
         let nike = RunRecord(startedAt: Date(timeIntervalSince1970: 1729900000),
             personality: "roast_coach", runTypeRaw: "outdoor", source: "nike",
-            externalId: "demo", importedTitle: "Marathon Race",
+            externalId: "demo", importedTitle: "Marathon Race", city: "Beijing",
             cachedDistanceMeters: 42195, cachedDurationSeconds: 21475, cachedAvgPaceSecPerKm: 508, cachedEnergyKcal: 2371)
         let aarc = RunRecord(startedAt: Date(timeIntervalSince1970: 1729990000),
             personality: "roast_coach", runTypeRaw: "treadmill",

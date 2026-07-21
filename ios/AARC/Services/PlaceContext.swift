@@ -322,6 +322,11 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         ambientCity = city
     }
 
+    /// The best city estimate for the run, for persisting on the RunRecord —
+    /// so an AARC run (including a TREADMILL run, via its one-shot fix) notes
+    /// where it happened, the way Nike never did indoors. nil until resolved.
+    var runCity: String? { snapshot?.area ?? ambientCity }
+
     /// The runner tapped "yes" on a candidate → it's now FACT for the coaches.
     func setConfirmedVenue(_ name: String) {
         treadmillVenue = name

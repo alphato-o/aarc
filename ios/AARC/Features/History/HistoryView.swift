@@ -437,9 +437,12 @@ struct RunListRow: View {
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
 
-            HStack {
+            HStack(spacing: 4) {
                 Image(systemName: run.runTypeRaw == "treadmill" ? "figure.run.treadmill" : "figure.run")
                 Text(run.runTypeRaw.capitalized)
+                if let city = run.city, !city.isEmpty {
+                    Text("·"); Image(systemName: "mappin.and.ellipse"); Text(city)
+                }
                 Spacer()
                 if run.cachedEnergyKcal > 0 { Text("\(Int(run.cachedEnergyKcal)) kcal") }
             }
