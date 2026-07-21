@@ -131,7 +131,30 @@ struct RunDetailView: View {
             } else {
                 overlayChart
             }
+            // Honesty note: legacy Nike HR straps often cut out mid-run (or were
+            // never worn), so HR can be absent or only cover the opening
+            // minutes. Say so, so a short HR line reads as Nike's gap, not a bug.
+            if isNike, let note = hrCoverageNote {
+                Label(note, systemImage: "heart.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
+    }
+
+    /// A caption when the imported HR is missing or only partially covers the
+    /// run (Nike data loss), else nil.
+    private var hrCoverageNote: String? {
+        let dur = run.cachedDurationSeconds
+        guard dur > 60 else { return nil }
+        if hrSeries.isEmpty {
+            return "No heart rate recorded for this run in Nike."
+        }
+        guard let first = hrSeries.first?.timestamp, let last = hrSeries.last?.timestamp else { return nil }
+        let covered = last.timeIntervalSince(first)
+        // Only flag a genuine shortfall (Nike straps that cut out early).
+        guard covered < dur * 0.85 else { return nil }
+        return "Heart rate only recorded for the first \(Int(covered / 60)) of \(Int(dur / 60)) min (Nike stopped logging it)."
     }
 
     /// Single chart with both lines overlaid. Each series is normalized
