@@ -34,6 +34,20 @@ final class RunRecord {
     /// schema simplicity; convert to/from `AARCKit.RunType` at the edges.
     var runTypeRaw: String = "outdoor"
 
+    /// Where this run came from. "aarc" (default) for runs AARC coached, or
+    /// "nike" for runs imported from the Nike Run Club archive. Nike runs are
+    /// view-only history (no coaching, no share card) — see NikeImporter.
+    /// Lightweight SwiftData migration: new property with a default.
+    var source: String = "aarc"
+
+    /// The external activity id for imported runs (Nike activity UUID), so a
+    /// re-import is idempotent. nil for native AARC runs.
+    var externalId: String? = nil
+
+    /// Explicit run title for imported runs (Nike's own name, e.g. "Marathon
+    /// Race"). nil for AARC runs, which get a generated title from RunTitleGenerator.
+    var importedTitle: String? = nil
+
     // Denormalised snapshot from HealthKit, for fast list rendering
     // without re-querying HK on every row. Refreshed on save.
     var cachedDistanceMeters: Double = 0
@@ -60,6 +74,9 @@ final class RunRecord {
         isTestData: Bool = false,
         healthKitWorkoutUUID: UUID? = nil,
         runTypeRaw: String = "outdoor",
+        source: String = "aarc",
+        externalId: String? = nil,
+        importedTitle: String? = nil,
         cachedDistanceMeters: Double = 0,
         cachedDurationSeconds: Double = 0,
         cachedAvgPaceSecPerKm: Double = 0,
@@ -74,6 +91,9 @@ final class RunRecord {
         self.isTestData = isTestData
         self.healthKitWorkoutUUID = healthKitWorkoutUUID
         self.runTypeRaw = runTypeRaw
+        self.source = source
+        self.externalId = externalId
+        self.importedTitle = importedTitle
         self.cachedDistanceMeters = cachedDistanceMeters
         self.cachedDurationSeconds = cachedDurationSeconds
         self.cachedAvgPaceSecPerKm = cachedAvgPaceSecPerKm

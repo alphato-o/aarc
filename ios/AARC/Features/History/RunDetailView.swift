@@ -45,18 +45,33 @@ struct RunDetailView: View {
 
     // MARK: - Sections
 
+    private var isNike: Bool { run.source == "nike" }
+
     private var titleSection: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(RunTitleGenerator.title(
-                forRunId: run.id,
-                date: run.startedAt,
-                runType: RunType(rawValue: run.runTypeRaw) ?? .outdoor
-            ))
-                .font(.title3.bold())
-                .lineLimit(2)
+            HStack(spacing: 8) {
+                Text(run.importedTitle ?? RunTitleGenerator.title(
+                    forRunId: run.id,
+                    date: run.startedAt,
+                    runType: RunType(rawValue: run.runTypeRaw) ?? .outdoor
+                ))
+                    .font(.title3.bold())
+                    .lineLimit(2)
+                if isNike {
+                    Text("NIKE ARCHIVE").font(.caption2.bold())
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.orange.opacity(0.2), in: Capsule())
+                        .foregroundStyle(.orange)
+                }
+            }
             Text(run.startedAt, format: .dateTime.weekday(.wide).month(.wide).day().hour().minute())
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if isNike {
+                Text("Imported from Nike Run Club · view only")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
     }
 
@@ -68,7 +83,11 @@ struct RunDetailView: View {
             statTile("Avg Pace", value: formatPace(run.cachedAvgPaceSecPerKm), system: "speedometer")
             statTile("Energy", value: "\(Int(run.cachedEnergyKcal)) kcal", system: "flame")
             statTile("Mode", value: run.runTypeRaw.capitalized, system: run.runTypeRaw == "treadmill" ? "figure.run.treadmill" : "figure.run")
-            statTile("Personality", value: run.personality.replacingOccurrences(of: "_", with: " ").capitalized, system: "person.wave.2")
+            if isNike {
+                statTile("Source", value: "Nike", system: "figure.run")
+            } else {
+                statTile("Personality", value: run.personality.replacingOccurrences(of: "_", with: " ").capitalized, system: "person.wave.2")
+            }
         }
     }
 

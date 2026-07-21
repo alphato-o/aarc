@@ -14,11 +14,17 @@ struct HistoryView: View {
     private var testRuns: [RunRecord]
 
     @State private var category: Category = .real
-    private enum Category: String, CaseIterable { case real = "Runs", test = "Test" }
-    /// Runs shown for the selected category.
+    private enum Category: String, CaseIterable { case real = "Runs", nike = "Nike", test = "Test" }
+    /// Runs shown for the selected category. Nike = the imported archive;
+    /// Runs = AARC-coached (non-test, non-Nike); Test = safety-mode runs.
     private var shownRuns: [RunRecord] {
-        runs.filter { category == .test ? $0.isTestData : !$0.isTestData }
+        switch category {
+        case .nike: return runs.filter { $0.source == "nike" }
+        case .test: return runs.filter { $0.isTestData && $0.source != "nike" }
+        case .real: return runs.filter { !$0.isTestData && $0.source != "nike" }
+        }
     }
+    private var nikeCount: Int { runs.filter { $0.source == "nike" }.count }
 
     @State private var pendingDelete: RunRecord?
     /// Detached summary store seeded from a past run, driving the share sheet.
@@ -94,6 +100,19 @@ struct HistoryView: View {
                                   systemImage: "square.and.arrow.down")
                         }
                         .disabled(importing)
+                        Button {
+                            Task {
+                                importing = true
+                                await NikeImporter.run(context: modelContext) { _ in }
+                                importing = false
+                                let n = runs.filter { $0.source == "nike" }.count
+                                importResult = "Nike archive imported — \(n) run\(n == 1 ? "" : "s") in your history."
+                            }
+                        } label: {
+                            Label(importing ? "Importing…" : "Import Nike archive",
+                                  systemImage: "figure.run")
+                        }
+                        .disabled(importing)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -153,8 +172,11 @@ struct HistoryView: View {
     }
 
     private func categoryLabel(_ c: Category) -> String {
-        guard c == .test else { return "Runs" }
-        return testRuns.isEmpty ? "Test" : "Test (\(testRuns.count))"
+        switch c {
+        case .real: return "Runs"
+        case .nike: return nikeCount == 0 ? "Nike" : "Nike (\(nikeCount))"
+        case .test: return testRuns.isEmpty ? "Test" : "Test (\(testRuns.count))"
+        }
     }
 
     @ViewBuilder
@@ -180,29 +202,35 @@ struct HistoryView: View {
             }
         }
         .swipeActions(edge: .leading, allowsFullSwipe: true) {
-            Button { presentShare(run) } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
-            }
-            .tint(.orange)
-            if let archived = diagnostics(for: run) {
-                NavigationLink {
-                    ControlRoomView(replay: archived)
-                } label: {
-                    Label("Control Room", systemImage: "waveform.path.ecg")
+            // Nike archive runs are view-only: no share card (they predate AARC
+            // and have no coaching to render), no Control Room diagnostics.
+            if run.source != "nike" {
+                Button { presentShare(run) } label: {
+                    Label("Share", systemImage: "square.and.arrow.up")
                 }
-                .tint(.purple)
+                .tint(.orange)
+                if let archived = diagnostics(for: run) {
+                    NavigationLink {
+                        ControlRoomView(replay: archived)
+                    } label: {
+                        Label("Control Room", systemImage: "waveform.path.ecg")
+                    }
+                    .tint(.purple)
+                }
             }
         }
         .contextMenu {
-            Button { presentShare(run) } label: {
-                Label("Share run", systemImage: "square.and.arrow.up")
-            }
-            Button {
-                run.isTestData.toggle()
-                try? modelContext.save()
-            } label: {
-                Label(run.isTestData ? "Unmark test run" : "Mark as test run",
-                      systemImage: run.isTestData ? "flask.fill" : "flask")
+            if run.source != "nike" {
+                Button { presentShare(run) } label: {
+                    Label("Share run", systemImage: "square.and.arrow.up")
+                }
+                Button {
+                    run.isTestData.toggle()
+                    try? modelContext.save()
+                } label: {
+                    Label(run.isTestData ? "Unmark test run" : "Mark as test run",
+                          systemImage: run.isTestData ? "flask.fill" : "flask")
+                }
             }
             Button(role: .destructive) { pendingDelete = run } label: {
                 Label("Delete", systemImage: "trash")
@@ -364,20 +392,28 @@ enum RunTrash {
 
 // MARK: - Row
 
-private struct RunListRow: View {
+struct RunListRow: View {
     let run: RunRecord
+
+    private var isNike: Bool { run.source == "nike" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(RunTitleGenerator.title(forRunId: run.id, date: run.startedAt,
-                                         runType: RunType(rawValue: run.runTypeRaw) ?? .outdoor))
+            Text(run.importedTitle ?? RunTitleGenerator.title(
+                    forRunId: run.id, date: run.startedAt,
+                    runType: RunType(rawValue: run.runTypeRaw) ?? .outdoor))
                 .font(.subheadline.bold())
                 .lineLimit(2)
             HStack(spacing: 6) {
                 Text(run.startedAt, format: .dateTime.weekday().day().month(.abbreviated).hour().minute())
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if run.isTestData {
+                if isNike {
+                    Text("NIKE").font(.caption2.bold())
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(.orange.opacity(0.22), in: Capsule())
+                        .foregroundStyle(.orange)
+                } else if run.isTestData {
                     Text("TEST").font(.caption2.bold())
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(.orange.opacity(0.25), in: Capsule())

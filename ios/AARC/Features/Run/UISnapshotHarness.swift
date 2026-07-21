@@ -36,6 +36,20 @@ enum UISnapshotHarness {
                 .padding(12).background(Color(red: 0.06, green: 0.04, blue: 0.10)),
              to: dir.appendingPathComponent("uisnap-feedback-liked.png"))
 
+        // Nike archive rows: badge + real Nike title vs a normal AARC row.
+        let nike = RunRecord(startedAt: Date(timeIntervalSince1970: 1729900000),
+            personality: "roast_coach", runTypeRaw: "outdoor", source: "nike",
+            externalId: "demo", importedTitle: "Marathon Race",
+            cachedDistanceMeters: 42195, cachedDurationSeconds: 21475, cachedAvgPaceSecPerKm: 508, cachedEnergyKcal: 2371)
+        let aarc = RunRecord(startedAt: Date(timeIntervalSince1970: 1729990000),
+            personality: "roast_coach", runTypeRaw: "treadmill",
+            cachedDistanceMeters: 10000, cachedDurationSeconds: 3600, cachedAvgPaceSecPerKm: 360, cachedEnergyKcal: 640)
+        let rows = VStack(spacing: 0) {
+            RunListRow(run: nike); Divider()
+            RunListRow(run: aarc)
+        }.padding(16).frame(width: 390).background(Color(red: 0.06, green: 0.04, blue: 0.10))
+        snap(rows, to: dir.appendingPathComponent("uisnap-nike-rows.png"))
+
         NSLog("AARC_UISNAP wrote card PNGs to \(dir.path)")
     }
 
