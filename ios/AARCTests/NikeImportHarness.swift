@@ -13,6 +13,17 @@ import AARCKit
 @Suite("Nike import invariants", .serialized)
 struct NikeImportHarness {
 
+    @Test("race detection counts only half + full marathons")
+    func raceDetection() {
+        #expect(RunAggregate.isRace(21_097))   // exact half
+        #expect(RunAggregate.isRace(42_195))   // exact full
+        #expect(RunAggregate.isRace(21_800))   // half + GPS drift
+        #expect(RunAggregate.isRace(42_900))   // full + GPS drift
+        #expect(!RunAggregate.isRace(10_000))  // 10k — not a race
+        #expect(!RunAggregate.isRace(18_000))  // long training run — not a race
+        #expect(!RunAggregate.isRace(30_000))  // between half and full — not a race
+    }
+
     @Test("stable id maps each Nike run to exactly one record")
     func stableIds() {
         #expect(NikeImporter.stableId("abc-123") == NikeImporter.stableId("abc-123"))

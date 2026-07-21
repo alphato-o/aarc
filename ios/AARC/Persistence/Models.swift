@@ -48,6 +48,11 @@ final class RunRecord {
     /// Race"). nil for AARC runs, which get a generated title from RunTitleGenerator.
     var importedTitle: String? = nil
 
+    /// City the run took place in, from reverse-geocoding the GPS start (Nike
+    /// imports only). nil for treadmill / no-GPS / native runs. Powers the
+    /// year/month history summaries.
+    var city: String? = nil
+
     // Denormalised snapshot from HealthKit, for fast list rendering
     // without re-querying HK on every row. Refreshed on save.
     var cachedDistanceMeters: Double = 0
@@ -77,6 +82,7 @@ final class RunRecord {
         source: String = "aarc",
         externalId: String? = nil,
         importedTitle: String? = nil,
+        city: String? = nil,
         cachedDistanceMeters: Double = 0,
         cachedDurationSeconds: Double = 0,
         cachedAvgPaceSecPerKm: Double = 0,
@@ -94,6 +100,7 @@ final class RunRecord {
         self.source = source
         self.externalId = externalId
         self.importedTitle = importedTitle
+        self.city = city
         self.cachedDistanceMeters = cachedDistanceMeters
         self.cachedDurationSeconds = cachedDurationSeconds
         self.cachedAvgPaceSecPerKm = cachedAvgPaceSecPerKm

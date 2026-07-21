@@ -58,13 +58,13 @@ struct RunDetailView: View {
                     .font(.title3.bold())
                     .lineLimit(2)
                 if isNike {
-                    Text("NIKE ARCHIVE").font(.caption2.bold())
+                    Text("NRC ARCHIVE").font(.caption2.bold())
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(.orange.opacity(0.2), in: Capsule())
                         .foregroundStyle(.orange)
                 }
             }
-            Text(run.startedAt, format: .dateTime.weekday(.wide).month(.wide).day().hour().minute())
+            Text(run.startedAt, format: .dateTime.weekday(.wide).month(.wide).day().year().hour().minute())
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if isNike {

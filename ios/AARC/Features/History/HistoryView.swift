@@ -42,6 +42,22 @@ struct HistoryView: View {
     /// within this window (the diagnostics `runId` ≠ `RunRecord.id`).
     private static let matchWindow: TimeInterval = 120
 
+    @ViewBuilder
+    private var content: some View {
+        if shownRuns.isEmpty {
+            emptyState.frame(maxHeight: .infinity)
+        } else if category == .nike {
+            // NRC archive: a Photos-style Year → Month browser with aggregated
+            // highlights (a flat list doesn't scale to a decade of runs).
+            NRCArchiveView(runs: shownRuns)
+        } else {
+            List {
+                ForEach(shownRuns) { run in runRow(run) }
+            }
+            .listStyle(.plain)
+        }
+    }
+
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
@@ -53,15 +69,7 @@ struct HistoryView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal).padding(.vertical, 8)
 
-                if shownRuns.isEmpty {
-                    emptyState
-                        .frame(maxHeight: .infinity)
-                } else {
-                    List {
-                        ForEach(shownRuns) { run in runRow(run) }
-                    }
-                    .listStyle(.plain)
-                }
+                content
             }
             .navigationTitle("History")
             .toolbar {
@@ -174,7 +182,7 @@ struct HistoryView: View {
     private func categoryLabel(_ c: Category) -> String {
         switch c {
         case .real: return "Runs"
-        case .nike: return nikeCount == 0 ? "Nike" : "Nike (\(nikeCount))"
+        case .nike: return nikeCount == 0 ? "NRC" : "NRC (\(nikeCount))"
         case .test: return testRuns.isEmpty ? "Test" : "Test (\(testRuns.count))"
         }
     }
@@ -405,11 +413,11 @@ struct RunListRow: View {
                 .font(.subheadline.bold())
                 .lineLimit(2)
             HStack(spacing: 6) {
-                Text(run.startedAt, format: .dateTime.weekday().day().month(.abbreviated).hour().minute())
+                Text(run.startedAt, format: .dateTime.weekday().day().month(.abbreviated).year().hour().minute())
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if isNike {
-                    Text("NIKE").font(.caption2.bold())
+                    Text("NRC").font(.caption2.bold())
                         .padding(.horizontal, 5).padding(.vertical, 1)
                         .background(.orange.opacity(0.22), in: Capsule())
                         .foregroundStyle(.orange)

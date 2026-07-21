@@ -34,6 +34,7 @@ enum NikeImporter {
         let calories: Double
         let name: String
         let app: String
+        let city: String?
         let hr: [Pt]
         let pace: [Pt]
         let trail: [TPt]
@@ -70,15 +71,18 @@ enum NikeImporter {
         do { runs = try loadBundle() } catch {
             RunEventLog.shared.record("nike.import.error", String(describing: error)); return
         }
-        // Pre-load existing Nike ids so we skip already-imported runs.
+        // Index existing Nike records by id so a re-import UPSERTS (updates
+        // runType/city/series) rather than skipping — this is how an already-
+        // imported archive picks up a classifier fix (the case-insensitive
+        // location + GPS-fallback reclassification, build 170).
         let existing = (try? context.fetch(FetchDescriptor<RunRecord>(
             predicate: #Predicate { $0.source == "nike" }))) ?? []
-        let known = Set(existing.compactMap { $0.externalId })
+        var byExt: [String: RunRecord] = [:]
+        for r in existing { if let e = r.externalId { byExt[e] = r } }
 
         var p = Progress(done: 0, total: runs.count, imported: 0, skipped: 0)
         for nr in runs {
             defer { p.done += 1; onProgress(p) }
-            if known.contains(nr.nikeId) { p.skipped += 1; continue }
 
             let started = Date(timeIntervalSince1970: nr.startMs / 1000)
             let ended = nr.endMs.map { Date(timeIntervalSince1970: $0 / 1000) }
@@ -98,30 +102,47 @@ enum NikeImporter {
             }
             let blob = try? JSONEncoder().encode(series)
 
-            let rec = RunRecord(
-                id: stableId(nr.nikeId),
-                startedAt: started,
-                endedAt: ended,
-                personality: "roast_coach",
-                isTestData: false,
-                healthKitWorkoutUUID: nil,
-                runTypeRaw: nr.runType,
-                source: "nike",
-                externalId: nr.nikeId,
-                importedTitle: nr.name,
-                cachedDistanceMeters: nr.distanceM,
-                cachedDurationSeconds: nr.durationS,
-                cachedAvgPaceSecPerKm: nr.avgPaceSecPerKm,
-                cachedEnergyKcal: nr.calories,
-                seriesBlob: blob
-            )
-            context.insert(rec)
+            let rec: RunRecord
+            if let existing = byExt[nr.nikeId] {
+                // UPDATE in place — refresh the fields the bundle can correct
+                // (runType reclassification, city, series).
+                existing.runTypeRaw = nr.runType
+                existing.city = nr.city
+                existing.importedTitle = nr.name
+                existing.cachedDistanceMeters = nr.distanceM
+                existing.cachedDurationSeconds = nr.durationS
+                existing.cachedAvgPaceSecPerKm = nr.avgPaceSecPerKm
+                existing.cachedEnergyKcal = nr.calories
+                existing.seriesBlob = blob
+                rec = existing
+                p.skipped += 1
+            } else {
+                rec = RunRecord(
+                    id: stableId(nr.nikeId),
+                    startedAt: started,
+                    endedAt: ended,
+                    personality: "roast_coach",
+                    isTestData: false,
+                    healthKitWorkoutUUID: nil,
+                    runTypeRaw: nr.runType,
+                    source: "nike",
+                    externalId: nr.nikeId,
+                    importedTitle: nr.name,
+                    city: nr.city,
+                    cachedDistanceMeters: nr.distanceM,
+                    cachedDurationSeconds: nr.durationS,
+                    cachedAvgPaceSecPerKm: nr.avgPaceSecPerKm,
+                    cachedEnergyKcal: nr.calories,
+                    seriesBlob: blob
+                )
+                context.insert(rec)
+                p.imported += 1
+            }
             try? context.save()
-            p.imported += 1
 
             // Push to the dashboard via the standard event stream (WGS-84 gps
-            // events for the map, metrics events for the charts). Fire-and-
-            // forget; the local record is the source of truth regardless.
+            // events for the map, metrics events for the charts). Re-ingesting
+            // the same runId updates it, so upserts fix the dashboard too.
             if pushToDashboard {
                 let lines = eventStream(nr)
                 _ = await RunEventLog.uploadEventStream(runId: rec.id, jsonlLines: lines)
