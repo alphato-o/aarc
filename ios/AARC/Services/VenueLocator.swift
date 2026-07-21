@@ -51,27 +51,47 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         return marks?.first?.locality ?? marks?.first?.subAdministrativeArea
     }
 
-    /// Up to 5 nearby venues, ranked nearest-first, de-duped by name.
+    /// Up to 6 nearby venues, ranked nearest-first, de-duped by name.
     ///
-    /// TWO searches, because one can't cover both worlds: the gym-category
-    /// query ("hotel gym fitness") returns GYM POIs, and a hotel's own gym is
-    /// not separately indexed — two real runs proved Park Hyatt never appears
-    /// while its neighbours' fitness centres do. So a second query surfaces
-    /// nearby HOTELS by name; hotel results rank first (the founder's usual
-    /// venue is a hotel gym), then gyms, all nearest-first within each group.
+    /// v3 of this search, built on three runs of failure data. The keyword
+    /// query ("hotel") matches POIs by NAME — so budget chains literally
+    /// named "…Hotel Branch" outrank a luxury hotel whose Chinese POI name
+    /// (e.g. 柏悦酒店-style names on China's map data) doesn't score on the
+    /// English word at all. Fix: CATEGORY-based lookup
+    /// (MKLocalPointsOfInterestRequest, .hotel/.fitnessCenter) — matches by
+    /// what a place IS, language-independent, no venue names baked anywhere.
+    /// Keyword search stays as a bilingual fallback. Category hotels first
+    /// (the founder's usual venue is a hotel gym), then category gyms, then
+    /// keyword stragglers; nearest-first within each group.
     private func nearbyVenues(_ loc: CLLocation) async -> [String] {
-        async let hotels = searchNames("hotel", near: loc)
-        async let gyms = searchNames("hotel gym fitness", near: loc)
-        let ranked = (await hotels) + (await gyms)
+        async let catHotels = categoryVenues([.hotel], near: loc)
+        async let catGyms = categoryVenues([.fitnessCenter], near: loc)
+        async let kw = searchNames("酒店 hotel", near: loc)
+        let ranked = (await catHotels) + (await catGyms) + (await kw)
         var seen = Set<String>()
         var names: [String] = []
         for name in ranked {
             guard !seen.contains(name) else { continue }
             seen.insert(name)
             names.append(name)
-            if names.count == 5 { break }
+            if names.count == 6 { break }
         }
         return names
+    }
+
+    // Distance cap rationale: indoor GPS is coarse (~100-300m off) AND a big
+    // hotel's map pin sits at its tower/entrance, not the gym — the TRUE venue
+    // can read 400-600m away while you're standing inside it. 1200m clears that
+    // headroom while still excluding the km-away impostors (the "Kerry Hotel
+    // from miles away" field bug). The runner confirms; we never assert.
+    private static let maxVenueMeters: CLLocationDistance = 1200
+
+    /// Category-based POI lookup: language-independent, name-independent.
+    private func categoryVenues(_ cats: [MKPointOfInterestCategory], near loc: CLLocation) async -> [String] {
+        let req = MKLocalPointsOfInterestRequest(center: loc.coordinate, radius: Self.maxVenueMeters)
+        req.pointOfInterestFilter = MKPointOfInterestFilter(including: cats)
+        guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
+        return rankedNames(resp.mapItems, near: loc)
     }
 
     private func searchNames(_ query: String, near loc: CLLocation) async -> [String] {
@@ -80,20 +100,17 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         req.region = MKCoordinateRegion(center: loc.coordinate,
                                         latitudinalMeters: 2500, longitudinalMeters: 2500)
         guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
-        // Hard-cap by ACTUAL distance so we never ask "are you at X?" about a
-        // venue that's physically impossible to be in (MKLocalSearch's region is
-        // only a hint — it returned "Kerry Hotel" from MILES away). But the cap
-        // must survive real error: indoor GPS is coarse (~100-300m off) AND a big
-        // hotel's map pin sits at its tower/entrance, not the gym — so the TRUE
-        // venue can read 400-600m away while you're standing in it. 1000m clears
-        // that headroom (real venue makes the list) while still excluding the
-        // km-away impostors. The runner confirms the right one from the list.
-        let maxMeters: CLLocationDistance = 1000
-        return resp.mapItems
+        return rankedNames(resp.mapItems, near: loc)
+    }
+
+    /// Hard-cap by ACTUAL distance (the request region/radius is only a hint)
+    /// and sort nearest-first.
+    private func rankedNames(_ items: [MKMapItem], near loc: CLLocation) -> [String] {
+        items
             .compactMap { item -> (String, CLLocationDistance)? in
                 guard let name = item.name,
                       let d = item.placemark.location?.distance(from: loc),
-                      d <= maxMeters else { return nil }
+                      d <= Self.maxVenueMeters else { return nil }
                 return (name, d)
             }
             .sorted { $0.1 < $1.1 }
