@@ -18,54 +18,62 @@ struct InRunFeedbackCard: View {
     private var estDur: Double { max(2, line.estimatedTotalDwell - 6) }
 
     var body: some View {
-        VStack(spacing: 12) {
-            // Full-width heart on top — a fat target, no aiming mid-stride.
-            Button(action: onHeart) {
-                HStack(spacing: 8) {
-                    Image(systemName: line.liked ? "heart.fill" : "heart")
-                        .font(.system(size: 22, weight: .semibold))
-                    Text(line.liked ? "Loved" : "Love this line")
-                        .font(.subheadline.bold())
+        // The ENTIRE card is the heart button (founder: "put the entire text
+        // area as a tappable area... all I need is to tap the big text area,
+        // can't miss this"). A watermark heart sits behind the text as the
+        // affordance; it fills pink when loved. Tap again to un-love.
+        Button(action: onHeart) {
+            VStack(spacing: 12) {
+                HStack {
+                    Text(who).font(.caption.bold()).foregroundStyle(accent)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Image(systemName: line.liked ? "heart.fill" : "heart")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text(line.liked ? "Loved" : "Tap anywhere to love")
+                            .font(.caption.bold())
+                    }
+                    .foregroundStyle(line.liked ? .pink : .white.opacity(0.55))
                 }
-                .foregroundStyle(line.liked ? .pink : .white.opacity(0.9))
-                .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .background(line.liked ? Color.pink.opacity(0.18) : .white.opacity(0.08),
-                            in: RoundedRectangle(cornerRadius: 14))
-            }
-            .buttonStyle(.plain)
-
-            HStack {
-                Text(who).font(.caption.bold()).foregroundStyle(accent)
-                Spacer()
-            }
-            Group {
-                if line.isPlaying {
-                    TimelineView(.animation(minimumInterval: 0.06)) { tl in
-                        // Roll against the REAL audio time so the highlight's
-                        // END lands with the audio's end (char estimate ran long).
-                        let dur = (tts.playbackDuration ?? estDur)
-                        let start = tts.playbackStartedAt ?? line.startedAt
-                        let elapsed = tl.date.timeIntervalSince(start)
-                        let progress = min(elapsed / max(dur, 0.5), 0.999)
-                        RollingKaraoke(text: line.text.strippingAudioTags, progress: progress)
+                Group {
+                    if line.isPlaying {
+                        TimelineView(.animation(minimumInterval: 0.06)) { tl in
+                            // Roll against the REAL audio time so the highlight's
+                            // END lands with the audio's end (char estimate ran long).
+                            let dur = (tts.playbackDuration ?? estDur)
+                            let start = tts.playbackStartedAt ?? line.startedAt
+                            let elapsed = tl.date.timeIntervalSince(start)
+                            let progress = min(elapsed / max(dur, 0.5), 0.999)
+                            RollingKaraoke(text: line.text.strippingAudioTags, progress: progress)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                    } else {
+                        // Audio done → show the WHOLE line, font auto-fit to the
+                        // box, static (no scroll/highlight) so it's readable while
+                        // you decide on the heart — no end-of-line "dance".
+                        StaticFitQuote(text: line.text.strippingAudioTags)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                } else {
-                    // Audio done → show the WHOLE line, font auto-fit to the
-                    // box, static (no scroll/highlight) so it's readable while
-                    // you decide on the heart — no end-of-line "dance".
-                    StaticFitQuote(text: line.text.strippingAudioTags)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(maxHeight: .infinity)
+                .clipped()
             }
-            .frame(maxHeight: .infinity)
-            .clipped()
+            .padding(16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18))
+            .background(alignment: .center) {
+                // Watermark heart behind the text — the whole card reads as
+                // one giant like button without stealing legibility.
+                Image(systemName: "heart.fill")
+                    .font(.system(size: 170))
+                    .foregroundStyle(line.liked ? Color.pink.opacity(0.14) : Color.white.opacity(0.045))
+                    .animation(.easeInOut(duration: 0.25), value: line.liked)
+            }
+            .overlay(RoundedRectangle(cornerRadius: 18).stroke(
+                line.liked ? Color.pink.opacity(0.45) : accent.opacity(0.3), lineWidth: 1))
+            .contentShape(Rectangle())
         }
-        .padding(16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18))
-        .overlay(RoundedRectangle(cornerRadius: 18).stroke(accent.opacity(0.3), lineWidth: 1))
+        .buttonStyle(.plain)
     }
 }
 

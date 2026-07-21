@@ -1,37 +1,31 @@
 import SwiftUI
 
-/// In-run venue confirmation, shown in the dynamic-chart slot. One yes/no
-/// question, two big tap targets (running hands fat-finger small buttons —
-/// these fill half the card each). A "yes" makes the venue fact for the
-/// coaches; a "no" advances to the next candidate. Kept deliberately tiny in
-/// copy so it reads at a glance mid-stride.
+/// In-run venue confirmation, shown in the dynamic-chart slot.
+///
+/// v2 (founder feedback): cohort layout — up to 3 venues as BIG full-width
+/// tap targets ("Are you at one of these?") plus a "None of these" row, so
+/// wrong answers get ruled out three at a time instead of one yes/no per
+/// beat. Everything is sized for a sweating hand mid-stride: tall rows, the
+/// whole row tappable, no small targets anywhere.
 struct InRunVenueConfirmCard: View {
-    let venue: String
-    let onYes: () -> Void
-    let onNo: () -> Void
+    let venues: [String]
+    var onPick: (String) -> Void
+    var onNone: () -> Void
 
     var body: some View {
-        VStack(spacing: 18) {
-            VStack(spacing: 6) {
-                Text("QUICK — WHERE ARE YOU?")
-                    .font(.caption.weight(.semibold))
-                    .tracking(1.2)
-                    .foregroundStyle(.secondary)
-                Text("Are you at \(venue)?")
-                    .font(.title3.weight(.bold))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
-                    .foregroundStyle(.primary)
-            }
-            .frame(maxWidth: .infinity)
+        VStack(spacing: 10) {
+            Text("ARE YOU AT ONE OF THESE?")
+                .font(.caption.weight(.semibold))
+                .tracking(1.2)
+                .foregroundStyle(.secondary)
 
-            HStack(spacing: 12) {
-                bigButton(title: "No", tint: .secondary, action: onNo)
-                bigButton(title: "Yes", tint: .teal, action: onYes)
+            ForEach(venues, id: \.self) { v in
+                bigRow(title: v, tint: .teal) { onPick(v) }
             }
+
+            bigRow(title: "None of these", tint: .secondary, action: onNone)
         }
-        .padding(20)
+        .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -43,17 +37,21 @@ struct InRunVenueConfirmCard: View {
         )
     }
 
-    private func bigButton(title: String, tint: Color, action: @escaping () -> Void) -> some View {
+    private func bigRow(title: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.title2.weight(.bold))
-                .frame(maxWidth: .infinity, minHeight: 72)
+                .font(.headline.weight(.bold))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.65)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, minHeight: 58, maxHeight: .infinity)
                 .background(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .fill(tint.opacity(0.22))
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(tint.opacity(tint == .secondary ? 0.14 : 0.20))
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(tint.opacity(0.5), lineWidth: 1)
                 )
                 .foregroundStyle(tint == .secondary ? Color.primary : tint)

@@ -200,7 +200,11 @@ final class VoiceFeedbackQueue {
         // that's what was guillotining Jessica mid-sentence ("a coach line
         // preempted her"). Only a .milestone (split/halfway/finish) may
         // interrupt, because it has to land on the marker.
-        if let cur = currentlyPlaying, item.priority == .milestone, cur.priority < .milestone {
+        // Home-base lines carry .milestone priority so a split can't guillotine
+        // them once playing (founder: "home base is the most relevant"), but
+        // they enter POLITELY — only true run milestones may cut a line that's
+        // already speaking.
+        if let cur = currentlyPlaying, item.priority == .milestone, item.source != "home", cur.priority < .milestone {
             // GRACEFUL YIELD: if the playing line has only a few seconds left
             // (real audio timing from RemoteTTS), let it FINISH and slot the
             // milestone in right behind it, instead of guillotining a nearly

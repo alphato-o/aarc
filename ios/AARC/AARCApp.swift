@@ -40,6 +40,7 @@ struct AARCApp: App {
                 .task {
                     if ShareCardPreviewHarness.enabled { ShareCardPreviewHarness.run() }
                     if SummarySnapshotHarness.enabled { SummarySnapshotHarness.run(); return }
+                    if UISnapshotHarness.enabled { UISnapshotHarness.run(); return }
                     // Harness A — headless whole-run feedback preview. Runs the
                     // sim and exits the startup path (no real activation needed).
                     if let plan = ProcessInfo.processInfo.environment["AARC_RUN_SIM"] {

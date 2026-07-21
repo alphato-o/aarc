@@ -237,9 +237,13 @@ final class LiveMetricsConsumer {
             // (no continuous tracking, so no bogus route). The VENUE is not
             // asserted from the guess — we seed the confirm popup with the
             // nearby candidates and let the runner tap the real one.
-            // Skipped in UI-test journeys: the one-shot triggers the system
-            // location prompt, which breaks deterministic screenshots.
-            if !AppEnv.uiTest {
+            // UI-test journeys: no location one-shot (the system prompt breaks
+            // deterministic screenshots) — seed mock candidates instead so the
+            // cohort card renders and is sim-verifiable. Real runs do the
+            // one-shot capture.
+            if AppEnv.uiTest {
+                VenueConfirm.shared.begin(candidates: VenueConfirm.uiTestSeed)
+            } else {
                 Task { @MainActor in
                     if let v = await VenueLocator.shared.capture() {
                         PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city)

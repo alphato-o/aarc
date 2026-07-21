@@ -1,63 +1,64 @@
 import Foundation
 import Observation
 
-/// Drives the in-run "Are you at X?" venue confirmation.
+/// Drives the in-run venue confirmation.
 ///
-/// Treadmill location only resolves to a city; MapKit offers nearby venue
-/// candidates but they're frequently wrong (run BFDD0366: the runner was at
-/// Park Hyatt Beijing, the model confabulated Kerry Hotel / The Opposite House
-/// 11×). Rather than assert a guess — a wrong venue kills the vibe and there's
-/// no way to correct it mid-run — we ASK the runner, one yes/no at a time, big
-/// buttons, in the dynamic-chart slot. Only a "yes" becomes fact for the
-/// coaches (`PlaceContext.setConfirmedVenue`). If every candidate is rejected
-/// we assert nothing — no fabricated context is better than wrong context.
+/// v2 (founder feedback 2026-07-21): one-at-a-time yes/no was too slow to rule
+/// out wrong answers mid-stride, and the buttons were too small. Now the card
+/// offers a COHORT of up to 3 candidates as big tap targets — "Are you at one
+/// of these?" — plus a full-width "None of these". Tapping a venue makes it
+/// FACT for the coaches (`PlaceContext.setConfirmedVenue`); "None of these"
+/// advances to the next cohort; exhausting all cohorts asserts nothing — no
+/// fabricated context is better than wrong context.
 @MainActor
 @Observable
 final class VenueConfirm {
     static let shared = VenueConfirm()
 
-    private(set) var candidates: [String] = []
-    private(set) var index = 0
-    private(set) var resolved = false   // confirmed OR exhausted → stop asking
-    private(set) var paused = false     // brief beat between questions after a "no"
+    static let cohortSize = 3
+    /// Deterministic candidates for UI-test journeys/screenshots (the sim has
+    /// no location; the card must still be sim-verifiable per founder rule).
+    static let uiTestSeed = ["The Grand Mock Hotel", "Mockingbird Fitness Club", "Placeholder Hotel Beijing"]
 
-    /// The venue currently being asked about, or nil when there's nothing to
+    private(set) var candidates: [String] = []
+    private(set) var cohortStart = 0
+    private(set) var resolved = false   // confirmed OR exhausted → stop asking
+    private(set) var paused = false     // brief beat between cohorts after "none"
+
+    /// The venues currently on offer (up to 3), empty when there's nothing to
     /// ask (resolved, mid-beat, or no candidates). The popup binds to this.
-    var pending: String? {
-        guard !resolved, !paused, index < candidates.count else { return nil }
-        return candidates[index]
+    var cohort: [String] {
+        guard !resolved, !paused, cohortStart < candidates.count else { return [] }
+        return Array(candidates[cohortStart..<min(cohortStart + Self.cohortSize, candidates.count)])
     }
 
     /// Seed from the treadmill one-shot. No candidates → immediately resolved
     /// (nothing to confirm; the server then simply won't assert a venue).
     func begin(candidates: [String]) {
         self.candidates = candidates
-        self.index = 0
+        self.cohortStart = 0
         self.resolved = candidates.isEmpty
         self.paused = false
-        PlaceContext.shared.clearVenue()   // assert nothing until a "yes"
-        // Log WHAT MapKit offered (not just the outcome) so the venue search can
-        // be calibrated from real runs — e.g. did the actual venue even make the
-        // list, or was the radius/query wrong?
+        PlaceContext.shared.clearVenue()   // assert nothing until a tap
         RunEventLog.shared.record(
             "venue.candidates",
             candidates.isEmpty ? "(none found)" : candidates.joined(separator: " | "))
     }
 
-    /// "Yes" — this candidate is where they are. It becomes fact.
-    func confirmYes() {
-        guard let v = pending else { return }
-        PlaceContext.shared.setConfirmedVenue(v)
+    /// The runner tapped a venue — it's where they are. Fact.
+    func confirmVenue(_ name: String) {
+        guard cohort.contains(name) else { return }
+        PlaceContext.shared.setConfirmedVenue(name)
         resolved = true
-        RunEventLog.shared.record("venue.confirmed", v)
+        RunEventLog.shared.record("venue.confirmed", name)
     }
 
-    /// "No" — advance to the next candidate after a short beat, or give up if
-    /// we've run out (and then assert nothing).
-    func confirmNo() {
+    /// "None of these" — advance to the next cohort after a short beat, or
+    /// give up (and assert nothing) when the candidates run out.
+    func rejectCohort() {
         guard !resolved else { return }
-        index += 1
-        if index >= candidates.count {
+        cohortStart += Self.cohortSize
+        if cohortStart >= candidates.count {
             resolved = true
             PlaceContext.shared.clearVenue()
             RunEventLog.shared.record("venue.exhausted", "all \(candidates.count) candidates rejected")
@@ -65,7 +66,7 @@ final class VenueConfirm {
         }
         paused = true
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: .seconds(1.0))
             paused = false
         }
     }
@@ -73,7 +74,7 @@ final class VenueConfirm {
     /// End-of-run / new-run reset.
     func reset() {
         candidates = []
-        index = 0
+        cohortStart = 0
         resolved = false
         paused = false
     }

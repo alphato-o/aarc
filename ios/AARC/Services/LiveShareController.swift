@@ -80,11 +80,16 @@ final class LiveShareController {
               let voiceId = line["voiceId"] as? String, !text.isEmpty
         else { return }
         NSLog("[live] playing line from home (\(voiceId.prefix(8)))")
-        // .coaching, NOT .milestone: a home line is a guest in the run, it must
-        // never cut Ricky/Jessica mid-sentence (only km-split milestones may
-        // preempt). It queues and plays in the next natural gap. Generous
-        // expiry so a busy stretch delays it rather than dropping it.
-        Speaker.shared.speak(text, priority: .coaching, source: "home",
+        // .milestone priority — founder directive (2026-07-21, after his 5K
+        // report got preempted by the 7K split, "oops"-resumed, and cut again
+        // → never heard): "home base should have higher priority as your line
+        // is going to be the most relevant and things I do need to know."
+        // At .milestone: a home line still doesn't CUT a playing coach line
+        // (equal priority never preempts — the earlier 'you cut over Rick'
+        // fix holds), but once playing it can't be guillotined by a km split
+        // either; the split queues right behind it. Generous expiry so a busy
+        // stretch delays rather than drops it.
+        Speaker.shared.speak(text, priority: .milestone, source: "home",
                              expiresAfter: 240, voiceId: voiceId)
     }
 

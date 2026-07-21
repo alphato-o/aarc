@@ -96,14 +96,14 @@ struct ActiveRunView: View {
                     InRunFeedbackCard(line: line) { subtitleStore.toggleLike() }
                         .id(line.id)
                         .transition(.opacity)
-                } else if let venue = venueConfirm.pending {
+                } else if !venueConfirm.cohort.isEmpty {
                     // Takes the chart slot during quiet moments until the runner
                     // answers — never covers a live coach line above.
                     InRunVenueConfirmCard(
-                        venue: venue,
-                        onYes: { venueConfirm.confirmYes() },
-                        onNo: { venueConfirm.confirmNo() })
-                        .id(venue)
+                        venues: venueConfirm.cohort,
+                        onPick: { venueConfirm.confirmVenue($0) },
+                        onNone: { venueConfirm.rejectCohort() })
+                        .id(venueConfirm.cohortStart)
                         .transition(.opacity)
                 } else {
                     VStack(spacing: 8) {
@@ -117,7 +117,8 @@ struct ActiveRunView: View {
             endLink
         }
         .animation(.easeInOut(duration: 0.3), value: subtitleStore.currentLine?.id)
-        .animation(.easeInOut(duration: 0.3), value: venueConfirm.pending)
+        .animation(.easeInOut(duration: 0.3), value: venueConfirm.cohortStart)
+        .animation(.easeInOut(duration: 0.3), value: venueConfirm.cohort.isEmpty)
         .padding(.horizontal, 20)
         .padding(.top, 4)  // breathing room under the iOS clock / Dynamic Island
     }
