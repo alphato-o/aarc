@@ -1,3 +1,4 @@
+import AARCKit
 import CoreLocation
 import MapKit
 
@@ -64,9 +65,24 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
     /// (the founder's usual venue is a hotel gym), then category gyms, then
     /// keyword stragglers; nearest-first within each group.
     private func nearbyVenues(_ loc: CLLocation) async -> [String] {
-        async let catHotels = categoryVenues([.hotel], near: loc)
-        async let catGyms = categoryVenues([.fitnessCenter], near: loc)
-        async let kw = searchNames("酒店 hotel", near: loc)
+        // CHINA DATUM (the bug behind FOUR runs of wrong venue cards): the CL
+        // fix is WGS-84 but MapKit's search space in mainland China is GCJ-02
+        // — offset ~500m in Beijing. Feeding the raw fix meant the search
+        // centre was half a kilometre off AND the distance cap compared
+        // coordinates across two datums, so the real hotel fell outside the
+        // cap while random hotels drifted inside it. The outdoor POI path has
+        // carried this exact transform since the route-map fix; the treadmill
+        // path just never got it.
+        let center: CLLocation
+        if ChinaCoordinateTransform.isMainlandChina(loc.coordinate) {
+            let c = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
+            center = CLLocation(latitude: c.latitude, longitude: c.longitude)
+        } else {
+            center = loc
+        }
+        async let catHotels = categoryVenues([.hotel], near: center)
+        async let catGyms = categoryVenues([.fitnessCenter], near: center)
+        async let kw = searchNames("酒店 hotel", near: center)
         let ranked = (await catHotels) + (await catGyms) + (await kw)
         var seen = Set<String>()
         var names: [String] = []
