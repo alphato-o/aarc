@@ -7,8 +7,9 @@ import {
 import { systemPromptFor } from "../lib/personalities";
 import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
+import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 
-export type Env = LLMEnv & SentryEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv;
 
 export async function generateScriptHandler(
     request: Request,
@@ -38,7 +39,7 @@ export async function generateScriptHandler(
         );
     }
 
-    const userPrompt = buildUserPrompt(req);
+    const userPrompt = await buildUserPrompt(req, env);
 
     let validated: { data: ReturnType<typeof ScriptSchema.parse> };
     let provider: "openrouter" | "anthropic";
@@ -91,9 +92,10 @@ export async function generateScriptHandler(
     return json({ ok: true, ...response });
 }
 
-function buildUserPrompt(
+async function buildUserPrompt(
     req: z.infer<typeof GenerateScriptRequestSchema>,
-): string {
+    env: Env,
+): Promise<string> {
     const lines: string[] = [];
 
     switch (req.planKind) {
@@ -138,6 +140,7 @@ function buildUserPrompt(
             lines.push(`- "${ex}"`);
         }
     }
+    await pushBriefingBlock(lines, env, "ricky", { chance: 1 });
     lines.push("", "Generate the script now. JSON only.");
     return lines.join("\n");
 }

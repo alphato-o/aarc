@@ -9,10 +9,11 @@ import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
-import { buildRepetitionBan } from "../lib/repetition";
+import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
+import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 
-export type Env = LLMEnv & SentryEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv;
 
 // Token ceiling per Jessica length mode — a REAL mechanical cap, not just a
 // hint. At ~4 chars/token: quip ≤140c, medium ~220-380c, indulgent ~450-650c,
@@ -74,7 +75,7 @@ export async function reactLineHandler(
         );
     }
 
-    const userPrompt = await buildUserPrompt(req, lengthMode);
+    const userPrompt = await buildUserPrompt(req, lengthMode, env);
 
     // Cap output by length mode so a quip can't run long and an indulgent
     // passage has room to breathe. Char targets: quip <=140, medium ~220-380,
@@ -196,7 +197,7 @@ That draft used the BANNED opener: a hook word/phrase then a dash, or it opened 
     }
 }
 
-async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthMode): Promise<string> {
+async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthMode, env: Env): Promise<string> {
     const c = req.runContext;
     const lines: string[] = [];
 
@@ -234,6 +235,7 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
     }
     pushPlaceBlock(lines, c.place);
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
+    await pushBriefingBlock(lines, env, "jessica");
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");
@@ -264,6 +266,13 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
         if (ban) {
             lines.push("");
             lines.push(ban);
+        }
+
+        // Name density is rationed separately — see buildNameRation.
+        const ration = buildNameRation(req.recentDispatched, "jessica");
+        if (ration) {
+            lines.push("");
+            lines.push(ration);
         }
     }
 

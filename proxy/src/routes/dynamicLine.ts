@@ -8,10 +8,11 @@ import { systemPromptFor, runPhaseBlock } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
-import { buildRepetitionBan } from "../lib/repetition";
+import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
+import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 
-export type Env = LLMEnv & SentryEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv;
 
 export async function dynamicLineHandler(
     request: Request,
@@ -41,7 +42,7 @@ export async function dynamicLineHandler(
         );
     }
 
-    const userPrompt = await buildUserPrompt(req);
+    const userPrompt = await buildUserPrompt(req, env);
 
     let raw: string;
     let provider: "openrouter" | "anthropic";
@@ -145,7 +146,7 @@ That opened with a BANNED tic — either announcing how long it's been ("X minut
     }
 }
 
-async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
+async function buildUserPrompt(req: DynamicLineRequest, env: Env): Promise<string> {
     const c = req.runContext;
     const lines: string[] = [];
 
@@ -200,6 +201,7 @@ async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
     }
     pushPlaceBlock(lines, c.place);
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
+    await pushBriefingBlock(lines, env, "ricky");
 
     if (req.customNote && req.customNote.trim().length > 0) {
         lines.push("");
@@ -232,6 +234,13 @@ async function buildUserPrompt(req: DynamicLineRequest): Promise<string> {
         if (ban) {
             lines.push("");
             lines.push(ban);
+        }
+
+        // Name density is rationed separately — see buildNameRation.
+        const ration = buildNameRation(req.recentDispatched, "ricky");
+        if (ration) {
+            lines.push("");
+            lines.push(ration);
         }
     }
 

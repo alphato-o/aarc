@@ -9,8 +9,9 @@ import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
+import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 
-export type Env = LLMEnv & SentryEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv;
 
 export async function musicCommentHandler(
     request: Request,
@@ -40,7 +41,7 @@ export async function musicCommentHandler(
         );
     }
 
-    const userPrompt = await buildUserPrompt(req);
+    const userPrompt = await buildUserPrompt(req, env);
 
     let raw: string;
     let provider: "openrouter" | "anthropic";
@@ -103,7 +104,7 @@ export async function musicCommentHandler(
     return json({ ok: true, ...response });
 }
 
-async function buildUserPrompt(req: MusicCommentRequest): Promise<string> {
+async function buildUserPrompt(req: MusicCommentRequest, env: Env): Promise<string> {
     const lines: string[] = [];
 
     if (req.currentLyric) {
@@ -151,6 +152,7 @@ async function buildUserPrompt(req: MusicCommentRequest): Promise<string> {
     lines.push(`- run type: ${c.runType}`);
     pushPlaceBlock(lines, c.place);
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
+    await pushBriefingBlock(lines, env, "ricky");
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");

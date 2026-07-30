@@ -110,5 +110,63 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         return json({ ok: true });
     }
 
+    // ---- HOME BASE BRIEFING — the agent feeds real-world intel to BOTH voices.
+    // Unlike /live/inject (one spoken line, one run), a briefing item is
+    // MATERIAL: it rides along in every Ricky/Jessica prompt until removed.
+
+    // POST /live/briefing { items:[{kind,text}] | text, kind, ttlHours, replace }
+    if (request.method === "POST" && p === "/live/briefing") {
+        if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const b = await request.json<{
+            items?: { kind?: string; text?: string }[];
+            text?: string;
+            kind?: string;
+            ttlHours?: number;
+            replace?: boolean;
+        }>();
+        const raw = b.items ?? (b.text ? [{ kind: b.kind, text: b.text }] : []);
+        const items = raw
+            .map((i) => ({ kind: (i.kind ?? "buzz").slice(0, 24), text: (i.text ?? "").trim().slice(0, 400) }))
+            .filter((i) => i.text.length > 0);
+        if (items.length === 0) return json({ ok: false, error: "items[] or text required" }, 400);
+        // Briefings go stale fast — default 18h, so "today's buzz" can't be
+        // read out tomorrow as if it were fresh.
+        const ttl = b.ttlHours ?? 18;
+        const expires = new Date(Date.now() + ttl * 3600_000).toISOString();
+        const stmts = [];
+        if (b.replace) stmts.push(env.DB.prepare("DELETE FROM home_briefing"));
+        for (const i of items) {
+            stmts.push(
+                env.DB.prepare("INSERT INTO home_briefing (kind, text, expires_at) VALUES (?, ?, ?)")
+                    .bind(i.kind, i.text, expires),
+            );
+        }
+        await env.DB.batch(stmts);
+        return json({ ok: true, stored: items.length, expiresAt: expires, replaced: !!b.replace });
+    }
+
+    // GET /live/briefing — ADMIN reads what the voices are currently being fed
+    if (request.method === "GET" && p === "/live/briefing") {
+        if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const res = await env.DB
+            .prepare("SELECT id, kind, text, created_at, expires_at FROM home_briefing ORDER BY id DESC LIMIT 20")
+            .all();
+        const rows = (res.results ?? []) as { expires_at: string | null }[];
+        const live = rows.filter((r) => !r.expires_at || r.expires_at > now).length;
+        return json({ ok: true, live, items: res.results ?? [] });
+    }
+
+    // DELETE /live/briefing[?id=] — clear one item, or the whole board
+    if (request.method === "DELETE" && p === "/live/briefing") {
+        if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const id = url.searchParams.get("id");
+        if (id) {
+            await env.DB.prepare("DELETE FROM home_briefing WHERE id = ?").bind(Number(id)).run();
+        } else {
+            await env.DB.prepare("DELETE FROM home_briefing").run();
+        }
+        return json({ ok: true, cleared: id ?? "all" });
+    }
+
     return json({ ok: false, error: "not found" }, 404);
 }

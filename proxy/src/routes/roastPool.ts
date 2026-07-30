@@ -4,8 +4,9 @@ import { systemPromptFor } from "../lib/personalities";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
+import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 
-export type Env = LLMEnv & SentryEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv;
 
 /// One-batch in-run roast library, generated at run start (founder idea,
 /// 2026-07-10): 12-20 SHORT roasts in a single LLM call. Because the model
@@ -54,7 +55,7 @@ export async function roastPoolHandler(request: Request, env: Env): Promise<Resp
     }
 
     const n = req.poolSize ?? 16;
-    const userPrompt = await buildUserPrompt(req, n);
+    const userPrompt = await buildUserPrompt(req, n, env);
 
     try {
         const out = await callLLMJSON(
@@ -85,7 +86,7 @@ export async function roastPoolHandler(request: Request, env: Env): Promise<Resp
     }
 }
 
-async function buildUserPrompt(req: z.infer<typeof RoastPoolRequestSchema>, n: number): Promise<string> {
+async function buildUserPrompt(req: z.infer<typeof RoastPoolRequestSchema>, n: number, env: Env): Promise<string> {
     const c = req.runContext;
     const lines: string[] = [];
     lines.push(`Generate a POOL of ${n} SHORT stand-alone roast lines for this run. They will be cached and fired one at a time during quiet stretches, in random order, at unknown moments.`);
@@ -94,6 +95,7 @@ async function buildUserPrompt(req: z.infer<typeof RoastPoolRequestSchema>, n: n
     lines.push(`- plan: ${c.planKind}${c.planDistanceKm ? ` ${c.planDistanceKm} km` : ""}${c.planTimeMinutes ? ` ${c.planTimeMinutes} min` : ""}`);
     lines.push(`- run type: ${c.runType}`);
     pushAmbientBlock(lines, req.ambient, await fetchAmbient(req.ambient ?? {}));
+    await pushBriefingBlock(lines, env, "ricky", { chance: 1 });
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");
