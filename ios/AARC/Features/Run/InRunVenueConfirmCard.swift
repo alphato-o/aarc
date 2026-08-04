@@ -3,18 +3,32 @@ import SwiftUI
 /// In-run venue confirmation, shown in the dynamic-chart slot.
 ///
 /// v2 (founder feedback): cohort layout — up to 3 venues as BIG full-width
-/// tap targets ("Are you at one of these?") plus a "None of these" row, so
-/// wrong answers get ruled out three at a time instead of one yes/no per
-/// beat. Everything is sized for a sweating hand mid-stride: tall rows, the
-/// whole row tappable, no small targets anywhere.
+/// tap targets, so wrong answers got ruled out three at a time.
+///
+/// v3 (founder feedback 2026-08-04): "do not attempt to hammer me — ask one
+/// question, pause a little, then the next." Back to ONE venue per card, which
+/// is now the fast path rather than the slow one: the datum fix in
+/// VenueLocator puts the true venue FIRST (verified against Park Hyatt
+/// Beijing: position 1 of 17), so the first question is usually the last.
+/// The copy follows the count so a single card never reads "one of these",
+/// and the layout still assumes a sweating hand mid-stride: tall rows, whole
+/// row tappable, no small targets.
 struct InRunVenueConfirmCard: View {
     let venues: [String]
     var onPick: (String) -> Void
     var onNone: () -> Void
 
+    private var prompt: String {
+        venues.count == 1 ? "ARE YOU HERE?" : "ARE YOU AT ONE OF THESE?"
+    }
+    /// A single question deserves a plain "No", not "None of these".
+    private var dismissTitle: String {
+        venues.count == 1 ? "No" : "None of these"
+    }
+
     var body: some View {
         VStack(spacing: 10) {
-            Text("ARE YOU AT ONE OF THESE?")
+            Text(prompt)
                 .font(.caption.weight(.semibold))
                 .tracking(1.2)
                 .foregroundStyle(.secondary)
@@ -23,7 +37,7 @@ struct InRunVenueConfirmCard: View {
                 bigRow(title: v, tint: .teal) { onPick(v) }
             }
 
-            bigRow(title: "None of these", tint: .secondary, action: onNone)
+            bigRow(title: dismissTitle, tint: .secondary, action: onNone)
         }
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -39,6 +39,8 @@ struct AARCApp: App {
                 .preferredColorScheme(.dark)
                 .task {
                     if ShareCardPreviewHarness.enabled { ShareCardPreviewHarness.run() }
+                    // Venue search dry-run against a known address (no gym needed).
+                    if VenueProbeHarness.target != nil { await VenueProbeHarness.run(); return }
                     if SummarySnapshotHarness.enabled { SummarySnapshotHarness.run(); return }
                     if UISnapshotHarness.enabled { UISnapshotHarness.run(); return }
                     // Harness A — headless whole-run feedback preview. Runs the

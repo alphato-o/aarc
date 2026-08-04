@@ -41,6 +41,16 @@ final class RemoteTTS: NSObject {
     /// the dealbreaker. Don't swap without re-running the 3-tag accent gauntlet.
     static let jessicaVoiceId: String = "qXT8GHnNNyIOcyf6WrH9"
 
+    /// HOME BASE — the agent's own voice (Kristen, American). Deliberately NOT
+    /// a coach voice: Ricky is British-derisive and Jessica British-posh, so a
+    /// flat American register reads as "not one of them" within two words,
+    /// which is the whole point of the third voice. The agent already picks
+    /// this id when it pushes a line to /live/inject; this constant exists so
+    /// REPLAYING a home line (share card, summary) uses the same voice instead
+    /// of falling through to Ricky — founder, 2026-08-04: "i tried to share a
+    /// line given by you but it sounded like ricky."
+    static let homeVoiceId: String = "Awx8TeMHHpDzbm42nIB6"
+
     /// Cumulative bytes pulled from the proxy this session — diagnostic.
     private(set) var bytesFetchedThisSession: Int = 0
     /// Whether we used the cache instead of fetching, last call.

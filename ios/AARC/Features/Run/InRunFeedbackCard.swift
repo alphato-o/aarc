@@ -12,8 +12,14 @@ struct InRunFeedbackCard: View {
 
     @State private var tts = RemoteTTS.shared
 
-    private var who: String { line.voice == .jessica ? "JESSICA" : "RICKY" }
-    private var accent: Color { line.voice == .jessica ? .pink : .orange }
+    private var who: String { line.voice.label }
+    private var accent: Color {
+        switch line.voice {
+        case .jessica: return .pink
+        case .home: return .cyan   // machine-at-the-desk, not a coach
+        case .ricky: return .orange
+        }
+    }
     /// Fallback estimate; only used until the real audio duration is known.
     private var estDur: Double { max(2, line.estimatedTotalDwell - 6) }
 

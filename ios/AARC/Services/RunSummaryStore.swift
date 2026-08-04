@@ -18,9 +18,19 @@ final class RunSummaryStore {
     /// on the Run tab.
     init() {}
 
+    /// Replay voice for an attributed line. One place, so the share card,
+    /// the summary and any future replay path can never disagree.
+    static func voiceId(for who: String) -> String {
+        switch who {
+        case "jessica": return RemoteTTS.jessicaVoiceId
+        case "home":    return RemoteTTS.homeVoiceId
+        default:        return RemoteTTS.voiceId
+        }
+    }
+
     struct HeartedLine: Identifiable, Sendable {
         let id = UUID()
-        let who: String      // "ricky" | "jessica"
+        let who: String      // "ricky" | "jessica" | "home"
         let text: String
         let voiceId: String
     }
@@ -96,12 +106,16 @@ final class RunSummaryStore {
 
         let place = PlaceContext.shared
         let liked = LikedLinesStore.shared.likedSince(startedAt).map { l in
-            let who = l.personalityId == "jessica" ? "jessica" : "ricky"
-            return HeartedLine(
-                who: who,
-                text: l.text,
-                voiceId: who == "jessica" ? RemoteTTS.jessicaVoiceId : RemoteTTS.voiceId
-            )
+            // Three voices, not two. Collapsing anything-not-jessica to
+            // "ricky" is what made a shared HOME BASE line replay in Ricky's
+            // voice (founder, 2026-08-04).
+            let who: String
+            switch l.personalityId {
+            case "jessica": who = "jessica"
+            case "home":    who = "home"
+            default:        who = "ricky"
+            }
+            return HeartedLine(who: who, text: l.text, voiceId: Self.voiceId(for: who))
         }
 
         summary = Summary(

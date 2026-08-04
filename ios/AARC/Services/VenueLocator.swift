@@ -64,43 +64,61 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
     /// Keyword search stays as a bilingual fallback. Category hotels first
     /// (the founder's usual venue is a hotel gym), then category gyms, then
     /// keyword stragglers; nearest-first within each group.
-    private func nearbyVenues(_ loc: CLLocation) async -> [String] {
-        // CHINA DATUM (the bug behind FOUR runs of wrong venue cards): the CL
-        // fix is WGS-84 but MapKit's search space in mainland China is GCJ-02
-        // — offset ~500m in Beijing. Feeding the raw fix meant the search
-        // centre was half a kilometre off AND the distance cap compared
-        // coordinates across two datums, so the real hotel fell outside the
-        // cap while random hotels drifted inside it. The outdoor POI path has
-        // carried this exact transform since the route-map fix; the treadmill
-        // path just never got it.
-        let center: CLLocation
-        if ChinaCoordinateTransform.isMainlandChina(loc.coordinate) {
-            let c = ChinaCoordinateTransform.displayCoordinate(loc.coordinate)
-            center = CLLocation(latitude: c.latitude, longitude: c.longitude)
-        } else {
-            center = loc
-        }
+    /// Internal (not private) so VenueProbeHarness can dry-run the REAL
+    /// shipping path against a known address, not a reimplementation of it.
+    func nearbyVenues(_ loc: CLLocation) async -> [String] {
+        // DATUM — settled 2026-08-04 by dry-running the real search against
+        // Park Hyatt Beijing's known coordinates (VenueProbeHarness), after
+        // four runs where the founder's actual hotel never appeared:
+        //
+        //   search centre WGS-84 (raw CL fix) -> Park Hyatt @ 50m, RANK #1
+        //   search centre GCJ-02 (what shipped) -> Park Hyatt @ 537m, rank #6,
+        //                                          absent entirely at r<=1200
+        //
+        // MapKit takes WGS-84 and handles China's GCJ-02 offset internally, so
+        // the previous "fix" was shifting the centre 548m AWAY from the runner
+        // and then measuring distances from that wrong point. The shift is only
+        // correct for DISPLAY (plotting a WGS trail onto an MKMapView, which is
+        // GCJ-02 in China) — that is a different problem and RunMapView keeps
+        // it. Searching and drawing are not the same coordinate space; the old
+        // comment here conflated them. Do NOT re-add the transform.
+        let center = loc
+        // Hotels first (his usual venue is a hotel gym), then gyms; nearest
+        // first within each. The old "酒店 hotel" keyword pass is GONE: the
+        // probe showed it returns 25 hotels WITHOUT the target while adding
+        // 1-2km impostors, and "柏悦" matched a Kashiwa 2,110km away. Category
+        // lookup is language-independent and put the right venue first.
         async let catHotels = categoryVenues([.hotel], near: center)
         async let catGyms = categoryVenues([.fitnessCenter], near: center)
-        async let kw = searchNames("酒店 hotel", near: center)
-        let ranked = (await catHotels) + (await catGyms) + (await kw)
+        var ranked = (await catHotels) + (await catGyms)
+        // Last resort only — somewhere with thin category data would otherwise
+        // offer nothing at all. Never runs when the category pass is healthy.
+        if ranked.count < 3 {
+            ranked += await searchNames("hotel gym fitness", near: center)
+        }
         var seen = Set<String>()
         var names: [String] = []
         for name in ranked {
             guard !seen.contains(name) else { continue }
             seen.insert(name)
             names.append(name)
-            if names.count == 6 { break }
+            if names.count == Self.maxCandidates { break }
         }
         return names
     }
 
     // Distance cap rationale: indoor GPS is coarse (~100-300m off) AND a big
     // hotel's map pin sits at its tower/entrance, not the gym — the TRUE venue
-    // can read 400-600m away while you're standing inside it. 1200m clears that
-    // headroom while still excluding the km-away impostors (the "Kerry Hotel
-    // from miles away" field bug). The runner confirms; we never assert.
-    private static let maxVenueMeters: CLLocationDistance = 1200
+    // can read 400-600m away while you're standing inside it.
+    //
+    // Widened 1200 -> 3000 on 2026-08-04. With the datum bug fixed the true
+    // venue now ranks FIRST, so a bigger net no longer risks burying it — it
+    // just gives the confirm card a deep bench to keep asking from instead of
+    // giving up after two questions (founder: "you give up too fast", wants to
+    // keep going to ~20). The probe returned 17 hotels at r=3000 from the CBD.
+    private static let maxVenueMeters: CLLocationDistance = 3000
+    /// Founder's ask: keep offering until roughly 20 have been ruled out.
+    static let maxCandidates = 20
 
     /// Category-based POI lookup: language-independent, name-independent.
     private func categoryVenues(_ cats: [MKPointOfInterestCategory], near loc: CLLocation) async -> [String] {

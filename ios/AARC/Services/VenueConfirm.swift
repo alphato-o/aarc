@@ -4,18 +4,33 @@ import Observation
 /// Drives the in-run venue confirmation.
 ///
 /// v2 (founder feedback 2026-07-21): one-at-a-time yes/no was too slow to rule
-/// out wrong answers mid-stride, and the buttons were too small. Now the card
-/// offers a COHORT of up to 3 candidates as big tap targets — "Are you at one
-/// of these?" — plus a full-width "None of these". Tapping a venue makes it
-/// FACT for the coaches (`PlaceContext.setConfirmedVenue`); "None of these"
-/// advances to the next cohort; exhausting all cohorts asserts nothing — no
-/// fabricated context is better than wrong context.
+/// out wrong answers mid-stride, so the card moved to a COHORT of 3 big tap
+/// targets.
+///
+/// v3 (founder feedback 2026-08-04): "do not attempt to hammer me — ask one
+/// question, pause a little, then the next... you can keep going to maybe 20
+/// candidates, then give up. you give up too fast now."
+///
+/// Back to ONE question at a time, and that is no longer the slow option: v2's
+/// problem was that the right venue was buried, because the search centre was
+/// shifted ~548m by a datum bug (see VenueLocator). With that fixed the true
+/// venue ranks FIRST, so the first question is usually the only one asked.
+/// What changes: a single candidate per card, a real BEAT between questions so
+/// it never feels like an interrogation mid-stride, and a bench of up to 20
+/// before giving up instead of 6. Tapping makes it FACT for the coaches
+/// (`PlaceContext.setConfirmedVenue`); "No" advances after the beat;
+/// exhausting the bench asserts nothing — no fabricated context beats wrong
+/// context.
 @MainActor
 @Observable
 final class VenueConfirm {
     static let shared = VenueConfirm()
 
-    static let cohortSize = 3
+    /// One at a time — see v3 note above.
+    static let cohortSize = 1
+    /// The beat between questions. Long enough not to feel like hammering,
+    /// short enough that ruling out a few is still quick.
+    static let beatSeconds: Double = 2.5
     /// Deterministic candidates for UI-test journeys/screenshots (the sim has
     /// no location; the card must still be sim-verifiable per founder rule).
     static let uiTestSeed = ["The Grand Mock Hotel", "Mockingbird Fitness Club", "Placeholder Hotel Beijing"]
@@ -66,7 +81,7 @@ final class VenueConfirm {
         }
         paused = true
         Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.0))
+            try? await Task.sleep(for: .seconds(Self.beatSeconds))
             paused = false
         }
     }

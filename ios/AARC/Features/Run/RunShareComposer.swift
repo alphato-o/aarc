@@ -102,7 +102,7 @@ struct RunShareComposer: View {
         if let roast = store.finalRoast {
             out.append(("Closing roast", roast,
                         store.finalRoastWho,
-                        store.finalRoastWho == "jessica" ? RemoteTTS.jessicaVoiceId : RemoteTTS.voiceId))
+                        RunSummaryStore.voiceId(for: store.finalRoastWho)))
         }
         for l in hearted { out.append(("\u{2665} \(l.who): \(l.text.prefix(28))…", l.text, l.who, l.voiceId)) }
         if out.isEmpty { out.append(("Run", "Lace up. Get roasted. Run faster.", "", nil)) }

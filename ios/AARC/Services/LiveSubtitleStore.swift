@@ -25,17 +25,26 @@ final class LiveSubtitleStore {
     enum Voice: Equatable {
         case ricky
         case jessica
+        /// The agent back home, injected via /live/inject. A THIRD voice, not
+        /// a coach — it was previously collapsed into .ricky by the else-branch
+        /// below, so home lines were labelled RICKY on screen and replayed in
+        /// Ricky's voice from the share card.
+        case home
 
         /// Derived from the queue item's source. Jessica's lines are sourced
-        /// "jessica:…"; everything else is the Roast Coach.
+        /// "jessica:…", the agent's are sourced "home" (LiveShareController),
+        /// everything else is the Roast Coach.
         static func from(source: String) -> Voice {
-            source.hasPrefix("jessica") ? .jessica : .ricky
+            if source.hasPrefix("jessica") { return .jessica }
+            if source.hasPrefix("home") { return .home }
+            return .ricky
         }
 
         var label: String {
             switch self {
             case .ricky: return "RICKY"
             case .jessica: return "JESSICA"
+            case .home: return "HOME BASE"
             }
         }
 
@@ -44,8 +53,12 @@ final class LiveSubtitleStore {
             switch self {
             case .ricky: return "roast_coach"
             case .jessica: return "jessica"
+            case .home: return "home"
             }
         }
+
+        // Replay voice lives in RunSummaryStore.voiceId(for:) — it's
+        // @MainActor (RemoteTTS's constants are) and this enum is not.
     }
 
     struct Line: Identifiable, Equatable {
@@ -127,7 +140,7 @@ final class LiveSubtitleStore {
     private func pushToWatch() {
         if let l = currentLine {
             PhoneSession.shared.sendBestEffort(
-                .coachLine(id: l.id, text: l.text, who: l.voice == .jessica ? "jessica" : "ricky"))
+                .coachLine(id: l.id, text: l.text, who: l.voice.personalityId))
         } else {
             PhoneSession.shared.sendBestEffort(.coachLine(id: UUID(), text: "", who: ""))
         }
@@ -135,7 +148,8 @@ final class LiveSubtitleStore {
 
     /// The runner hearted the current line from their watch.
     func likeFromWatch(id: UUID, text: String, who: String) {
-        let personalityId = who.lowercased() == "jessica" ? "jessica" : "roast_coach"
+        let w = who.lowercased()
+        let personalityId = w == "jessica" ? "jessica" : (w == "home" ? "home" : "roast_coach")
         _ = LikedLinesStore.shared.like(text: text, source: "watch", personalityId: personalityId)
         RunEventLog.shared.record("speech.liked", text,
                                   data: ["voice": personalityId, "source": "watch"])

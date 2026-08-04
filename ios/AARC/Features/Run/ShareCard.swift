@@ -235,26 +235,59 @@ struct ShareCardView: View {
             .position(x: W / 2, y: (quoteTop + quoteBottom) / 2)
     }
 
+    /// Project a series into unit space — x AND y both 0...1, scaled to THIS
+    /// series' own min/max.
+    ///
+    /// WHY (founder bug, 2026-08-04: "the pace/speed chart is off, almost
+    /// flat"): speed runs ~9-11 km/h and HR runs ~150-180 bpm. Both were
+    /// plotted as raw values on ONE shared, auto-scaled Y axis, so the domain
+    /// stretched to cover HR and the pace line collapsed into the bottom ~5%
+    /// of the strip — a straight line. The web dashboard (the render baseline)
+    /// has always given each series its own scale in `drawShareSeries`; this
+    /// is that same projection, including its 15% headroom above and 25%
+    /// below, and its per-series x normalisation so the two traces span the
+    /// full width even when they have different sample counts.
+    private func unitSeries(_ values: [Double]) -> [(x: Double, y: Double)] {
+        let finite = values.filter { $0.isFinite }
+        guard finite.count > 1, let lo = finite.min(), let hiRaw = finite.max() else { return [] }
+        // A dead-flat series would divide by zero; the web widens it by 1 too.
+        let hi = hiRaw > lo ? hiRaw : lo + 1
+        let range = hi - lo
+        let top = hi + range * 0.15
+        let bot = lo - range * 0.25
+        let span = top - bot
+        guard span > 0 else { return [] }
+        let lastIndex = Double(values.count - 1)
+        return values.enumerated().compactMap { i, v in
+            guard v.isFinite else { return nil }
+            return (x: lastIndex > 0 ? Double(i) / lastIndex : 0, y: (v - bot) / span)
+        }
+    }
+
     @ViewBuilder private var chartStrip: some View {
-        let speed = model.speed.enumerated().map { ($0.offset, $0.element) }
-        let hr = model.hr.enumerated().map { ($0.offset, $0.element) }
-        if speed.count > 1 || hr.count > 1 {
+        let speed = unitSeries(model.speed)
+        let hr = unitSeries(model.hr)
+        if !speed.isEmpty || !hr.isEmpty {
             Chart {
-                ForEach(speed, id: \.0) { i, v in
-                    AreaMark(x: .value("i", i), y: .value("kmh", v))
+                ForEach(speed, id: \.x) { p in
+                    AreaMark(x: .value("i", p.x), y: .value("v", p.y))
                         .foregroundStyle(.linearGradient(
                             colors: [Color(red: 0.56, green: 0.72, blue: 0.60).opacity(0.30), .clear],
                             startPoint: .top, endPoint: .bottom))
                 }
-                ForEach(speed, id: \.0) { i, v in
-                    LineMark(x: .value("i", i), y: .value("kmh", v), series: .value("s", "p"))
+                ForEach(speed, id: \.x) { p in
+                    LineMark(x: .value("i", p.x), y: .value("v", p.y), series: .value("s", "p"))
                         .foregroundStyle(Color(red: 0.66, green: 0.78, blue: 0.69)).lineStyle(.init(lineWidth: 3))
                 }
-                ForEach(hr, id: \.0) { i, v in
-                    LineMark(x: .value("i", i), y: .value("hr", v), series: .value("s", "h"))
+                ForEach(hr, id: \.x) { p in
+                    LineMark(x: .value("i", p.x), y: .value("v", p.y), series: .value("s", "h"))
                         .foregroundStyle(Color(red: 0.83, green: 0.46, blue: 0.42)).lineStyle(.init(lineWidth: 2.5))
                 }
             }
+            // Both series are already in unit space; pin the domain so Charts
+            // can't re-derive one and reintroduce the squash.
+            .chartXScale(domain: 0...1)
+            .chartYScale(domain: 0...1)
             .chartXAxis(.hidden).chartYAxis(.hidden)
         }
     }

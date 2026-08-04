@@ -18,9 +18,12 @@ enum UISnapshotHarness {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         let slot = CGSize(width: 370, height: 330)   // the swap-zone's rough size
 
-        // Venue cohort card: 3 big options + none.
+        // Venue card, EXACTLY as it ships: slice the seed by the live
+        // cohortSize so this snapshot tracks the config instead of drifting
+        // from it (it kept showing a 3-up card for a whole release after the
+        // card went one-question-at-a-time).
         snap(InRunVenueConfirmCard(
-                venues: VenueConfirm.uiTestSeed,
+                venues: Array(VenueConfirm.uiTestSeed.prefix(VenueConfirm.cohortSize)),
                 onPick: { _ in }, onNone: {})
                 .frame(width: slot.width, height: slot.height)
                 .padding(12).background(Color(red: 0.06, green: 0.04, blue: 0.10)),
