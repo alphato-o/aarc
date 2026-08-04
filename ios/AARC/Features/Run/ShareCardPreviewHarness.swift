@@ -18,15 +18,33 @@ enum ShareCardPreviewHarness {
     private static let sampleQuote =
         "Another k swallowed up, and what's it bought you? Sod all. Out here on the cold tarmac, lungs flapping like a wet carrier bag, while a man with proper money decides between two private islands and you're deciding whether your knee's about to file a complaint, you sweaty little plonker."
 
+    /// Modelled on the founder's real 30 Jul run: 10.22 km (=> 102 buckets at
+    /// 100m each, so km markers land every 10 samples) with the negative split
+    /// he actually ran — 6:05/km for 5k, 5:45 to 8k, 5:28 home. Synthetic
+    /// 40-sample sine data made the km spacing meaningless to review.
+    private static var realSpeed: [Double] {
+        (0..<102).map { i in
+            let km = Double(i) / 10
+            let base: Double = km < 5 ? 9.86 : (km < 8 ? 10.43 : 10.98)   // km/h
+            return base + 0.42 * sin(Double(i) / 3.1) + 0.18 * sin(Double(i) / 7.7)
+        }
+    }
+    private static var realHR: [Double] {
+        (0..<102).map { i in
+            let drift = 148.0 + Double(i) * 0.31          // cardiac drift over the run
+            return drift + 4.5 * sin(Double(i) / 5.3) + 2.0 * sin(Double(i) / 11.0)
+        }
+    }
+
     private static func baseModel(map: UIImage?) -> ShareCardModel {
         ShareCardModel(
             date: "Mon, Jun 15, 2026",
             kpis: [
-                ("Distance", "2.63 km"), ("Time", "15m39s"),
-                ("Pace", "5:58/km"), ("Avg HR", "150 bpm"),
+                ("Distance", "10.22 km"), ("Time", "1h00m"),
+                ("Pace", "5:52/km"), ("Avg HR", "160 bpm"),
             ],
-            speed: (0..<40).map { 9 + 2 * sin(Double($0) / 4) },
-            hr: (0..<40).map { 150 + 12 * sin(Double($0) / 6) },
+            speed: Self.realSpeed,
+            hr: Self.realHR,
             quote: sampleQuote, who: "ricky", heardAtKm: nil,
             aspect: ShareCardModel.portrait,
             mapImage: map,

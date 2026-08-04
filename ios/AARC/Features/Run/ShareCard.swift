@@ -12,6 +12,23 @@ extension String {
     }
 }
 
+/// How the pace/HR strip is drawn.
+///
+/// `speed`/`hr` are sampled per 100m BUCKET (RunSummaryStore.Summary), so a
+/// kilometre is exactly 10 samples — km anchors land on real distance, not on
+/// a constant-pace guess.
+struct ChartStyle {
+    /// Founder review 2026-08-04: the strip was 110pt inside a 1350pt card,
+    /// leaving obvious dead space above it. 190 fills that without squeezing
+    /// the quote.
+    var height: CGFloat = 190
+    /// Was (0.83, 0.46, 0.42) — a muted terracotta that read brown next to the
+    /// sage pace line. Founder: "the HR line should red-er".
+    var hrColor: Color = Color(red: 1.0, green: 0.27, blue: 0.27)
+    var paceColor: Color = Color(red: 0.66, green: 0.78, blue: 0.69)
+}
+
+
 /// Data for one share card — built from a whole run or a single hearted line.
 struct ShareCardModel {
     var date: String
@@ -22,6 +39,10 @@ struct ShareCardModel {
     var who: String        // "ricky" | "jessica" | ""
     var heardAtKm: Double?  // "HEARD AT KM x" stamp, when known
     var aspect: CGFloat    // width / height (0.8 portrait, 1 square)
+    /// Chart-strip treatment. Founder review 2026-08-04 asked for a taller
+    /// strip, km anchors and a brighter HR red; the marker STYLE is the open
+    /// question, so it's a knob until he picks one.
+    var chartStyle: ChartStyle = ChartStyle()
     // Route layout (outdoor): a server-rendered base-map image + the route
     // polyline projected into that image's pixel space, with a per-segment
     // color. The card draws the route up to `progress` (so the video animates
@@ -55,7 +76,7 @@ struct ShareCardView: View {
     // Web layout Y-anchors (drawLayoutQuoteFirst), reproduced 1:1.
     private var topY: CGFloat { P + 74 }
     private var kpiY: CGFloat { H - 240 }
-    private var graphH: CGFloat { H > 1200 ? 110 : 92 }
+    private var graphH: CGFloat { H > 1200 ? model.chartStyle.height : model.chartStyle.height * 0.84 }
     private var graphTop: CGFloat { kpiY - 56 - graphH }
     private var stampY: CGFloat { graphTop - 48 }
     private var quoteTop: CGFloat { topY + 64 }
@@ -264,31 +285,76 @@ struct ShareCardView: View {
         }
     }
 
+    /// Unit-space x for every whole kilometre, from the 100m bucketing.
+    /// Index 10 = 1km exactly, so these are real distance anchors.
+    private var kmAnchors: [(km: Int, x: Double)] {
+        let n = max(model.speed.count, model.hr.count)
+        guard n > 1 else { return [] }
+        let last = Double(n - 1)
+        // Skip a final marker sitting on the right edge — it reads as a border.
+        return stride(from: 10, through: n - 1, by: 10).compactMap { i in
+            let x = Double(i) / last
+            return x < 0.985 ? (km: i / 10, x: x) : nil
+        }
+    }
+
     @ViewBuilder private var chartStrip: some View {
         let speed = unitSeries(model.speed)
         let hr = unitSeries(model.hr)
+        let style = model.chartStyle
+        let anchors = kmAnchors
         if !speed.isEmpty || !hr.isEmpty {
             Chart {
                 ForEach(speed, id: \.x) { p in
                     AreaMark(x: .value("i", p.x), y: .value("v", p.y))
+                        .interpolationMethod(.monotone)
                         .foregroundStyle(.linearGradient(
-                            colors: [Color(red: 0.56, green: 0.72, blue: 0.60).opacity(0.30), .clear],
+                            colors: [style.paceColor.opacity(0.30), .clear],
                             startPoint: .top, endPoint: .bottom))
                 }
                 ForEach(speed, id: \.x) { p in
                     LineMark(x: .value("i", p.x), y: .value("v", p.y), series: .value("s", "p"))
-                        .foregroundStyle(Color(red: 0.66, green: 0.78, blue: 0.69)).lineStyle(.init(lineWidth: 3))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(style.paceColor).lineStyle(.init(lineWidth: 3.5))
                 }
                 ForEach(hr, id: \.x) { p in
                     LineMark(x: .value("i", p.x), y: .value("v", p.y), series: .value("s", "h"))
-                        .foregroundStyle(Color(red: 0.83, green: 0.46, blue: 0.42)).lineStyle(.init(lineWidth: 2.5))
+                        .interpolationMethod(.monotone)
+                        .foregroundStyle(style.hrColor).lineStyle(.init(lineWidth: 3))
                 }
             }
             // Both series are already in unit space; pin the domain so Charts
             // can't re-derive one and reintroduce the squash.
             .chartXScale(domain: 0...1)
             .chartYScale(domain: 0...1)
-            .chartXAxis(.hidden).chartYAxis(.hidden)
+            .chartYAxis(.hidden)
+            .chartPlotStyle { $0.clipped() }
+            .modifier(KmAxis(anchors: anchors, grid: cream.opacity(0.14), label: dim))
+        }
+    }
+
+    /// Km x-axis in the history chart's idiom: a grid line and a tick at each
+    /// kilometre with a "1 2 3 …" label, then a "KM" unit so the numbers can't
+    /// be mistaken for minutes.
+    private struct KmAxis: ViewModifier {
+        let anchors: [(km: Int, x: Double)]
+        let grid: Color
+        let label: Color
+        func body(content: Content) -> some View {
+            content.chartXAxis {
+                    AxisMarks(values: anchors.map(\.x)) { value in
+                        AxisGridLine().foregroundStyle(grid)
+                        AxisTick(length: 6).foregroundStyle(grid)
+                        AxisValueLabel {
+                            if let x = value.as(Double.self),
+                               let a = anchors.min(by: { abs($0.x - x) < abs($1.x - x) }) {
+                                Text("\(a.km)")
+                                    .font(.system(size: 20, weight: .bold)).monospacedDigit()
+                                    .foregroundStyle(label)
+                            }
+                        }
+                    }
+            }
         }
     }
 
