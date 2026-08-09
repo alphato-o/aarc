@@ -115,13 +115,27 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
             ranked += r.names
             diag.append("\(label)=\(r.names.count)\(r.note)")
         }
-        // Keyword net when the category passes came up thin. Normally skipped:
-        // the keyword search pulls in 1-2km impostors and misses the target by
-        // name, so it is strictly a floor, never the primary source.
+        // Keyword net when the category passes came up thin.
+        //
+        // This stopped being a rare floor on 2026-08-09 (Qingdao, run
+        // 55D745CB): BOTH category passes failed with MKError 5 while this
+        // path succeeded from the same coordinates in the same second — so on
+        // device in mainland China it is the ONLY path that works, and it is
+        // what actually produced the first venue the founder has ever
+        // confirmed. Accordingly it now runs several targeted queries in both
+        // languages rather than one blended string, because a single
+        // "hotel gym fitness" only matches venues with an English word in the
+        // name and silently misses every Chinese-named one.
         if ranked.count < 3 {
-            let kw = await searchNames("hotel gym fitness", near: center)
-            ranked += kw
-            diag.append("keyword=\(kw.count)")
+            var found = 0
+            for q in ["hotel", "酒店", "gym", "健身", "fitness"] {
+                let kw = await searchNames(q, near: center)
+                ranked += kw
+                found += kw.count
+                // Enough of a bench to keep asking; stop paying for more.
+                if ranked.count >= Self.maxCandidates { break }
+            }
+            diag.append("keyword=\(found)")
         }
         RunEventLog.shared.record("venue.search", diag.joined(separator: " "))
         var seen = Set<String>()
@@ -175,11 +189,20 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    /// Name-matched search, constrained to the venue categories we care about.
+    ///
+    /// The category filter matters even here: without it "hotel" also returns
+    /// travel agents, hotel supply shops and bus stops named after hotels. With
+    /// it we get the language-independence of a category lookup over the only
+    /// transport that actually works on device in China.
     private func searchNames(_ query: String, near loc: CLLocation) async -> [String] {
         let req = MKLocalSearch.Request()
         req.naturalLanguageQuery = query
+        req.resultTypes = .pointOfInterest
+        req.pointOfInterestFilter = MKPointOfInterestFilter(including: [.hotel, .fitnessCenter])
         req.region = MKCoordinateRegion(center: loc.coordinate,
-                                        latitudinalMeters: 2500, longitudinalMeters: 2500)
+                                        latitudinalMeters: Self.maxVenueMeters * 2,
+                                        longitudinalMeters: Self.maxVenueMeters * 2)
         guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
         return rankedNames(resp.mapItems, near: loc)
     }
