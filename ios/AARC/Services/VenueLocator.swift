@@ -88,14 +88,42 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
         // probe showed it returns 25 hotels WITHOUT the target while adding
         // 1-2km impostors, and "柏悦" matched a Kashiwa 2,110km away. Category
         // lookup is language-independent and put the right venue first.
-        async let catHotels = categoryVenues([.hotel], near: center)
-        async let catGyms = categoryVenues([.fitnessCenter], near: center)
-        var ranked = (await catHotels) + (await catGyms)
-        // Last resort only — somewhere with thin category data would otherwise
-        // offer nothing at all. Never runs when the category pass is healthy.
-        if ranked.count < 3 {
-            ranked += await searchNames("hotel gym fitness", near: center)
+        // SEQUENTIAL, RETRIED, AND LOGGED — all three because of run 338384B7
+        // (2026-08-04), where this returned FIVE gyms and ZERO hotels on device
+        // while the identical code returned 17 hotels on the simulator from the
+        // same coordinates.
+        //
+        // What the probe established: MKLocalPointsOfInterestRequest THROWS
+        // when a category has no results (fitnessCenter threw 5/5 times near
+        // Park Hyatt, hotels returned 17 every time, concurrent or not). So the
+        // old `try?` collapsed "this category is empty here", "MapKit throttled
+        // me" and "the network blipped" into one silent empty array — which is
+        // why a whole run's venue card could come up wrong with nothing in the
+        // log to say why. Root cause of the device/sim split is NOT yet proven;
+        // this makes the next run say it out loud instead of guessing again.
+        var ranked: [String] = []
+        var diag: [String] = []
+        for (label, cats) in [("hotel", [MKPointOfInterestCategory.hotel]),
+                              ("gym", [MKPointOfInterestCategory.fitnessCenter])] {
+            var r = await categoryVenues(cats, near: center)
+            // One retry: a transient throttle/network failure is indistinguishable
+            // from "genuinely nothing here", and retrying costs a second.
+            if case .failure = r.outcome {
+                try? await Task.sleep(for: .milliseconds(400))
+                r = await categoryVenues(cats, near: center)
+            }
+            ranked += r.names
+            diag.append("\(label)=\(r.names.count)\(r.note)")
         }
+        // Keyword net when the category passes came up thin. Normally skipped:
+        // the keyword search pulls in 1-2km impostors and misses the target by
+        // name, so it is strictly a floor, never the primary source.
+        if ranked.count < 3 {
+            let kw = await searchNames("hotel gym fitness", near: center)
+            ranked += kw
+            diag.append("keyword=\(kw.count)")
+        }
+        RunEventLog.shared.record("venue.search", diag.joined(separator: " "))
         var seen = Set<String>()
         var names: [String] = []
         for name in ranked {
@@ -120,12 +148,31 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
     /// Founder's ask: keep offering until roughly 20 have been ruled out.
     static let maxCandidates = 20
 
+    /// A category pass: the names, plus WHY the list is the size it is.
+    /// `.failure` means MapKit threw — which for this API also happens on a
+    /// genuinely empty category, so it is a retry hint, not proof of an error.
+    struct CategoryResult {
+        enum Outcome { case ok, failure(String) }
+        let names: [String]
+        let outcome: Outcome
+        /// Compact suffix for the run log, e.g. "" or "(err:throttled)".
+        var note: String {
+            if case .failure(let why) = outcome { return "(err:\(why))" }
+            return ""
+        }
+    }
+
     /// Category-based POI lookup: language-independent, name-independent.
-    private func categoryVenues(_ cats: [MKPointOfInterestCategory], near loc: CLLocation) async -> [String] {
+    private func categoryVenues(_ cats: [MKPointOfInterestCategory], near loc: CLLocation) async -> CategoryResult {
         let req = MKLocalPointsOfInterestRequest(center: loc.coordinate, radius: Self.maxVenueMeters)
         req.pointOfInterestFilter = MKPointOfInterestFilter(including: cats)
-        guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
-        return rankedNames(resp.mapItems, near: loc)
+        do {
+            let resp = try await MKLocalSearch(request: req).start()
+            return CategoryResult(names: rankedNames(resp.mapItems, near: loc), outcome: .ok)
+        } catch {
+            let why = (error as? MKError).map { "mk\($0.errorCode)" } ?? "other"
+            return CategoryResult(names: [], outcome: .failure(why))
+        }
     }
 
     private func searchNames(_ query: String, near loc: CLLocation) async -> [String] {

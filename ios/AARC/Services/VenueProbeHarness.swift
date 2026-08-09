@@ -25,8 +25,19 @@ import MapKit
 /// Output goes to <Documents>/venue-probe.txt and the console.
 @MainActor
 enum VenueProbeHarness {
+    /// Raw env value: either "lat,lon" or "here".
+    private static var raw: String? {
+        ProcessInfo.processInfo.environment["AARC_VENUE_PROBE"]
+    }
+    static var enabled: Bool { raw != nil }
+    /// "here" = ask the DEVICE where it is instead of being told. Added
+    /// 2026-08-09: the founder travelled to a new venue and the fastest way to
+    /// prep for it is to have his own phone answer, rather than him typing
+    /// coordinates or me guessing from a hotel's map pin.
+    private static var useDeviceLocation: Bool { raw?.lowercased() == "here" }
+
     static var target: CLLocationCoordinate2D? {
-        guard let raw = ProcessInfo.processInfo.environment["AARC_VENUE_PROBE"] else { return nil }
+        guard let raw, !useDeviceLocation else { return nil }
         let parts = raw.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
         guard parts.count == 2 else { return nil }
         return CLLocationCoordinate2D(latitude: parts[0], longitude: parts[1])
@@ -36,9 +47,28 @@ enum VenueProbeHarness {
     private static let wanted = ["hyatt", "柏悦", "yintai", "银泰"]
 
     static func run() async {
-        guard let wgs = target else { return }
         var out: [String] = []
         func log(_ s: String) { out.append(s); print("VENUE-PROBE \(s)") }
+
+        // Where are we? Either the coordinate we were handed, or ask the phone.
+        var wgs: CLLocationCoordinate2D
+        if useDeviceLocation {
+            log("=== ASKING THE DEVICE WHERE IT IS ===")
+            guard let cap = await VenueLocator.shared.capture() else {
+                log("FAILED — no location fix (permission denied, or no fix yet).")
+                writeOut(out); return
+            }
+            wgs = cap.coord
+            log("device says: \(fmt(cap.coord))")
+            log("reverse-geocoded city: \(cap.city ?? "(none)")")
+            log("venue candidates it would offer (\(cap.venues.count)):")
+            for (i, v) in cap.venues.enumerated() { log("   \(i + 1). \(v)") }
+            log("")
+        } else if let t = target {
+            wgs = t
+        } else {
+            return
+        }
 
         let gcj = ChinaCoordinateTransform.displayCoordinate(wgs)
         let shiftM = CLLocation(latitude: wgs.latitude, longitude: wgs.longitude)
@@ -62,6 +92,26 @@ enum VenueProbeHarness {
             }
         }
 
+        // CONCURRENCY PROBE — the device returned ZERO hotels tonight where
+        // this same code returned 17 on the sim. Prime suspect: nearbyVenues
+        // fires two MKLocalPointsOfInterestRequests CONCURRENTLY (async let),
+        // MapKit throttles concurrent local searches, and `try?` swallows the
+        // throttle error into an empty array. Run it repeatedly and see.
+        log("")
+        log("=== CONCURRENCY PROBE (5 rounds, hotels vs gyms) ===")
+        for round in 1...5 {
+            async let h = countOnly([.hotel], near: wgs)
+            async let g = countOnly([.fitnessCenter], near: wgs)
+            let (hn, gn) = (await h, await g)
+            log("  concurrent round \(round): hotels=\(hn)  gyms=\(gn)\(hn == 0 ? "   <<< HOTELS EMPTY" : "")")
+        }
+        log("--- same thing SEQUENTIALLY ---")
+        for round in 1...5 {
+            let hn = await countOnly([.hotel], near: wgs)
+            let gn = await countOnly([.fitnessCenter], near: wgs)
+            log("  sequential round \(round): hotels=\(hn)  gyms=\(gn)\(hn == 0 ? "   <<< HOTELS EMPTY" : "")")
+        }
+
         // THE ACTUAL SHIPPING PATH — everything above is hypothesis testing;
         // this is what the in-run card will really offer.
         log("")
@@ -79,10 +129,26 @@ enum VenueProbeHarness {
             log("VERDICT: FAIL — target not in the candidate list at all")
         }
 
+        writeOut(out)
+        log("=== PROBE COMPLETE ===")
+    }
+
+    private static func writeOut(_ out: [String]) {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         try? out.joined(separator: "\n").write(
             to: dir.appendingPathComponent("venue-probe.txt"), atomically: true, encoding: .utf8)
-        log("=== PROBE COMPLETE ===")
+    }
+
+    /// Count only, and report an ERROR distinctly from an empty result — the
+    /// shipping code's `try?` cannot tell those apart, which is the whole bug.
+    private static func countOnly(_ cats: [MKPointOfInterestCategory],
+                                  near c: CLLocationCoordinate2D) async -> Int {
+        let req = MKLocalPointsOfInterestRequest(center: c, radius: 3000)
+        req.pointOfInterestFilter = MKPointOfInterestFilter(including: cats)
+        do { return try await MKLocalSearch(request: req).start().mapItems.count }
+        catch { return -1 }   // -1 = threw. NOTE: this API also throws on a
+                              // genuinely empty category, so -1 is "no usable
+                              // result", not necessarily an error.
     }
 
     private static func probeCategory(_ label: String, center: CLLocationCoordinate2D,
