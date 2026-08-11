@@ -89,6 +89,13 @@ struct AARCApp: App {
                     // this backfill — otherwise the widget shows "No runs
                     // yet" forever.
                     LastRunSnapshotStore.backfillFromHistory()
+                    // CRASH RECOVERY — if the app died mid-run (Qingdao,
+                    // 2026-08-09), the workout is still safe in HealthKit but
+                    // nothing on the phone knows to look for it. Do this
+                    // BEFORE the history-dependent work below so the widget
+                    // and dashboard backfills see the recovered run.
+                    await UnfinishedRunRecovery.recoverIfNeeded(
+                        context: PersistenceStore.shared.container.mainContext)
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()

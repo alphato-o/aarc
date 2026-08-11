@@ -120,6 +120,9 @@ final class LiveMetricsConsumer {
         }
         self.latest = metrics
         self.lastUpdateAt = .now
+        // Keep the crash breadcrumb's clock current so recovery can tell a
+        // 40-minute run that died from a 5-second mis-start. Self-throttled.
+        UnfinishedRunStore.touch()
         updateFrozenDetection(metrics)
         // Director runs FIRST so its predictions (next-milestone ETA,
         // protect window) are fresh when ScriptEngine fires and
@@ -205,6 +208,14 @@ final class LiveMetricsConsumer {
 
         // Open the per-run diagnostics log (events + voice archive).
         RunEventLog.shared.startRun(runId: runId)
+
+        // Breadcrumb for crash recovery — see UnfinishedRunStore. Written
+        // BEFORE anything that can fail, because its whole job is to survive
+        // the failure.
+        UnfinishedRunStore.mark(runId: runId, startedAt: startedAt,
+                                runTypeRaw: pendingRunType.rawValue,
+                                personalityId: pendingPersonalityId,
+                                isTest: RunOrchestrator.shared.isTestRun)
 
         // Live "share back home" — REAL runs only (guarded inside).
         LiveShareController.shared.startIfEnabled(
@@ -352,6 +363,11 @@ final class LiveMetricsConsumer {
     func ingestEnded(workoutUUID: UUID?, salvagedRealRun: Bool = false) {
         endSweepTask?.cancel()
         endSweepTask = nil
+        // The run reached its end under its own power; nothing to recover.
+        // Cleared FIRST so that even if the summary/closing-roast work below
+        // crashes, we don't resurrect a run that actually finished — that
+        // path writes its own RunRecord.
+        UnfinishedRunStore.clear()
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
         AmbientProbe.shared.stop()
