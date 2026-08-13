@@ -128,7 +128,7 @@ struct RunShareComposer: View {
                 ("Pace", Self.fmtPace(s.avgPaceSecPerKm)),
                 ("Avg HR", s.avgHR.map { "\(Int($0.rounded())) bpm" } ?? "\u{2014}"),
             ],
-            speed: s.speedSeries, hr: s.hrSeries,
+            speed: s.speedSeries, hr: s.hrSeries, distanceMeters: s.distanceMeters,
             quote: q.text.strippingAudioTags, who: q.who, heardAtKm: nil, aspect: aspect,
             mapImage: layout == .route ? mapResult?.image : nil,
             mapPoints: layout == .route ? (mapResult?.points ?? []) : [],

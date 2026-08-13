@@ -45,6 +45,7 @@ enum ShareCardPreviewHarness {
             ],
             speed: Self.realSpeed,
             hr: Self.realHR,
+            distanceMeters: 10_220,
             quote: sampleQuote, who: "ricky", heardAtKm: nil,
             aspect: ShareCardModel.portrait,
             mapImage: map,
@@ -69,8 +70,39 @@ enum ShareCardPreviewHarness {
         }
     }
 
+    /// The founder's 9 Aug Qingdao run as HISTORY renders it: 7.16km read back
+    /// from HealthKit as ~500 TIME samples, not 72 distance buckets. This is
+    /// the shape that produced 48 overlapping "km" labels, so it is the shape
+    /// the harness has to cover.
+    private static func denseHistoryModel() -> ShareCardModel {
+        var m = baseModel(map: nil)
+        let n = 500
+        // Split out: one expression with several Double ops per element blows
+        // the type-checker's budget in this file.
+        var sp: [Double] = []
+        var hrv: [Double] = []
+        for i in 0..<n {
+            let d = Double(i)
+            let wobble: Double = sin(d / 21) * 0.5
+            let ripple: Double = sin(d / 7) * 0.2
+            sp.append(10.3 + wobble + ripple)
+            let drift: Double = d * 0.055
+            let breathe: Double = sin(d / 33) * 3
+            hrv.append(132.0 + drift + breathe)
+        }
+        m.speed = sp
+        m.hr = hrv
+        m.distanceMeters = 7_160
+        m.kpis = [("Distance", "7.16 km"), ("Time", "41m45s"),
+                  ("Pace", "5:50/km"), ("Avg HR", "155 bpm")]
+        return m
+    }
+
     static func run() {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        if let img = ShareExport.image(denseHistoryModel()), let d = img.pngData() {
+            try? d.write(to: dir.appendingPathComponent("share-preview-dense.png"))
+        }
         if let img = ShareExport.image(baseModel(map: nil)), let d = img.pngData() {
             try? d.write(to: dir.appendingPathComponent("share-preview-quote.png"))
         }

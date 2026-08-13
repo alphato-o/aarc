@@ -14,9 +14,11 @@ extension String {
 
 /// How the pace/HR strip is drawn.
 ///
-/// `speed`/`hr` are sampled per 100m BUCKET (RunSummaryStore.Summary), so a
-/// kilometre is exactly 10 samples — km anchors land on real distance, not on
-/// a constant-pace guess.
+/// NOTE: do NOT assume anything about the sampling of `speed`/`hr`. A live run
+/// buckets them per 100m; a run read back from HealthKit is time-sampled and
+/// far denser. Believing the first case was universal is what produced 48
+/// overlapping "km" labels on a 7km run. Distance comes from
+/// `ShareCardModel.distanceMeters`, never from the sample count.
 struct ChartStyle {
     /// Founder review 2026-08-04: the strip was 110pt inside a 1350pt card,
     /// leaving obvious dead space above it. 190 fills that without squeezing
@@ -35,6 +37,11 @@ struct ShareCardModel {
     var kpis: [(label: String, value: String)]
     var speed: [Double]
     var hr: [Double]
+    /// The run's REAL distance. Required for the km axis: `speed`/`hr` arrive
+    /// from two different places with two different samplings (live runs are
+    /// bucketed per 100m, history/HealthKit runs are time-sampled and far
+    /// denser), so sample INDEX says nothing about distance travelled.
+    var distanceMeters: Double = 0
     var quote: String
     var who: String        // "ricky" | "jessica" | ""
     var heardAtKm: Double?  // "HEARD AT KM x" stamp, when known
@@ -77,8 +84,11 @@ struct ShareCardView: View {
     private var topY: CGFloat { P + 74 }
     private var kpiY: CGFloat { H - 240 }
     private var graphH: CGFloat { H > 1200 ? model.chartStyle.height : model.chartStyle.height * 0.84 }
+    // -56 was the gap to the KPI row; the legend now sits above the strip so
+    // the whole block moves up by its height.
     private var graphTop: CGFloat { kpiY - 56 - graphH }
-    private var stampY: CGFloat { graphTop - 48 }
+    private var legendH: CGFloat { 44 }
+    private var stampY: CGFloat { graphTop - legendH - 48 }
     private var quoteTop: CGFloat { topY + 64 }
     private var quoteBottom: CGFloat { stampY - 76 }
 
@@ -201,6 +211,9 @@ struct ShareCardView: View {
                     .frame(width: W - P * 2)
                     .position(x: W / 2, y: stampY)
             }
+            chartLegend
+                .frame(width: W - P * 2, alignment: .leading)
+                .position(x: W / 2, y: graphTop - 22)
             chartStrip
                 .frame(width: W - P * 2, height: graphH)
                 .position(x: W / 2, y: graphTop + graphH / 2)
@@ -285,16 +298,70 @@ struct ShareCardView: View {
         }
     }
 
-    /// Unit-space x for every whole kilometre, from the 100m bucketing.
-    /// Index 10 = 1km exactly, so these are real distance anchors.
+    /// Choose a km spacing that keeps the axis readable at any distance.
+    /// A 7km run labels every km; a marathon labels every 5.
+    private static func kmStep(forTotalKm t: Double) -> Int {
+        for s in [1, 2, 5, 10, 20] where Int(t) / s <= 8 { return s }
+        return 25
+    }
+
+    /// Unit-space x for each labelled kilometre.
+    ///
+    /// Derived by INTEGRATING the speed series rather than by counting
+    /// samples. The original version assumed 10 samples == 1km, which held for
+    /// live runs (bucketed per 100m) but not for history runs read back from
+    /// HealthKit, which are time-sampled: a 7.16km run rendered 48 "km" marks,
+    /// overlapping into an unreadable smear. Samples are ~evenly spaced in
+    /// time, so cumulative speed is proportional to distance covered, which
+    /// puts each marker where that kilometre actually falls even when the pace
+    /// varied.
     private var kmAnchors: [(km: Int, x: Double)] {
-        let n = max(model.speed.count, model.hr.count)
-        guard n > 1 else { return [] }
-        let last = Double(n - 1)
-        // Skip a final marker sitting on the right edge — it reads as a border.
-        return stride(from: 10, through: n - 1, by: 10).compactMap { i in
+        let totalKm = model.distanceMeters / 1000
+        let v = model.speed
+        guard totalKm >= 1.5, v.count > 1 else { return [] }
+
+        var cum: [Double] = []
+        var acc = 0.0
+        for s in v {
+            acc += (s.isFinite && s > 0) ? s : 0
+            cum.append(acc)
+        }
+        guard acc > 0 else { return [] }
+
+        let step = Self.kmStep(forTotalKm: totalKm)
+        let last = Double(v.count - 1)
+        var out: [(km: Int, x: Double)] = []
+        var km = step
+        var i = 0
+        while Double(km) <= totalKm {
+            let target = acc * (Double(km) / totalKm)
+            while i < cum.count - 1 && cum[i] < target { i += 1 }
             let x = Double(i) / last
-            return x < 0.985 ? (km: i / 10, x: x) : nil
+            // A marker hard against the right edge reads as a border, not data.
+            if x < 0.97 { out.append((km: km, x: x)) }
+            km += step
+        }
+        return out
+    }
+
+    /// Founder asked what the numbers mean. Say so, once, quietly.
+    private var chartLegend: some View {
+        HStack(spacing: 22) {
+            legendKey(model.chartStyle.paceColor, "PACE")
+            legendKey(model.chartStyle.hrColor, "HEART RATE")
+            Text("NUMBERS = KM")
+                .font(.system(size: 21, weight: .semibold)).tracking(1.1)
+                .foregroundStyle(dim)
+            Spacer()
+        }
+    }
+
+    private func legendKey(_ color: Color, _ label: String) -> some View {
+        HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 26, height: 5)
+            Text(label)
+                .font(.system(size: 21, weight: .semibold)).tracking(1.1)
+                .foregroundStyle(dim)
         }
     }
 
