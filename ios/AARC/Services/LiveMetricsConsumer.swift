@@ -363,10 +363,23 @@ final class LiveMetricsConsumer {
     func ingestEnded(workoutUUID: UUID?, salvagedRealRun: Bool = false) {
         endSweepTask?.cancel()
         endSweepTask = nil
-        // The run reached its end under its own power; nothing to recover.
-        // Cleared FIRST so that even if the summary/closing-roast work below
-        // crashes, we don't resurrect a run that actually finished — that
-        // path writes its own RunRecord.
+        // THE GATE (Qingdao, 2026-08-09). Persist the run to the database
+        // RIGHT NOW, before a single line of presentation work runs.
+        //
+        // The old order was: capture() -> closing roast -> teardown -> persist.
+        // So the record was written LAST, behind the most elaborate and most
+        // network-dependent code in the app. The phone crashed generating the
+        // closing speech and the run was simply never written — 7km+ gone,
+        // even though HealthKit had it safe the whole time. Anything that runs
+        // before the save is a single point of failure for the entire run, and
+        // a roast is not worth that.
+        //
+        // persistRun(workoutUUID:) below adopts and enriches this row once
+        // HealthKit propagates the real workout, so this costs one extra write
+        // and buys immunity to every crash that follows it.
+        persistProvisionalRecord()
+
+        // Only NOW is it safe to say the run no longer needs recovering.
         UnfinishedRunStore.clear()
         self.lastFinishedWorkoutUUID = workoutUUID
         latest = latest?.with(state: .ended)
@@ -415,6 +428,46 @@ final class LiveMetricsConsumer {
         // seconds to propagate the workout from watch to iPhone, so the
         // task retries with backoff.
         Task { await persistRun(workoutUUID: workoutUUID) }
+    }
+
+    /// THE GATE: write the run to the database the instant it ends, from live
+    /// metrics alone, before any summary/roast/share work can fail.
+    ///
+    /// Distinct from `persistRunFromLive` (which is the terminal path for
+    /// test/sim and salvaged runs and marks them accordingly): this is a
+    /// deliberately provisional row for a REAL run that is about to be
+    /// enriched by `persistRun(workoutUUID:)` once HealthKit propagates. If
+    /// that enrichment never happens because the app dies first, this row is
+    /// still a real, correct run in the founder's history — which is the whole
+    /// point. Idempotent, so the later paths can't double-write.
+    private func persistProvisionalRecord() {
+        guard let runId = currentRunId, !RunOrchestrator.shared.isTestRun else { return }
+        let context = PersistenceStore.shared.container.mainContext
+        if let existing = try? context.fetch(FetchDescriptor<RunRecord>(
+            predicate: #Predicate { $0.id == runId })), !existing.isEmpty { return }
+        let dist = latest?.distanceMeters ?? 0
+        let dur = latest?.elapsed ?? 0
+        // A run that never really started isn't worth a history row.
+        guard dist > 100 || dur > 60 else { return }
+        let record = RunRecord(
+            id: runId,
+            startedAt: startedAt ?? .now,
+            endedAt: .now,
+            personality: pendingPersonalityId,
+            isTestData: false,
+            healthKitWorkoutUUID: nil,
+            runTypeRaw: pendingRunType.rawValue,
+            cachedDistanceMeters: dist,
+            cachedDurationSeconds: dur,
+            cachedAvgPaceSecPerKm: dist > 0 ? dur / (dist / 1000) : 0,
+            cachedEnergyKcal: 0
+        )
+        record.city = PlaceContext.shared.runCity
+        context.insert(record)
+        try? context.save()
+        RunEventLog.shared.record(
+            "run.provisionalSaved",
+            String(format: "%.2f km / %.0f s persisted before summary work", dist / 1000, dur))
     }
 
     /// Persist a RunRecord straight from live metrics (no HK workout UUID):
@@ -480,14 +533,23 @@ final class LiveMetricsConsumer {
         let duration = workout.duration
         let avgPace = (distance > 0) ? duration / (distance / 1000) : 0
 
-        let existing = try? context.fetch(
+        // Match on the HK workout first, then fall back to the run id so we
+        // ADOPT the provisional row written at the top of ingestEnded (it has
+        // no HK UUID yet). Without the fallback the gate would produce a
+        // duplicate run for every finish.
+        let byWorkout = try? context.fetch(
             FetchDescriptor<RunRecord>(
                 predicate: #Predicate { $0.healthKitWorkoutUUID == workoutUUID }
             )
         )
+        let provisional = byWorkout?.first ?? (try? context.fetch(
+            FetchDescriptor<RunRecord>(predicate: #Predicate { $0.id == aarcId })
+        ))?.first
 
         let savedRecord: RunRecord
-        if let record = existing?.first {
+        if let record = provisional {
+            record.healthKitWorkoutUUID = workoutUUID
+            record.startedAt = workout.startDate
             record.endedAt = workout.endDate
             record.cachedDistanceMeters = distance
             record.cachedDurationSeconds = duration
