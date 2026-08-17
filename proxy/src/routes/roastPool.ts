@@ -5,8 +5,9 @@ import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
+import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
 
-export type Env = LLMEnv & SentryEnv & BriefingEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
 /// One-batch in-run roast library, generated at run start (founder idea,
 /// 2026-07-10): 12-20 SHORT roasts in a single LLM call. Because the model
@@ -94,7 +95,9 @@ async function buildUserPrompt(req: z.infer<typeof RoastPoolRequestSchema>, n: n
     lines.push("RUN SETUP:");
     lines.push(`- plan: ${c.planKind}${c.planDistanceKm ? ` ${c.planDistanceKm} km` : ""}${c.planTimeMinutes ? ` ${c.planTimeMinutes} min` : ""}`);
     lines.push(`- run type: ${c.runType}`);
-    pushAmbientBlock(lines, req.ambient, await fetchAmbient(req.ambient ?? {}));
+    const vProfileRaw = await fetchVenueProfile(env, req.ambient?.venueConfirmed ? req.ambient?.venue : undefined);
+    const vProfile = vProfileRaw && req.ambient?.venue ? formatVenueProfile(req.ambient!.venue!, vProfileRaw) : null;
+    pushAmbientBlock(lines, req.ambient, await fetchAmbient(req.ambient ?? {}), vProfile);
     await pushBriefingBlock(lines, env, "ricky", { chance: 1 });
 
     if (req.personalNotes && req.personalNotes.length > 0) {

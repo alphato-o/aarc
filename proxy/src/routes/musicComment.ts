@@ -10,8 +10,9 @@ import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
+import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
 
-export type Env = LLMEnv & SentryEnv & BriefingEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
 export async function musicCommentHandler(
     request: Request,
@@ -151,7 +152,9 @@ async function buildUserPrompt(req: MusicCommentRequest, env: Env): Promise<stri
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
     pushPlaceBlock(lines, c.place);
-    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
+    const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
+    const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
+    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}), vProfile);
     await pushBriefingBlock(lines, env, "ricky");
 
     if (req.personalNotes && req.personalNotes.length > 0) {

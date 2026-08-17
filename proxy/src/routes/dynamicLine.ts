@@ -11,8 +11,9 @@ import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm"
 import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
+import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
 
-export type Env = LLMEnv & SentryEnv & BriefingEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
 export async function dynamicLineHandler(
     request: Request,
@@ -200,7 +201,9 @@ async function buildUserPrompt(req: DynamicLineRequest, env: Env): Promise<strin
         lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (they were running and have now STOPPED — quote the seconds, never a distance)`);
     }
     pushPlaceBlock(lines, c.place);
-    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
+    const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
+    const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
+    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}), vProfile);
     await pushBriefingBlock(lines, env, "ricky");
 
     if (req.customNote && req.customNote.trim().length > 0) {

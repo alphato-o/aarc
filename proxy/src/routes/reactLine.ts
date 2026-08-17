@@ -12,8 +12,9 @@ import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm"
 import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
+import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
 
-export type Env = LLMEnv & SentryEnv & BriefingEnv;
+export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
 // Token ceiling per Jessica length mode — a REAL mechanical cap, not just a
 // hint. At ~4 chars/token: quip ≤140c, medium ~220-380c, indulgent ~450-650c,
@@ -234,7 +235,9 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
         lines.push(runPhaseBlock(Math.min(0.999, Math.max(0, p)), "jessica"));
     }
     pushPlaceBlock(lines, c.place);
-    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}));
+    const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
+    const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
+    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}), vProfile);
     await pushBriefingBlock(lines, env, "jessica");
 
     if (req.personalNotes && req.personalNotes.length > 0) {

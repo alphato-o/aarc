@@ -25,9 +25,12 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
     /// confirms, which is the whole point (a wrong venue kills the vibe).
     func capture() async -> (coord: CLLocationCoordinate2D, city: String?, venues: [String])? {
         guard let loc = await oneShot() else { return nil }
-        async let city = reverseCity(loc)
-        async let venues = nearbyVenues(loc)
-        return (loc.coordinate, await city, await venues)
+        async let cityTask = reverseCity(loc)
+        async let venuesTask = nearbyVenues(loc)
+        let (city, found) = (await cityTask, await venuesTask)
+        // Ask for plausibility order before the confirm card sees the list.
+        let venues = await rankedByPlausibility(found, city: city)
+        return (loc.coordinate, city, venues)
     }
 
     private func oneShot() async -> CLLocation? {
@@ -137,7 +140,6 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
             }
             diag.append("keyword=\(found)")
         }
-        RunEventLog.shared.record("venue.search", diag.joined(separator: " "))
         var seen = Set<String>()
         var names: [String] = []
         for name in ranked {
@@ -146,7 +148,50 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
             names.append(name)
             if names.count == Self.maxCandidates { break }
         }
+        RunEventLog.shared.record("venue.search", diag.joined(separator: " "))
         return names
+    }
+
+    /// Reorder by how plausible each venue is for THIS runner.
+    ///
+    /// MapKit ranks by distance alone, which buries him: on 13 Aug his actual
+    /// hotel came 15th of 20 and he tapped "No" fourteen times to reach it,
+    /// because a big hotel's map pin sits at its tower entrance while a hostel's
+    /// sits on the street.
+    ///
+    /// The judgement deliberately does NOT live here. No brand list, no keyword
+    /// rules — founder, 2026-08-17: "do not hard wire anything, that is my whole
+    /// point." A baked-in table would be wrong in the first city it didn't cover
+    /// and could never tell a grand independent hotel from a budget one. The
+    /// proxy asks a model, which knows these specific places in any city and any
+    /// language. Fails soft to the distance order: a ranking that loses his real
+    /// hotel would be worse than no ranking.
+    private func rankedByPlausibility(_ names: [String], city: String?) async -> [String] {
+        guard names.count >= 3 else { return names }
+        var req = URLRequest(url: Config.apiBaseURL.appendingPathComponent("rank-venues"))
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        // Hard ceiling: this sits between the runner tapping Start and the
+        // confirm card appearing, so it can never be worth waiting on.
+        req.timeoutInterval = 6
+        var body: [String: Any] = ["candidates": names]
+        if let city { body["city"] = city }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ranked = obj["ranked"] as? [String], !ranked.isEmpty
+        else {
+            RunEventLog.shared.record("venue.rank", "unavailable — kept distance order")
+            return names
+        }
+        // Never let the ranking drop a candidate.
+        var out = ranked.filter { names.contains($0) }
+        for n in names where !out.contains(n) { out.append(n) }
+        RunEventLog.shared.record(
+            "venue.rank",
+            "reordered \(out.count); top=\(out.first ?? "-")")
+        return out
     }
 
     // Distance cap rationale: indoor GPS is coarse (~100-300m off) AND a big

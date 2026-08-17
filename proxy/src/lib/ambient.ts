@@ -174,7 +174,7 @@ function dominant(cur: any): string | undefined {
 
 /// Render the ambient block into the prompt. `input` carries the client's
 /// time/venue; `r` is the server-resolved weather/AQI/news.
-export function pushAmbientBlock(lines: string[], input: AmbientInput | undefined, r: Resolved): void {
+export function pushAmbientBlock(lines: string[], input: AmbientInput | undefined, r: Resolved, venueProfile?: string | null): void {
     if (!input && !Object.keys(r).length) return;
     const out: string[] = [];
 
@@ -222,6 +222,7 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
             // Anchor to it and DO NOT invent other venues (the run-BFDD0366 bug:
             // given only a city, the model confabulated luxury hotels it wasn't at).
             out.push(`- venue (CONFIRMED by the runner — this is FACT, not a guess): they are at ${input.venue}. Reference it as real when it sharpens a line. Do NOT invent or name any OTHER venue, hotel, bar, or building — ${input.venue} is the only place they are.`);
+            if (venueProfile) out.push(venueProfile);
         } else {
             out.push(`- venue (treadmill — UNCONFIRMED guess): maybe ${input.venue}, maybe not. Do NOT assert it as fact and do NOT invent a different specific venue/hotel/building in its place — if unsure, stay generic ("the gym", "that treadmill") rather than naming somewhere they may not be.`);
         }

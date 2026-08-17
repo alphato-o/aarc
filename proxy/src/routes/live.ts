@@ -7,6 +7,8 @@
 ///     (read the live feed) and POST inject (push a line).
 /// Test runs are rejected at /live/start — real runs only.
 
+import { venueKey } from "../lib/venueProfile";
+
 export interface LiveEnv {
     DB: D1Database;
     LIVE_DEVICE_TOKEN?: string;
@@ -108,6 +110,33 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         if (!b.runId || !b.text || !b.voiceId) return json({ ok: false, error: "runId + text + voiceId required" }, 400);
         await env.DB.prepare("INSERT INTO live_inject (run_id, text, voice_id) VALUES (?, ?, ?)").bind(b.runId, b.text, b.voiceId).run();
         return json({ ok: true });
+    }
+
+    // POST /live/venue { venue, profile } — ADMIN stores what a venue is like
+    if (request.method === "POST" && p === "/live/venue") {
+        if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const b = await request.json<{ venue?: string; profile?: string }>();
+        const venue = (b.venue ?? "").trim();
+        const profile = (b.profile ?? "").trim();
+        if (!venue || !profile) return json({ ok: false, error: "venue + profile required" }, 400);
+        await env.DB.prepare(
+            "INSERT INTO venue_profile (venue_key, venue, profile, updated_at) VALUES (?,?,?,datetime('now')) " +
+            "ON CONFLICT(venue_key) DO UPDATE SET venue=excluded.venue, profile=excluded.profile, updated_at=excluded.updated_at",
+        ).bind(venueKey(venue), venue, profile.slice(0, 4000)).run();
+        return json({ ok: true, venueKey: venueKey(venue) });
+    }
+
+    // GET /live/venue[?venue=] — ADMIN reads stored profiles
+    if (request.method === "GET" && p === "/live/venue") {
+        if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const want = url.searchParams.get("venue");
+        if (want) {
+            const row = await env.DB.prepare("SELECT venue, profile, updated_at FROM venue_profile WHERE venue_key = ?")
+                .bind(venueKey(want)).first();
+            return json({ ok: true, item: row ?? null });
+        }
+        const res = await env.DB.prepare("SELECT venue, substr(profile,1,90) preview, updated_at FROM venue_profile ORDER BY updated_at DESC LIMIT 30").all();
+        return json({ ok: true, items: res.results ?? [] });
     }
 
     // ---- HOME BASE BRIEFING — the agent feeds real-world intel to BOTH voices.
