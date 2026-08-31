@@ -20,6 +20,10 @@ struct RunDetailView: View {
     @State private var showHR = true
     @State private var showPace = true
 
+    @Environment(\.modelContext) private var modelContext
+    @State private var showCalibration = false
+    @State private var calibrationInput = ""
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -29,6 +33,7 @@ struct RunDetailView: View {
                     mapSection
                 }
                 chartSection
+                calibrationSection
                 if isLoading { loadingHint }
                 if let loadError {
                     Text(loadError)
@@ -80,19 +85,96 @@ struct RunDetailView: View {
         }
     }
 
+    /// Average HR from the telemetry already loaded for the chart. Em-dash
+    /// while it is still loading or genuinely absent, never a fake 0.
+    private var avgHRText: String {
+        let vals = hrSeries.map(\.value).filter { $0 > 0 }
+        guard !vals.isEmpty else { return "\u{2014}" }
+        return "\(Int(vals.reduce(0, +) / Double(vals.count))) bpm"
+    }
+
+    /// Treadmill calibration. The watch infers indoor distance from wrist
+    /// motion, so strap tightness changes the number — a loose strap that gets
+    /// tightened mid-run produces a split pattern that never happened. Let him
+    /// type in what the console actually said.
+    @ViewBuilder private var calibrationSection: some View {
+        if run.runTypeRaw == "treadmill" && !isNike {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Treadmill distance")
+                    .font(.subheadline.bold())
+                if let cal = run.calibratedDistanceMeters, let f = run.calibrationFactor {
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
+                        Text("Calibrated to \(formatDistance(cal))")
+                        Spacer()
+                        Text(String(format: "watch was %.0f%% %@", abs(1 - f) * 100,
+                                    f > 1 ? "short" : "long"))
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.caption)
+                    Text("Watch recorded \(formatDistance(run.cachedDistanceMeters)). Your number is used everywhere.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                    Button("Change") { calibrationInput = ""; showCalibration = true }
+                        .font(.caption)
+                } else {
+                    Text("The watch guesses indoor distance from your wrist. If the console said something different, tell me and I'll use yours.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button {
+                        calibrationInput = ""
+                        showCalibration = true
+                    } label: {
+                        Label("Calibrate from the console", systemImage: "slider.horizontal.3")
+                            .font(.caption.bold())
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14).fill(.ultraThinMaterial))
+            .alert("Treadmill distance", isPresented: $showCalibration) {
+                TextField("e.g. 11.4", text: $calibrationInput)
+                    .keyboardType(.decimalPad)
+                Button("Save") { applyCalibration() }
+                if run.calibratedDistanceMeters != nil {
+                    Button("Remove calibration", role: .destructive) {
+                        run.calibratedDistanceMeters = nil
+                        try? modelContext.save()
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("What did the treadmill console show, in kilometres? The watch recorded \(formatDistance(run.cachedDistanceMeters)).")
+            }
+        }
+    }
+
+    private func applyCalibration() {
+        let cleaned = calibrationInput.replacingOccurrences(of: ",", with: ".")
+        guard let km = Double(cleaned), km > 0, km < 500 else { return }
+        run.calibratedDistanceMeters = km * 1000
+        try? modelContext.save()
+    }
+
     private var statsGrid: some View {
         let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
         return LazyVGrid(columns: cols, spacing: 12) {
-            statTile("Distance", value: formatDistance(run.cachedDistanceMeters), system: "ruler")
+            statTile("Distance", value: formatDistance(run.displayDistanceMeters), system: "ruler")
             statTile("Duration", value: formatDuration(run.cachedDurationSeconds), system: "stopwatch")
-            statTile("Avg Pace", value: formatPace(run.cachedAvgPaceSecPerKm), system: "speedometer")
-            statTile("Energy", value: "\(Int(run.cachedEnergyKcal)) kcal", system: "flame")
+            statTile("Avg Pace", value: formatPace(run.displayAvgPaceSecPerKm), system: "speedometer")
+            // Energy reads 0 on a run the HealthKit pass never enriched. Say
+            // so rather than asserting a confident zero — the founder saw
+            // "0 kcal" on two crashed runs and reasonably read it as data loss.
+            statTile("Energy",
+                     value: run.cachedEnergyKcal > 0 ? "\(Int(run.cachedEnergyKcal)) kcal" : "\u{2014}",
+                     system: "flame")
+            statTile("Avg HR", value: avgHRText, system: "heart")
             statTile("Mode", value: run.runTypeRaw.capitalized, system: run.runTypeRaw == "treadmill" ? "figure.run.treadmill" : "figure.run")
             if isNike {
                 statTile("Source", value: "Nike", system: "figure.run")
-            } else {
-                statTile("Personality", value: run.personality.replacingOccurrences(of: "_", with: " ").capitalized, system: "person.wave.2")
             }
+            // "Personality: Roast Coach" removed 2026-08-31 — founder: "this is
+            // unnecessary, remove this shit". It told him something he chose
+            // himself and never changes, in the space a real number should own.
         }
     }
 

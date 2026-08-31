@@ -39,6 +39,88 @@ enum UnfinishedRunRecovery {
     /// crashed instantly. Recovering them would junk up history.
     private static let minMeaningfulSeconds: Double = 120
 
+    /// Late-adopt a HealthKit workout onto a stub row, filling in the workout
+    /// UUID (which is what unlocks the chart and the route) plus the
+    /// authoritative distance, duration and energy.
+    private static func heal(_ record: RunRecord, marker: UnfinishedRunStore.Marker,
+                             existing: [RunRecord], context: ModelContext) async {
+        let knownHK = Set(existing.compactMap { $0.healthKitWorkoutUUID })
+        let window = marker.startedAt.addingTimeInterval(-300)...marker.startedAt
+            .addingTimeInterval(maxRunHours * 3600)
+        let candidates = await HealthKitReader.shared.recentRunningWorkouts()
+            .filter { !$0.isTest && !knownHK.contains($0.uuid) && window.contains($0.start) }
+        guard let w = candidates.first(where: { $0.aarcRunId == marker.runId })
+                ?? candidates.min(by: {
+                    abs($0.start.timeIntervalSince(marker.startedAt))
+                        < abs($1.start.timeIntervalSince(marker.startedAt))
+                }) else { return }
+        record.healthKitWorkoutUUID = w.uuid
+        record.endedAt = w.end
+        // Only overwrite headline numbers when Health actually has them; a
+        // zero from Health must never wipe a real number the live path caught.
+        if w.distanceMeters > 0 { record.cachedDistanceMeters = w.distanceMeters }
+        if w.durationSeconds > 0 { record.cachedDurationSeconds = w.durationSeconds }
+        if w.energyKcal > 0 { record.cachedEnergyKcal = w.energyKcal }
+        let d = record.cachedDistanceMeters, t = record.cachedDurationSeconds
+        record.cachedAvgPaceSecPerKm = d > 0 ? t / (d / 1000) : 0
+        try? context.save()
+        RunEventLog.shared.record(
+            "run.healed",
+            String(format: "adopted Health workout onto stub row: %.2f km / %.0f kcal",
+                   record.cachedDistanceMeters / 1000, record.cachedEnergyKcal))
+    }
+
+    /// Repair UNREADABLE runs already sitting in history, with no breadcrumb
+    /// required.
+    ///
+    /// The marker is cleared immediately after the provisional save and BEFORE
+    /// the summary work that crashes, so a marker-driven heal can never reach
+    /// the runs that actually broke — his 29 and 31 August runs are already in
+    /// history with no workout UUID and no series, and nothing was ever going
+    /// to come back for them. This sweeps for that shape directly.
+    ///
+    /// Conservative on purpose: only rows with NO workout UUID and NO series
+    /// (i.e. genuinely unrenderable), never test runs, and only adopting a
+    /// Health workout that overlaps the row's own start time.
+    static func healUnreadableRuns(context: ModelContext) async -> Int {
+        let all = (try? context.fetch(FetchDescriptor<RunRecord>())) ?? []
+        let stubs = all.filter {
+            !$0.isTestData && $0.healthKitWorkoutUUID == nil && ($0.seriesBlob?.isEmpty ?? true)
+                && $0.cachedDurationSeconds >= minMeaningfulSeconds
+        }
+        guard !stubs.isEmpty else { return 0 }
+        let knownHK = Set(all.compactMap { $0.healthKitWorkoutUUID })
+        let workouts = await HealthKitReader.shared.recentRunningWorkouts()
+            .filter { !$0.isTest && !knownHK.contains($0.uuid) }
+        guard !workouts.isEmpty else { return 0 }
+
+        var used = Set<UUID>()
+        var healed = 0
+        for stub in stubs {
+            let window = stub.startedAt.addingTimeInterval(-600)...stub.startedAt
+                .addingTimeInterval(maxRunHours * 3600)
+            guard let w = workouts
+                .filter({ !used.contains($0.uuid) && window.contains($0.start) })
+                .min(by: {
+                    abs($0.start.timeIntervalSince(stub.startedAt))
+                        < abs($1.start.timeIntervalSince(stub.startedAt))
+                }) else { continue }
+            used.insert(w.uuid)
+            stub.healthKitWorkoutUUID = w.uuid
+            if w.distanceMeters > 0 { stub.cachedDistanceMeters = w.distanceMeters }
+            if w.durationSeconds > 0 { stub.cachedDurationSeconds = w.durationSeconds }
+            if w.energyKcal > 0 { stub.cachedEnergyKcal = w.energyKcal }
+            let d = stub.cachedDistanceMeters, t = stub.cachedDurationSeconds
+            stub.cachedAvgPaceSecPerKm = d > 0 ? t / (d / 1000) : 0
+            healed += 1
+        }
+        if healed > 0 {
+            try? context.save()
+            RunEventLog.shared.record("run.healedStubs", "repaired \(healed) unreadable run(s) from Health")
+        }
+        return healed
+    }
+
     @discardableResult
     static func recoverIfNeeded(context: ModelContext) async -> Outcome {
         guard let marker = UnfinishedRunStore.pending else { return .nothingPending }
@@ -51,7 +133,16 @@ enum UnfinishedRunRecovery {
         }
 
         let existing = (try? context.fetch(FetchDescriptor<RunRecord>())) ?? []
-        if existing.contains(where: { $0.id == marker.runId }) {
+        if let already = existing.first(where: { $0.id == marker.runId }) {
+            // The row exists, but "exists" is not the same as "readable". A
+            // provisional row written by the gate and never adopted by the
+            // HealthKit pass has no workout UUID and (before this build) no
+            // series, so the detail page renders blank — the 29/31 August
+            // runs. If we can still find its workout, adopt it now rather than
+            // leaving him with an empty page forever.
+            if already.healthKitWorkoutUUID == nil {
+                await Self.heal(already, marker: marker, existing: existing, context: context)
+            }
             UnfinishedRunStore.clear()
             return .alreadyRecorded
         }

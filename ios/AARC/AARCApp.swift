@@ -96,6 +96,10 @@ struct AARCApp: App {
                     // and dashboard backfills see the recovered run.
                     await UnfinishedRunRecovery.recoverIfNeeded(
                         context: PersistenceStore.shared.container.mainContext)
+                    // Repair runs already stranded as unreadable stubs by an
+                    // earlier crash — the marker is long gone for those.
+                    _ = await UnfinishedRunRecovery.healUnreadableRuns(
+                        context: PersistenceStore.shared.container.mainContext)
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()

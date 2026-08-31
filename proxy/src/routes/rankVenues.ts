@@ -1,7 +1,8 @@
 import { callLLM, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
+import { venueKey, VenueProfileEnv } from "../lib/venueProfile";
 
-export type Env = LLMEnv & SentryEnv;
+export type Env = LLMEnv & SentryEnv & VenueProfileEnv;
 
 /// Rank the venue candidates the phone found, so the runner is asked about the
 /// places he could plausibly BE before the places he never would.
@@ -63,11 +64,34 @@ export async function rankVenuesHandler(request: Request, env: Env): Promise<Res
     // Nothing to reorder — don't pay for a round trip mid-run.
     if (candidates.length < 3) return json({ ok: true, ranked: candidates, reordered: false });
 
+    // A venue he has CONFIRMED before outranks everything a model can infer.
+    // He has now tapped "Park Hyatt Beijing" three runs running while the
+    // ranking still offers him the Fairmont first, because nothing remembered
+    // him. Founder: "you should be much better off with your intelligence and
+    // your understanding of me already... land park hyatt almost without
+    // effort." Known venues live in venue_profile, which is only ever written
+    // after a confirmation, so its presence IS the memory.
+    let known: string[] = [];
+    if (env.DB) {
+        try {
+            const rows = await env.DB.prepare("SELECT venue_key FROM venue_profile").all<{ venue_key: string }>();
+            const keys = (rows.results ?? []).map((r) => r.venue_key).filter(Boolean);
+            known = candidates.filter((c) => {
+                const k = venueKey(c);
+                return keys.some((kk) => k === kk || k.includes(kk) || kk.includes(k));
+            });
+        } catch { /* no memory available — fall through to pure ranking */ }
+    }
+
     const userPrompt = [
         body.city ? `City: ${body.city}` : "City: unknown",
         "",
         "Venues found nearby (already in distance order, nearest first):",
         ...candidates.map((c, i) => `${i + 1}. ${c}`),
+        "",
+        ...(known.length
+            ? ["", `HE HAS PREVIOUSLY CONFIRMED BEING AT: ${known.join("; ")}. Put these FIRST, above everything else. A place he has actually told us he trains at beats any inference you can make from a name.`]
+            : []),
         "",
         "Return them reordered by how likely he is to be there. JSON only.",
     ].join("\n");
@@ -90,7 +114,13 @@ export async function rankVenuesHandler(request: Request, env: Env): Promise<Res
         }
         for (const c of candidates) if (!seen.has(c)) safe.push(c);
 
-        return json({ ok: true, ranked: safe, reordered: true });
+        // Enforce the memory rather than trusting the model to honour it: a
+        // previously-confirmed venue is FACT, and facts don't get outvoted.
+        const final = known.length
+            ? [...known, ...safe.filter((n) => !known.includes(n))]
+            : safe;
+
+        return json({ ok: true, ranked: final, reordered: true, known: known.length });
     } catch (e) {
         const desc = describeUpstreamError(e);
         await captureMessage(env, `rank-venues failed: ${desc.message}`, "warning", { route: "/rank-venues" });

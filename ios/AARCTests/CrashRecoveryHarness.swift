@@ -83,3 +83,65 @@ struct CrashRecoveryHarness {
         reset()
     }
 }
+
+/// Harness B — treadmill calibration. The watch infers indoor distance from
+/// wrist motion, so a strap that loosens or tightens changes the number. On
+/// 31 Aug that produced a "negative split" the founder never ran: "that's like
+/// hallucination, that's not actually true because the speed was actually
+/// constant." These pin the correction maths.
+@MainActor
+@Suite("Treadmill calibration")
+struct CalibrationHarness {
+
+    private func run(distance: Double, duration: Double) -> RunRecord {
+        RunRecord(id: UUID(), startedAt: .now, endedAt: .now, personality: "roast_coach",
+                  isTestData: false, healthKitWorkoutUUID: nil, runTypeRaw: "treadmill",
+                  cachedDistanceMeters: distance, cachedDurationSeconds: duration,
+                  cachedAvgPaceSecPerKm: duration / (distance / 1000), cachedEnergyKcal: 0)
+    }
+
+    @Test("an uncalibrated run shows the watch's own numbers unchanged")
+    func passthrough() {
+        let r = run(distance: 11_150, duration: 3618)
+        #expect(r.calibrationFactor == nil)
+        #expect(r.displayDistanceMeters == 11_150)
+        #expect(abs(r.displayAvgPaceSecPerKm - r.cachedAvgPaceSecPerKm) < 0.001)
+    }
+
+    @Test("calibrating replaces the DISPLAYED distance but never the raw reading")
+    func keepsRaw() {
+        let r = run(distance: 11_150, duration: 3618)
+        r.calibratedDistanceMeters = 10_500
+        #expect(r.displayDistanceMeters == 10_500)
+        // The watch's number must survive so the correction stays visible AS a
+        // correction, and so re-calibrating never compounds.
+        #expect(r.cachedDistanceMeters == 11_150)
+    }
+
+    @Test("pace is recomputed against the corrected distance")
+    func paceFollows() {
+        let r = run(distance: 10_000, duration: 3600)   // 6:00/km by the watch
+        r.calibratedDistanceMeters = 12_000             // he actually did 12km
+        #expect(abs(r.displayAvgPaceSecPerKm - 300) < 0.001)   // 5:00/km
+    }
+
+    @Test("the factor reports which way the watch was wrong")
+    func factorDirection() {
+        let short = run(distance: 10_000, duration: 3600)
+        short.calibratedDistanceMeters = 11_000
+        #expect((short.calibrationFactor ?? 0) > 1)      // watch under-read
+
+        let long = run(distance: 10_000, duration: 3600)
+        long.calibratedDistanceMeters = 9_000
+        #expect((long.calibrationFactor ?? 0) < 1)       // watch over-read
+    }
+
+    @Test("nonsense calibration can't produce a divide-by-zero or a fake pace")
+    func guardsZero() {
+        let r = run(distance: 10_000, duration: 3600)
+        r.calibratedDistanceMeters = 0
+        // 0 is not a usable correction: fall back rather than divide by it.
+        #expect(r.calibrationFactor == nil)
+        #expect(r.displayAvgPaceSecPerKm > 0)
+    }
+}

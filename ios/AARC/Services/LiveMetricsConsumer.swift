@@ -449,6 +449,24 @@ final class LiveMetricsConsumer {
         let dur = latest?.elapsed ?? 0
         // A run that never really started isn't worth a history row.
         guard dist > 100 || dur > 60 else { return }
+
+        // Persist the SERIES too, not just the headline numbers.
+        //
+        // The 29 and 31 August runs both crashed after the finish. The gate did
+        // its job and the runs survived — but opening either showed an empty
+        // page, because RunDetailView renders from EITHER a HealthKit workout
+        // OR a stored series, and a provisional row had neither. So the run was
+        // saved and unreadable, which the founder rightly called humiliating.
+        // Everything below is already in memory at this moment; not writing it
+        // was the whole defect.
+        var series = StoredRunSeries()
+        for sample in LiveRunChartStore.shared.samples {
+            if let h = sample.heartRate, h > 0 { series.hr.append(.init(t: sample.recordedAt, v: h)) }
+            if let pace = sample.paceSecPerKm, pace > 0 { series.pace.append(.init(t: sample.recordedAt, v: pace)) }
+        }
+        series.trail = PlaceContext.shared.trail.map {
+            .init(lat: $0.coord.latitude, lon: $0.coord.longitude, kmh: $0.kmh, hr: $0.hr)
+        }
         let record = RunRecord(
             id: runId,
             startedAt: startedAt ?? .now,
@@ -460,14 +478,16 @@ final class LiveMetricsConsumer {
             cachedDistanceMeters: dist,
             cachedDurationSeconds: dur,
             cachedAvgPaceSecPerKm: dist > 0 ? dur / (dist / 1000) : 0,
-            cachedEnergyKcal: 0
+            cachedEnergyKcal: latest?.energyKcal ?? 0,
+            seriesBlob: try? JSONEncoder().encode(series)
         )
         record.city = PlaceContext.shared.runCity
         context.insert(record)
         try? context.save()
         RunEventLog.shared.record(
             "run.provisionalSaved",
-            String(format: "%.2f km / %.0f s persisted before summary work", dist / 1000, dur))
+            String(format: "%.2f km / %.0f s / %d hr / %d pace / %d trail persisted before summary work",
+                   dist / 1000, dur, series.hr.count, series.pace.count, series.trail.count))
     }
 
     /// Persist a RunRecord straight from live metrics (no HK workout UUID):

@@ -71,6 +71,34 @@ final class RunRecord {
     /// nil for real runs — those fetch richer data from HealthKit on demand.
     var seriesBlob: Data? = nil
 
+    /// The distance the TREADMILL's own console showed, typed in by the runner
+    /// after the run. nil = never calibrated.
+    ///
+    /// Why this exists (founder, 2026-08-31): on a treadmill the watch infers
+    /// distance from wrist motion, so the strap's tightness changes the answer.
+    /// He ran a constant belt speed with a loose strap that he tightened
+    /// mid-run, and the app recorded a negative split that never happened —
+    /// "that's like hallucination, that's not actually true". There is no
+    /// single source of truth indoors because we are not connected to the
+    /// machine, so the only honest fix is to let him supply the real number.
+    /// The raw cached values are deliberately left untouched; this sits
+    /// alongside them so the correction is always visible AS a correction.
+    var calibratedDistanceMeters: Double? = nil
+
+    /// Ratio of the runner's number to the watch's. 1.0 = watch was right.
+    var calibrationFactor: Double? {
+        guard let c = calibratedDistanceMeters, c > 0, cachedDistanceMeters > 0 else { return nil }
+        return c / cachedDistanceMeters
+    }
+    /// Distance to SHOW: the runner's if he gave us one, else the watch's.
+    var displayDistanceMeters: Double { calibratedDistanceMeters ?? cachedDistanceMeters }
+    /// Pace recomputed against whichever distance we are showing.
+    var displayAvgPaceSecPerKm: Double {
+        let d = displayDistanceMeters
+        guard d > 0, cachedDurationSeconds > 0 else { return cachedAvgPaceSecPerKm }
+        return cachedDurationSeconds / (d / 1000)
+    }
+
     init(
         id: UUID = UUID(),
         startedAt: Date = .now,
