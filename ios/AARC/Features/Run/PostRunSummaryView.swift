@@ -224,6 +224,12 @@ struct PostRunSummaryView: View {
 
     private func actionBar(_ s: RunSummaryStore.Summary) -> some View {
         VStack(spacing: 10) {
+            // Right here, before Share and Done, is the moment the founder
+            // asked for: "my memory is so fresh and then I can note down what
+            // went wrong". Offering this on the history page only would mean
+            // he has to remember to go back, which is exactly what he doesn't.
+            VoiceNoteSection(runId: s.runId, invite: true)
+                .padding(.bottom, 4)
             Button { share = .wholeRun } label: {
                 Label("Share this run", systemImage: "square.and.arrow.up")
                     .font(.headline).frame(maxWidth: .infinity)

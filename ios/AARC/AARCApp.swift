@@ -100,6 +100,10 @@ struct AARCApp: App {
                     // earlier crash — the marker is long gone for those.
                     _ = await UnfinishedRunRecovery.healUnreadableRuns(
                         context: PersistenceStore.shared.container.mainContext)
+                    // Any voice note whose transcript never came back gets
+                    // another go — the audio is already safe, this is catch-up.
+                    await VoiceNoteRecorder.shared.retryPending(
+                        context: PersistenceStore.shared.container.mainContext)
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()

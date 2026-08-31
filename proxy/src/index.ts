@@ -4,6 +4,7 @@ import { reactLineHandler } from "./routes/reactLine";
 import { musicCommentHandler } from "./routes/musicComment";
 import { roastPoolHandler } from "./routes/roastPool";
 import { rankVenuesHandler } from "./routes/rankVenues";
+import { voiceNoteHandler } from "./routes/voiceNote";
 import { ttsHandler } from "./routes/tts";
 import { liveHandler } from "./routes/live";
 import {
@@ -41,6 +42,9 @@ interface Env {
     DB: D1Database;
     /// R2 for pinned run audio — optional until R2 is enabled (wrangler.toml).
     VOICES?: R2Bucket;
+    /// Optional: enables real OpenAI Whisper for voice notes. Absent today,
+    /// so voice-note transcription falls back to ElevenLabs Scribe.
+    OPENAI_API_KEY?: string;
     /// Shared secret for ingest writes + replay reads (wrangler secret).
     DEVICE_TOKEN?: string;
     /// Live in-run channel tokens. DEVICE = the app (start/events/end/inject-GET);
@@ -104,6 +108,10 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
 
     if (request.method === "POST" && url.pathname === "/roast-pool") {
         return roastPoolHandler(request, env);
+    }
+
+    if (url.pathname === "/voice-note") {
+        return voiceNoteHandler(request, url, env);
     }
 
     if (url.pathname === "/rank-venues") {

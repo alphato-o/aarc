@@ -34,6 +34,7 @@ struct RunDetailView: View {
                 }
                 chartSection
                 calibrationSection
+                if !isNike { VoiceNoteSection(runId: run.id) }
                 if isLoading { loadingHint }
                 if let loadError {
                     Text(loadError)
