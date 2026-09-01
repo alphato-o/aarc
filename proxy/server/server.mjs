@@ -18,6 +18,8 @@ import { pipeline } from "node:stream/promises";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { isWebSocketUpgrade, acceptWebSocket } from "./wsServer.mjs";
+import { openVolcSession } from "./liveAsr.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -185,6 +187,97 @@ const server = createServer(async (req, res) => {
             res.writeHead(500, { "content-type": "application/json" });
         }
         res.end(JSON.stringify({ ok: false, error: "internal_error" }));
+    }
+});
+
+// ---------------------------------------------------------------------------
+// WebSocket: /live-asr — live speech-to-text relay.
+//
+// This lives on the gateway rather than the Worker because it is a long-lived
+// stateful socket bridging to a second long-lived socket, which is exactly what
+// a plain Node process is good at. The Worker keeps the request/response
+// routes; this keeps the streams.
+//
+// The relay is deliberately thin: audio in, text out, no buffering beyond what
+// the sockets do themselves. Every frame we hold is latency we added.
+// ---------------------------------------------------------------------------
+server.on("upgrade", async (req, socket) => {
+    const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+    if (url.pathname !== "/live-asr" || !isWebSocketUpgrade(req)) {
+        socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+        socket.destroy();
+        return;
+    }
+    // Same device auth as the other private routes. A browser cannot set
+    // headers on a WebSocket, so the token may also arrive as a query param;
+    // this endpoint is only ever called by the app.
+    const token = req.headers["x-aarc-device"] ?? url.searchParams.get("token");
+    if (!env.LIVE_DEVICE_TOKEN || token !== env.LIVE_DEVICE_TOKEN) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        socket.destroy();
+        return;
+    }
+    const apiKey = env.VOLC_API_KEY;
+    if (!apiKey) {
+        socket.write("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+        socket.destroy();
+        return;
+    }
+
+    let volc = null;
+    let closing = false;
+    const t0 = process.hrtime.bigint();
+    const sinceStart = () => Number((process.hrtime.bigint() - t0) / 1000000n);
+
+    // Audio that arrives before the VOLC socket finishes its handshake. Without
+    // this the runner's first word is lost, which on a 3-word shout is most of
+    // the sentence.
+    const preConnect = [];
+
+    const client = acceptWebSocket(req, socket, {
+        onMessage({ type, data }) {
+            if (type === "binary") {
+                if (volc) volc.sendAudio(data);
+                else if (preConnect.length < 50) preConnect.push(data);   // ~10s cap
+                return;
+            }
+            if (data === "EOF") volc?.finish();
+            else if (data === "ABORT") { closing = true; volc?.close(); client?.close(1000, "abort"); }
+        },
+        onClose() {
+            closing = true;
+            volc?.close();
+        },
+    });
+    if (!client) return;
+
+    try {
+        volc = await openVolcSession({
+            apiKey,
+            onText({ text, isFinal }) {
+                client.sendText(JSON.stringify({
+                    type: isFinal ? "final" : "partial",
+                    text,
+                    ms: sinceStart(),
+                }));
+            },
+            onError(err) {
+                console.error("[aarc-proxy] live-asr volc:", err.message);
+                client.sendText(JSON.stringify({ type: "error", text: err.message, ms: sinceStart() }));
+            },
+            onClose() {
+                if (!closing) client.sendText(JSON.stringify({ type: "closed", ms: sinceStart() }));
+                client.close(1000, "volc closed");
+            },
+        });
+        if (closing) { volc.close(); return; }   // phone hung up during the handshake
+        for (const chunk of preConnect) volc.sendAudio(chunk);
+        preConnect.length = 0;
+        client.sendText(JSON.stringify({ type: "ready", ms: sinceStart() }));
+    } catch (err) {
+        console.error("[aarc-proxy] live-asr connect failed:", err);
+        client.sendText(JSON.stringify({ type: "error", text: String(err?.message ?? err), ms: sinceStart() }));
+        client.close(1011, "upstream unavailable");
     }
 });
 
