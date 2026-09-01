@@ -63,6 +63,8 @@ final class LiveTranscriber {
     private var configObserver: NSObjectProtocol?
     /// How many times the engine was rebuilt under a moving route.
     private(set) var rebuilds = 0
+    private var isRebuilding = false
+    private var lastRebuildAt: Date?
 
     /// 16 kHz mono s16le: what the gateway forwards and what every ASR model
     /// wants. 200 ms at that rate is 3200 samples, 6400 bytes.
@@ -181,8 +183,8 @@ final class LiveTranscriber {
         }
         routeObserver = nil; configObserver = nil
         if let engine {
-            engine.inputNode.removeTap(onBus: 0)
             engine.stop()
+            engine.inputNode.removeTap(onBus: 0)
         }
         engine = nil
         engineRunning = false
@@ -216,17 +218,29 @@ final class LiveTranscriber {
         }
     }
 
-    private func startCapture(_ ws: URLSessionWebSocketTask) throws {
+    /// Put the shared session into a state where input is legal.
+    ///
+    /// Idempotent on purpose: the app's AudioPlaybackManager owns this session
+    /// for coach playback and puts it in `.playback`, where input is not just
+    /// unavailable but fatal to touch. Anything that is about to reach for
+    /// `inputNode` calls this first.
+    private func configureSession() throws {
         let session = AVAudioSession.sharedInstance()
-        // .voiceChat, not .spokenAudio. Two reasons, both learned the hard way
-        // on AirPods Pro: it is the mode built for talking and listening at the
-        // same time over Bluetooth, and it turns on echo cancellation, without
-        // which Ricky's voice in his ears gets transcribed back as if he had
-        // said it. .playAndRecord keeps a coach line that is still finishing
-        // from being torn down the moment he talks back to it.
-        try session.setCategory(.playAndRecord, mode: .voiceChat,
-                                options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+        // .voiceChat, not .spokenAudio. Two reasons, both learned on AirPods
+        // Pro: it is the mode built for talking and listening at the same time
+        // over Bluetooth, and it turns on echo cancellation, without which
+        // Ricky's voice in his ears gets transcribed back as if he had said it.
+        // .playAndRecord keeps a coach line that is still finishing from being
+        // torn down the moment he talks back to it.
+        if session.category != .playAndRecord || session.mode != .voiceChat {
+            try session.setCategory(.playAndRecord, mode: .voiceChat,
+                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+        }
         try session.setActive(true)
+    }
+
+    private func startCapture(_ ws: URLSessionWebSocketTask) throws {
+        try configureSession()
 
         guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                          sampleRate: Self.sampleRate,
@@ -246,22 +260,49 @@ final class LiveTranscriber {
         // a single buffer, which is precisely how this shipped broken: the
         // socket was fine, VOLC was fine, and the mic was simply never heard.
         // Rebuild whenever the graph or the route moves under us.
-        let rebuild: @Sendable (Notification) -> Void = { [weak self] _ in
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.rebuildEngine(reason: "graph changed") }
+        }
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            // Rebuilding on EVERY route notification is a trap: .categoryChange
+            // is fired by our own setCategory, so reacting to it means the
+            // rebuild re-triggers itself. Only respond to the hardware actually
+            // moving.
+            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+            guard let why = raw.flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)),
+                  why == .newDeviceAvailable || why == .oldDeviceUnavailable
+                    || why == .override || why == .routeConfigurationChange
+            else { return }
             Task { @MainActor in self?.rebuildEngine(reason: "route changed") }
         }
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main, using: rebuild)
-        routeObserver = NotificationCenter.default.addObserver(
-            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main, using: rebuild)
     }
 
     /// Builds (or rebuilds) the engine against whatever the hardware is NOW.
     private func buildEngine() throws {
         if let old = engine {
-            old.inputNode.removeTap(onBus: 0)
+            // STOP FIRST, then remove the tap. Removing a tap that is mid-flight
+            // on the audio thread is a crash, and a route change can fire this
+            // while buffers are still being delivered.
             old.stop()
+            old.inputNode.removeTap(onBus: 0)
         }
         guard let pump else { throw StreamError.noInput }
+
+        // Everything below reaches for `inputNode`, and doing that on a session
+        // that does not permit recording is an Objective-C exception, which
+        // Swift cannot catch: the app is simply gone. So this is checked, not
+        // caught. AudioPlaybackManager can take the session to .playback at any
+        // moment to speak a coach line, so re-assert ours and confirm the
+        // hardware has an input before touching the node.
+        try configureSession()
+        let session = AVAudioSession.sharedInstance()
+        guard session.category == .playAndRecord, session.isInputAvailable else {
+            throw StreamError.noInput
+        }
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
@@ -285,7 +326,22 @@ final class LiveTranscriber {
     }
 
     private func rebuildEngine(reason: String) {
-        guard isStreaming, engine != nil else { return }
+        guard isStreaming, engine != nil, !isRebuilding else { return }
+        // The route is EXPECTED to move right after we activate the session:
+        // .voiceChat pushes AirPods into Hands-Free, which fires a route change
+        // within milliseconds of start. Reacting to that one means rebuilding
+        // the engine while the tap we just installed is delivering its first
+        // buffers. The 2s watchdog covers a genuinely dead start, so let the
+        // opening moment settle instead.
+        if let s = startedAt, Date().timeIntervalSince(s) < 1.0 { return }
+        // Starting an engine can itself provoke a configuration change, so an
+        // unbounded rebuild is a loop that ends in a hang or a crash rather
+        // than a recovery. Bound it and space it out.
+        guard rebuilds < 3 else { return }
+        if let last = lastRebuildAt, Date().timeIntervalSince(last) < 1.0 { return }
+        isRebuilding = true
+        defer { isRebuilding = false }
+        lastRebuildAt = Date()
         rebuilds += 1
         do {
             try buildEngine()
@@ -459,8 +515,15 @@ private final class PCMPump: @unchecked Sendable {
         let conv = converter
         lock.unlock()
         guard let conv, let tgt else { return nil }
+        // A buffer delivered mid-route-change can carry a zero sample rate,
+        // which makes ratio infinite, and converting an infinite Double to
+        // AVAudioFrameCount is a runtime trap: the app dies on the audio
+        // thread with no catchable error. Refuse the buffer instead.
+        guard buffer.format.sampleRate > 0, buffer.frameLength > 0 else { return nil }
         let ratio = tgt.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
+        let scaled = Double(buffer.frameLength) * ratio
+        guard scaled.isFinite, scaled < Double(AVAudioFrameCount.max - 1024) else { return nil }
+        let capacity = AVAudioFrameCount(scaled) + 1024
         guard let out = AVAudioPCMBuffer(pcmFormat: tgt, frameCapacity: capacity) else { return nil }
 
         var supplied = false
