@@ -105,13 +105,40 @@ export async function voiceNoteHandler(request: Request, url: URL, env: VoiceNot
     }
 }
 
+/// Try each configured provider in preference order, FALLING THROUGH on
+/// failure rather than dying on the first one.
+///
+/// This matters because a provider can be configured and still not work: the
+/// Volc keys are correct in shape but the app has no ASR service grant yet,
+/// and ElevenLabs' key is missing the speech_to_text scope. Hard-failing on
+/// the preferred provider would mean a half-configured account produces no
+/// transcripts at all, when a working fallback was sitting right there.
 async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv): Promise<{ text: string; provider: string }> {
-    // Volcano Engine first when configured — closest to him, and the only one
-    // of the three that is properly bilingual for zh+en in one utterance.
+    const attempts: Array<() => Promise<{ text: string; provider: string }>> = [];
     if (env.VOLC_APP_ID && env.VOLC_ACCESS_TOKEN) {
-        return await transcribeVolc(audio, env.VOLC_APP_ID, env.VOLC_ACCESS_TOKEN);
+        attempts.push(() => transcribeVolc(audio, env.VOLC_APP_ID!, env.VOLC_ACCESS_TOKEN!));
     }
-    if (env.OPENAI_API_KEY) {
+    if (env.OPENAI_API_KEY) attempts.push(() => transcribeWhisper(audio, env.OPENAI_API_KEY!));
+    if (env.ELEVENLABS_API_KEY) attempts.push(() => transcribeScribe(audio, env.ELEVENLABS_API_KEY!));
+    if (attempts.length === 0) throw new Error("no transcription provider configured");
+
+    const errors: string[] = [];
+    for (const attempt of attempts) {
+        try {
+            return await attempt();
+        } catch (e) {
+            errors.push(e instanceof Error ? e.message : String(e));
+        }
+    }
+    // Surface every failure: knowing all three reasons is what lets the next
+    // fix be the right one.
+    throw new Error(errors.join(" | "));
+}
+
+async function transcribeWhisper(audio: ArrayBuffer, key: string): Promise<{ text: string; provider: string }> {
+    {
+        const env = { OPENAI_API_KEY: key } as VoiceNoteEnv;
+        if (env.OPENAI_API_KEY) {
         const fd = new FormData();
         fd.append("file", new Blob([audio], { type: "audio/mp4" }), "note.m4a");
         fd.append("model", "whisper-1");
@@ -124,8 +151,15 @@ async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv): Promise<{ text
         const j = await r.json<{ text?: string }>();
         if (!j.text) throw new Error("whisper returned no text");
         return { text: j.text, provider: "openai-whisper-1" };
+        }
+        throw new Error("whisper key missing");
     }
-    if (env.ELEVENLABS_API_KEY) {
+}
+
+async function transcribeScribe(audio: ArrayBuffer, key: string): Promise<{ text: string; provider: string }> {
+    {
+        const env = { ELEVENLABS_API_KEY: key } as VoiceNoteEnv;
+        if (env.ELEVENLABS_API_KEY) {
         const fd = new FormData();
         fd.append("file", new Blob([audio], { type: "audio/mp4" }), "note.m4a");
         fd.append("model_id", "scribe_v1");
@@ -138,8 +172,9 @@ async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv): Promise<{ text
         const j = await r.json<{ text?: string }>();
         if (!j.text) throw new Error("scribe returned no text");
         return { text: j.text, provider: "elevenlabs-scribe-v1" };
+        }
+        throw new Error("scribe key missing");
     }
-    throw new Error("no transcription provider configured");
 }
 
 /// Volcano Engine async file ASR (auc). Submit, then poll.
