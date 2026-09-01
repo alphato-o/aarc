@@ -36,7 +36,7 @@ export function isWebSocketUpgrade(req) {
  * Complete the handshake and return a tiny socket wrapper.
  * `onMessage({ type: 'binary'|'text', data })`.
  */
-export function acceptWebSocket(req, socket, { onMessage, onClose } = {}) {
+export function acceptWebSocket(req, socket, { onMessage, onClose, head } = {}) {
     const key = req.headers["sec-websocket-key"];
     if (!key) { socket.destroy(); return null; }
     const accept = createHash("sha1").update(key + GUID).digest("base64");
@@ -48,7 +48,10 @@ export function acceptWebSocket(req, socket, { onMessage, onClose } = {}) {
     );
     socket.setNoDelay(true);   // audio packets are small and latency-critical
 
-    let buf = Buffer.alloc(0);
+    // Node hands us any bytes that arrived after the handshake request in the
+    // SAME tcp segment. Dropping them loses the client's first frames, which
+    // for a runner shouting a short sentence can be most of it.
+    let buf = head?.length ? Buffer.from(head) : Buffer.alloc(0);
     let fragOp = null;
     let fragChunks = [];
     let closed = false;

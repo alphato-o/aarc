@@ -18,9 +18,10 @@ import Observation
 ///   * 200 ms packets. Smaller packets mean more TCP overhead and more radio
 ///     wakeups for no gain, because ASR models do not emit faster than their
 ///     own window. Larger ones directly add to time-to-first-word.
-///   * We send from the moment the mic opens, before the upstream socket has
-///     finished connecting — the gateway buffers those first packets. A runner
-///     shouting three words does not wait politely for a handshake.
+///   * Packets are handed to the socket from the audio thread, not bounced
+///     through the main actor. One hop per packet is latency for nothing, and
+///     independent Tasks do not preserve order, which would shuffle the PCM
+///     stream into noise.
 ///
 /// The key stays on the gateway (architecture rule: no API keys in the app),
 /// which is why this relays rather than dialling VOLC directly.
@@ -38,14 +39,26 @@ final class LiveTranscriber {
     private(set) var finalText = ""
     /// Milliseconds from "start" to the first text of any kind. The number.
     private(set) var firstTextMs = 0
-    private(set) var packetsSent = 0
     private(set) var lastError: String?
+
+    // Pipeline instrumentation. The first live failure was "VOLC saw no audio
+    // for 8 seconds" and this class could not say whether the mic was silent,
+    // the resampler was dropping everything, or the socket was refusing sends.
+    // A bench that only reports the happy path is not a bench.
+    private(set) var micCallbacks = 0
+    private(set) var framesCaptured = 0
+    private(set) var packetsSent = 0
+    private(set) var bytesSent = 0
+    private(set) var inputFormatDescription = "-"
+    private(set) var engineRunning = false
 
     private var task: URLSessionWebSocketTask?
     private var engine: AVAudioEngine?
     private var pump: PCMPump?
     private var timer: Timer?
+    private var toneTimer: Timer?
     private var startedAt: Date?
+    private var micWarned = false
 
     /// 16 kHz mono s16le: what the gateway forwards and what every ASR model
     /// wants. 200 ms at that rate is 3200 samples, 6400 bytes.
@@ -69,16 +82,24 @@ final class LiveTranscriber {
 
     // MARK: - Lifecycle
 
-    func start() async {
+    /// `testTone: true` streams a synthetic 16 kHz tone and never opens the
+    /// mic. It exists to split one question into two: if the tone reaches the
+    /// gateway and the mic does not, the fault is capture, not transport. That
+    /// distinction took a round trip through a real run to establish once.
+    func start(testTone: Bool = false) async {
         guard !isStreaming else { return }
         partial = ""; finalText = ""; lastError = nil
-        firstTextMs = 0; packetsSent = 0
-        status = "asking for mic…"
+        firstTextMs = 0; packetsSent = 0; bytesSent = 0
+        micCallbacks = 0; framesCaptured = 0; micWarned = false
+        inputFormatDescription = "-"; engineRunning = false
+        status = testTone ? "tone: starting…" : "asking for mic…"
 
-        guard await VoiceNoteRecorder.shared.requestPermission() else {
-            status = "no mic permission"
-            lastError = "Microphone access is off. Settings → AARC → Microphone."
-            return
+        if !testTone {
+            guard await VoiceNoteRecorder.shared.requestPermission() else {
+                status = "no mic permission"
+                lastError = "Microphone access is off. Settings → AARC → Microphone."
+                return
+            }
         }
         guard let token = Self.deviceToken else {
             status = "no device token"
@@ -97,30 +118,59 @@ final class LiveTranscriber {
         ws.resume()
         receiveLoop(ws)
 
-        do {
-            try startCapture(ws)
-        } catch {
-            status = "mic failed"
-            lastError = error.localizedDescription
-            await stop()
-            return
-        }
-
+        // Set BEFORE capture starts: the send path checks it, and the first
+        // packets can land within ~200 ms of the tap going in.
         isStreaming = true
         elapsed = 0
-        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let s = self.startedAt else { return }
-                self.elapsed = Date().timeIntervalSince(s)
+
+        if testTone {
+            startTestTone(ws)
+        } else {
+            do {
+                try startCapture(ws)
+            } catch {
+                status = "mic failed"
+                lastError = error.localizedDescription
+                await stop()
+                return
             }
+        }
+
+        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+
+    private func tick() {
+        guard let s = startedAt else { return }
+        elapsed = Date().timeIntervalSince(s)
+        if let pump {
+            let stats = pump.stats()
+            micCallbacks = stats.callbacks
+            framesCaptured = stats.frames
+            packetsSent = stats.packets
+            bytesSent = stats.bytes
+            if let e = stats.lastError, lastError == nil { note(error: e) }
+        }
+        engineRunning = engine?.isRunning ?? false
+
+        // Do not make him wait out VOLC's 8 second timeout to learn the mic is
+        // dead. If nothing has arrived from the tap after 2 seconds, say so.
+        if !micWarned, elapsed > 2, micCallbacks == 0, engine != nil {
+            micWarned = true
+            note(error: "Mic delivered no audio in 2s (engine running: \(engineRunning), format: \(inputFormatDescription)). Try the transport test to check the socket.")
         }
     }
 
     func stop() async {
         timer?.invalidate(); timer = nil
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
+        toneTimer?.invalidate(); toneTimer = nil
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         engine = nil
+        engineRunning = false
         // Flush whatever partial packet is left, then ask for the final result.
         if let tail = pump?.drain(), !tail.isEmpty, let task {
             try? await task.send(.data(tail))
@@ -142,6 +192,15 @@ final class LiveTranscriber {
 
     // MARK: - Capture
 
+    private func makePump(_ ws: URLSessionWebSocketTask) -> PCMPump {
+        // Send straight from the audio thread. URLSessionWebSocketTask queues
+        // internally and preserves call order; hopping each packet through a
+        // detached Task would not, and out-of-order PCM is just noise.
+        PCMPump(packetBytes: Self.packetBytes) { packet in
+            ws.send(.data(packet)) { _ in }
+        }
+    }
+
     private func startCapture(_ ws: URLSessionWebSocketTask) throws {
         let session = AVAudioSession.sharedInstance()
         // .playAndRecord so a coach line still finishing does not get torn down
@@ -152,38 +211,50 @@ final class LiveTranscriber {
 
         let engine = AVAudioEngine()
         let input = engine.inputNode
+        // Read the format only AFTER the session is active, or it reports the
+        // wrong rate (sometimes 0) and every later conversion is built wrong.
         let inFormat = input.outputFormat(forBus: 0)
-        guard inFormat.sampleRate > 0 else { throw StreamError.noInput }
+        inputFormatDescription = "\(Int(inFormat.sampleRate))Hz \(inFormat.channelCount)ch"
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw StreamError.noInput }
 
         guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                          sampleRate: Self.sampleRate,
                                          channels: 1,
-                                         interleaved: true),
-              let converter = AVAudioConverter(from: inFormat, to: target)
+                                         interleaved: true)
         else { throw StreamError.noConverter }
 
-        // The tap fires on a realtime audio thread. It must not touch main-actor
-        // state, so everything it needs lives in the pump, and the only thing
-        // that crosses back is a finished packet.
-        let pump = PCMPump(converter: converter, target: target, packetBytes: Self.packetBytes) { packet in
-            Task { @MainActor [weak self] in
-                guard let self, self.isStreaming || self.task != nil else { return }
-                do {
-                    try await ws.send(.data(packet))
-                    self.packetsSent += 1
-                } catch {
-                    self.note(error: "send failed: \(error.localizedDescription)")
-                }
-            }
-        }
+        let pump = makePump(ws)
+        pump.targetFormat = target
         self.pump = pump
 
-        input.installTap(onBus: 0, bufferSize: 2048, format: inFormat) { buffer, _ in
+        // Pass nil so the tap uses the node's own format. Handing installTap a
+        // format that disagrees with the hardware is not an error you catch,
+        // it is an assertion failure that kills the app, and the converter is
+        // built from the first real buffer anyway so nothing needs to guess.
+        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
             pump.feed(buffer)
         }
         engine.prepare()
         try engine.start()
         self.engine = engine
+        self.engineRunning = engine.isRunning
+    }
+
+    /// Transport test: synthetic 200 ms packets, no microphone involved.
+    private func startTestTone(_ ws: URLSessionWebSocketTask) {
+        let pump = makePump(ws)
+        self.pump = pump
+        status = "tone: streaming"
+        var phase = 0.0
+        let step = 2.0 * Double.pi * 440.0 / Self.sampleRate
+        toneTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
+            var samples = [Int16](repeating: 0, count: Self.packetBytes / 2)
+            for i in samples.indices {
+                samples[i] = Int16(sin(phase) * 8000)
+                phase += step
+            }
+            pump.feedRaw(samples.withUnsafeBufferPointer { Data(buffer: $0) })
+        }
     }
 
     // MARK: - Socket
@@ -212,7 +283,7 @@ final class LiveTranscriber {
 
         switch type {
         case "ready":
-            status = "listening"
+            if status.hasPrefix("tone") { status = "tone: relay ready" } else { status = "listening" }
         case "partial", "final":
             if firstTextMs == 0, let s = startedAt, !text.isEmpty {
                 firstTextMs = Int(Date().timeIntervalSince(s) * 1000)
@@ -238,7 +309,7 @@ final class LiveTranscriber {
         case noInput, noConverter
         var errorDescription: String? {
             switch self {
-            case .noInput: return "No audio input available."
+            case .noInput: return "No audio input available (input format reported no channels)."
             case .noConverter: return "Could not build a 16 kHz converter for this device's mic."
             }
         }
@@ -250,33 +321,63 @@ final class LiveTranscriber {
 ///
 /// Separate from `LiveTranscriber` because it runs on the realtime audio
 /// thread, where main-actor isolation cannot follow. It owns everything it
-/// touches and hands out only immutable `Data`.
+/// touches, hands out only immutable `Data`, and counts what passed through so
+/// the bench can say which stage went quiet.
 private final class PCMPump: @unchecked Sendable {
-    private let converter: AVAudioConverter
-    private let target: AVAudioFormat
+    /// Built lazily from the first buffer's ACTUAL format, so a device whose
+    /// mic disagrees with what we predicted still works instead of silently
+    /// converting nothing.
+    private var converter: AVAudioConverter?
+    private var converterInput: AVAudioFormat?
+    private var _targetFormat: AVAudioFormat?
+    var targetFormat: AVAudioFormat? {
+        get { lock.lock(); defer { lock.unlock() }; return _targetFormat }
+        set { lock.lock(); _targetFormat = newValue; lock.unlock() }
+    }
     private let packetBytes: Int
     private let emit: @Sendable (Data) -> Void
     private let lock = NSLock()
     private var pending = Data()
 
-    init(converter: AVAudioConverter, target: AVAudioFormat, packetBytes: Int,
-         emit: @escaping @Sendable (Data) -> Void) {
-        self.converter = converter
-        self.target = target
+    private var callbacks = 0
+    private var frames = 0
+    private var packets = 0
+    private var bytes = 0
+    private var failure: String?
+
+    init(packetBytes: Int, emit: @escaping @Sendable (Data) -> Void) {
         self.packetBytes = packetBytes
         self.emit = emit
         pending.reserveCapacity(packetBytes * 2)
     }
 
+    struct Stats { let callbacks: Int; let frames: Int; let packets: Int; let bytes: Int; let lastError: String? }
+
+    func stats() -> Stats {
+        lock.lock(); defer { lock.unlock() }
+        return Stats(callbacks: callbacks, frames: frames, packets: packets, bytes: bytes, lastError: failure)
+    }
+
     func feed(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); callbacks += 1; frames += Int(buffer.frameLength); lock.unlock()
         guard let converted = resample(buffer) else { return }
+        feedRaw(converted)
+    }
+
+    /// Already 16 kHz mono s16le (the transport test path).
+    func feedRaw(_ converted: Data) {
         var ready: [Data] = []
         lock.lock()
         pending.append(converted)
         while pending.count >= packetBytes {
-            ready.append(pending.prefix(packetBytes))
+            // Re-wrap in a fresh Data: a Data slice keeps the parent's index
+            // base, which is a reliable source of off-by-everything bugs once
+            // it is handed to anything that assumes zero-based storage.
+            ready.append(Data(pending.prefix(packetBytes)))
             pending.removeFirst(packetBytes)
         }
+        packets += ready.count
+        bytes += ready.reduce(0) { $0 + $1.count }
         lock.unlock()
         for packet in ready { emit(packet) }
     }
@@ -285,26 +386,41 @@ private final class PCMPump: @unchecked Sendable {
     /// is often the tail of the last word.
     func drain() -> Data {
         lock.lock(); defer { lock.unlock() }
-        let out = pending
+        let out = Data(pending)
         pending.removeAll(keepingCapacity: true)
         return out
     }
 
     private func resample(_ buffer: AVAudioPCMBuffer) -> Data? {
-        let ratio = target.sampleRate / buffer.format.sampleRate
+        lock.lock()
+        let tgt = _targetFormat
+        // Rebuild if this is the first buffer, or if the route changed under
+        // us (headphones in, bluetooth connects) and the format moved with it.
+        if let tgt, converter == nil || converterInput != buffer.format {
+            converter = AVAudioConverter(from: buffer.format, to: tgt)
+            converterInput = buffer.format
+            if converter == nil { failure = "no converter for \(Int(buffer.format.sampleRate))Hz mic" }
+        }
+        let conv = converter
+        lock.unlock()
+        guard let conv, let tgt else { return nil }
+        let ratio = tgt.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1024
-        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
+        guard let out = AVAudioPCMBuffer(pcmFormat: tgt, frameCapacity: capacity) else { return nil }
 
         var supplied = false
         var error: NSError?
-        converter.convert(to: out, error: &error) { _, status in
+        conv.convert(to: out, error: &error) { _, status in
             if supplied { status.pointee = .noDataNow; return nil }
             supplied = true
             status.pointee = .haveData
             return buffer
         }
-        guard error == nil, out.frameLength > 0,
-              let channel = out.int16ChannelData else { return nil }
+        if let error {
+            lock.lock(); failure = "resample: \(error.localizedDescription)"; lock.unlock()
+            return nil
+        }
+        guard out.frameLength > 0, let channel = out.int16ChannelData else { return nil }
         return Data(bytes: channel[0], count: Int(out.frameLength) * 2)
     }
 }

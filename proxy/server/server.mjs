@@ -201,7 +201,7 @@ const server = createServer(async (req, res) => {
 // The relay is deliberately thin: audio in, text out, no buffering beyond what
 // the sockets do themselves. Every frame we hold is latency we added.
 // ---------------------------------------------------------------------------
-server.on("upgrade", async (req, socket) => {
+server.on("upgrade", async (req, socket, head) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     if (url.pathname !== "/live-asr" || !isWebSocketUpgrade(req)) {
         socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -226,8 +226,16 @@ server.on("upgrade", async (req, socket) => {
 
     let volc = null;
     let closing = false;
+    let audioPackets = 0;
+    let audioBytes = 0;
     const t0 = process.hrtime.bigint();
     const sinceStart = () => Number((process.hrtime.bigint() - t0) / 1000000n);
+
+    // Say out loud whether the phone actually sent anything. The first live
+    // failure was "no audio for 8 seconds" and the logs could not distinguish
+    // a silent mic from a broken relay, which cost a debugging round trip.
+    const summarise = (why) =>
+        console.log(`[aarc-proxy] live-asr ${why}: ${audioPackets} packets / ${audioBytes} bytes in ${sinceStart()}ms`);
 
     // Audio that arrives before the VOLC socket finishes its handshake. Without
     // this the runner's first word is lost, which on a 3-word shout is most of
@@ -235,17 +243,21 @@ server.on("upgrade", async (req, socket) => {
     const preConnect = [];
 
     const client = acceptWebSocket(req, socket, {
+        head,
         onMessage({ type, data }) {
             if (type === "binary") {
+                audioPackets++;
+                audioBytes += data.length;
                 if (volc) volc.sendAudio(data);
                 else if (preConnect.length < 50) preConnect.push(data);   // ~10s cap
                 return;
             }
-            if (data === "EOF") volc?.finish();
+            if (data === "EOF") { summarise("eof"); volc?.finish(); }
             else if (data === "ABORT") { closing = true; volc?.close(); client?.close(1000, "abort"); }
         },
         onClose() {
             closing = true;
+            summarise("client gone");
             volc?.close();
         },
     });

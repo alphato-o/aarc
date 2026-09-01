@@ -116,15 +116,26 @@ struct VoicePlayground: View {
                 } label: {
                     Label("Start live transcription", systemImage: "waveform.badge.mic")
                 }
+                Button {
+                    Task { await stream.start(testTone: true) }
+                } label: {
+                    Label("Transport test (no mic)", systemImage: "antenna.radiowaves.left.and.right")
+                }
             }
 
             LabeledContent("Connection", value: stream.status)
             if stream.firstTextMs > 0 {
                 LabeledContent("First text after", value: "\(stream.firstTextMs) ms").monospacedDigit()
             }
-            if stream.packetsSent > 0 {
-                LabeledContent("Audio packets", value: "\(stream.packetsSent)").monospacedDigit()
-            }
+
+            // Every stage, always visible. A zero here names the broken stage
+            // instantly instead of costing a run to narrow down.
+            LabeledContent("Mic format", value: stream.inputFormatDescription)
+            LabeledContent("Engine running", value: stream.engineRunning ? "Yes" : "No")
+            LabeledContent("Mic callbacks", value: "\(stream.micCallbacks)").monospacedDigit()
+            LabeledContent("Frames captured", value: "\(stream.framesCaptured)").monospacedDigit()
+            LabeledContent("Packets sent", value: "\(stream.packetsSent)").monospacedDigit()
+            LabeledContent("Bytes sent", value: "\(stream.bytesSent / 1024) KB").monospacedDigit()
             if !stream.partial.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("LIVE").font(.caption2.bold()).foregroundStyle(.green)
@@ -143,7 +154,7 @@ struct VoicePlayground: View {
         } header: {
             Text("Live streaming")
         } footer: {
-            Text("Speak and watch the text arrive. Audio goes to the gateway in Beijing over a websocket, which relays to VOLC and streams text back. \"First text after\" is the number that matters.")
+            Text("Speak and watch the text arrive. Audio goes over a websocket to the gateway, which relays to VOLC and streams text back. \"First text after\" is the number that matters. If the mic counters stay at zero, run the transport test: it streams a synthetic tone with the mic untouched, so packets moving there means the socket is fine and the fault is capture.")
         }
     }
 
