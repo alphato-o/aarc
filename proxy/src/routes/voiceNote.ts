@@ -88,7 +88,7 @@ export async function voiceNoteHandler(request: Request, url: URL, env: VoiceNot
     // 2. Transcribe + tidy. The phone does this on a detached task and polls,
     //    so a slow model here never blocks him getting on with his evening.
     try {
-        const { text, provider } = await transcribe(audio, env);
+        const { text, provider } = await transcribe(audio, env, Number.isFinite(durationS) ? durationS : 0);
         const clean = await tidy(text, env);
         await env.DB.prepare(
             "UPDATE voice_note SET status='done', provider=?, raw_text=?, clean_text=?, error=NULL WHERE note_id=?",
@@ -113,10 +113,10 @@ export async function voiceNoteHandler(request: Request, url: URL, env: VoiceNot
 /// and ElevenLabs' key is missing the speech_to_text scope. Hard-failing on
 /// the preferred provider would mean a half-configured account produces no
 /// transcripts at all, when a working fallback was sitting right there.
-async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv): Promise<{ text: string; provider: string }> {
+async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv, durationS = 0): Promise<{ text: string; provider: string }> {
     const attempts: Array<() => Promise<{ text: string; provider: string }>> = [];
     if (env.VOLC_APP_ID && env.VOLC_ACCESS_TOKEN) {
-        attempts.push(() => transcribeVolc(audio, env.VOLC_APP_ID!, env.VOLC_ACCESS_TOKEN!));
+        attempts.push(() => transcribeVolc(audio, env.VOLC_APP_ID!, env.VOLC_ACCESS_TOKEN!, durationS));
     }
     if (env.OPENAI_API_KEY) attempts.push(() => transcribeWhisper(audio, env.OPENAI_API_KEY!));
     if (env.ELEVENLABS_API_KEY) attempts.push(() => transcribeScribe(audio, env.ELEVENLABS_API_KEY!));
@@ -177,44 +177,75 @@ async function transcribeScribe(audio: ArrayBuffer, key: string): Promise<{ text
     }
 }
 
-/// Volcano Engine async file ASR (auc). Submit, then poll.
+/// Volcano Engine file ASR, CHEAPEST TIER FIRST.
 ///
-/// Audio goes inline as base64 rather than by URL: the alternative is exposing
-/// a publicly fetchable link to his private voice notes just so ByteDance can
-/// pull them, and a note is a few hundred KB. Not worth the exposure.
+/// He enabled both 小模型 (legacy 录音文件识别) and 大模型 (录音文件识别大模型)
+/// and asked for "a tiered approach maybe to save some tokens". So:
 ///
-/// NOTE: written against the v1 auc API and NOT yet verified end to end — the
-/// AppID is not provisioned, so every call so far stops at grant lookup. The
-/// token is structurally accepted by both v1 and v3/bigmodel, so if the AppID
-/// turns out to be a bigmodel one this needs the v3 endpoint + X-Api-* headers
-/// instead. Do not assume this path works until a real transcript comes back.
+///   tier 1  小模型 / v1 auc      — cheaper, fine for a clear 30-second note
+///   tier 2  大模型 / v3 bigmodel — better on accents, noise, and zh/en mixing
+///
+/// Escalation is on RESULT, not just on error. A cheap model that returns
+/// something implausibly short for the audio's duration has effectively
+/// failed, and silently keeping that would be worse than paying for tier 2 —
+/// the whole point of the note is the detail in it. Roughly: real speech runs
+/// ~8+ chars/second; anything under a third of that gets a second opinion.
+const VOLC_TIERS = ["small", "big"] as const;
+
 async function transcribeVolc(
+    audio: ArrayBuffer, appId: string, token: string, durationS = 0,
+): Promise<{ text: string; provider: string }> {
+    const errors: string[] = [];
+    let cheapResult: { text: string; provider: string } | null = null;
+
+    for (const tier of VOLC_TIERS) {
+        try {
+            const r = tier === "small"
+                ? await volcSmall(audio, appId, token)
+                : await volcBig(audio, appId, token);
+            if (tier === "small" && looksTruncated(r.text, durationS)) {
+                // Hold it: if the big model also fails we still return this
+                // rather than nothing.
+                cheapResult = r;
+                errors.push(`small tier looked truncated (${r.text.length} chars for ${Math.round(durationS)}s)`);
+                continue;
+            }
+            return r;
+        } catch (e) {
+            errors.push(`${tier}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+    if (cheapResult) return cheapResult;
+    throw new Error(`volc ${errors.join(" ; ")}`);
+}
+
+/// Under a third of natural speech density means we probably lost most of it.
+/// Only judges when we know the duration — never penalise an unknown.
+function looksTruncated(text: string, durationS: number): boolean {
+    if (durationS < 10) return false;
+    return text.trim().length < durationS * 2.5;
+}
+
+/// Tier 1 — legacy v1 auc (小模型). Submit + poll.
+async function volcSmall(
     audio: ArrayBuffer, appId: string, token: string,
 ): Promise<{ text: string; provider: string }> {
-    const b64 = base64(audio);
     const reqid = crypto.randomUUID();
     const app = { appid: appId, token, cluster: "volcengine_input_common" };
-
     const submit = await fetch("https://openspeech.bytedance.com/api/v1/auc/submit", {
         method: "POST",
         headers: { authorization: `Bearer; ${token}`, "content-type": "application/json" },
         body: JSON.stringify({
-            app,
-            user: { uid: "aarc" },
-            audio: { format: "m4a", data: b64 },
-            // Punctuation + inverse text normalisation on: he dictates numbers
-            // ("11.15 km", "five fifty-seven") and wants them readable.
-            request: { reqid, sequence: 1, nbest: 1, word_info: 0, show_utterances: false },
+            app, user: { uid: "aarc" },
+            audio: { format: "m4a", data: base64(audio) },
+            request: { reqid, nbest: 1, word_info: 0 },
         }),
     });
-    const sj = await submit.json<{ code?: number; message?: string; resp?: { id?: string } }>();
-    if (!submit.ok || (sj.code !== undefined && sj.code !== 1000 && sj.code !== 0)) {
-        throw new Error(`volc submit ${submit.status} code=${sj.code}: ${(sj.message ?? "").slice(0, 160)}`);
+    const sj = await submit.json<{ code?: number; message?: string }>();
+    if (sj.code !== undefined && sj.code !== 1000 && sj.code !== 0) {
+        throw new Error(`submit code=${sj.code}: ${(sj.message ?? "").slice(0, 120)}`);
     }
-
-    // Poll. A 3-minute note typically lands in a few seconds; give it a while
-    // rather than failing a transcript that was nearly ready.
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 25; i++) {
         await new Promise((r) => setTimeout(r, 1500));
         const q = await fetch("https://openspeech.bytedance.com/api/v1/auc/query", {
             method: "POST",
@@ -224,15 +255,61 @@ async function transcribeVolc(
         const qj = await q.json<{ code?: number; message?: string; result?: { text?: string }[] }>();
         if (qj.code === 1000 || qj.code === 0) {
             const text = (qj.result ?? []).map((r) => r.text ?? "").join(" ").trim();
-            if (text) return { text, provider: "volc-auc" };
-            throw new Error("volc returned an empty transcript");
+            if (text) return { text, provider: "volc-auc-small" };
+            throw new Error("empty transcript");
         }
-        // 2000/2001-style codes mean "still working"; anything else is fatal.
         if (qj.code !== undefined && qj.code !== 2000 && qj.code !== 2001) {
-            throw new Error(`volc query code=${qj.code}: ${(qj.message ?? "").slice(0, 160)}`);
+            throw new Error(`query code=${qj.code}: ${(qj.message ?? "").slice(0, 120)}`);
         }
     }
-    throw new Error("volc timed out waiting for the transcript");
+    throw new Error("timed out");
+}
+
+/// Tier 2 — v3 bigmodel (大模型). Verified that volc.bigasr.auc is the ONLY
+/// resource this endpoint accepts: every other id is rejected outright with
+/// "resourceId ... is not allowed", while this one reaches the grant check.
+async function volcBig(
+    audio: ArrayBuffer, appId: string, token: string,
+): Promise<{ text: string; provider: string }> {
+    const reqid = crypto.randomUUID();
+    const headers = {
+        "X-Api-App-Key": appId,
+        "X-Api-Access-Key": token,
+        "X-Api-Resource-Id": "volc.bigasr.auc",
+        "X-Api-Request-Id": reqid,
+        "content-type": "application/json",
+    };
+    const submit = await fetch("https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit", {
+        method: "POST",
+        headers: { ...headers, "X-Api-Sequence": "-1" },
+        body: JSON.stringify({
+            user: { uid: "aarc" },
+            audio: { format: "m4a", data: base64(audio) },
+            request: { model_name: "bigmodel", enable_punc: true, enable_itn: true },
+        }),
+    });
+    const code = submit.headers.get("x-api-status-code");
+    if (code && code !== "20000000" && code !== "0") {
+        throw new Error(`submit ${code}: ${(submit.headers.get("x-api-message") ?? "").slice(0, 120)}`);
+    }
+    for (let i = 0; i < 25; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const q = await fetch("https://openspeech.bytedance.com/api/v3/auc/bigmodel/query", {
+            method: "POST", headers, body: JSON.stringify({}),
+        });
+        const qc = q.headers.get("x-api-status-code");
+        if (qc === "20000000" || qc === "0") {
+            const qj = await q.json<{ result?: { text?: string } }>();
+            const text = (qj.result?.text ?? "").trim();
+            if (text) return { text, provider: "volc-auc-bigmodel" };
+            throw new Error("empty transcript");
+        }
+        // 20000001/2 = still processing.
+        if (qc && !["20000001", "20000002"].includes(qc)) {
+            throw new Error(`query ${qc}: ${(q.headers.get("x-api-message") ?? "").slice(0, 120)}`);
+        }
+    }
+    throw new Error("timed out");
 }
 
 function base64(buf: ArrayBuffer): string {
