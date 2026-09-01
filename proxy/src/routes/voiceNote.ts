@@ -38,7 +38,11 @@ export interface VoiceNoteEnv extends LLMEnv, SentryEnv {
 }
 
 const ID_RE = /^[A-Za-z0-9-]{8,64}$/;
-const MAX_BYTES = 25 * 1024 * 1024;   // 25MB: both APIs cap here
+// 8MB, not the API's 25MB. Base64 inflates by a third, and a ~13MB JSON body
+// killed the submit outright (empty status, no message) on a 9.7MB note. The
+// recorder now produces ~250KB/minute, so this is ~30 minutes of speech —
+// far past any real note, while staying inside what the worker can marshal.
+const MAX_BYTES = 8 * 1024 * 1024;
 
 function json(data: unknown, status = 200): Response {
     return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });

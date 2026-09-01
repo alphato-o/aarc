@@ -77,11 +77,19 @@ final class VoiceNoteRecorder: NSObject {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker])
             try session.setActive(true)
+            // SPEECH settings, not music settings. The default 44.1kHz/high
+            // profile recorded his 2m50s note as 9.7MB (~456kbps) — which then
+            // failed to transcribe at all, because base64-ing it blew the
+            // worker's limits. The same audio at 16kHz mono 32kbps is 708KB,
+            // 93% smaller, and transcribes perfectly: 16kHz is the sample rate
+            // every ASR model downsamples to anyway, so the extra bits were
+            // never buying accuracy, just upload time and failure modes.
             let settings: [String: Any] = [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: 44_100,
+                AVSampleRateKey: 16_000,
                 AVNumberOfChannelsKey: 1,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue,
+                AVEncoderBitRateKey: 32_000,
+                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
             ]
             let r = try AVAudioRecorder(url: url, settings: settings)
             r.delegate = self
