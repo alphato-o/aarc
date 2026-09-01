@@ -68,8 +68,11 @@ final class LiveTranscriber {
 
     /// 16 kHz mono s16le: what the gateway forwards and what every ASR model
     /// wants. 200 ms at that rate is 3200 samples, 6400 bytes.
-    private static let sampleRate = 16_000.0
-    private static let packetBytes = 6_400
+    /// nonisolated because these are read from the audio thread and from
+    /// Sendable closures. As main-actor statics they compile but drag the same
+    /// isolation checking into realtime code that already crashed this once.
+    nonisolated private static let sampleRate = 16_000.0
+    nonisolated private static let packetBytes = 6_400
 
     /// Defaults to the gateway. Overridable so the bench can be pointed at a
     /// laptop running `node server.mjs` while iterating on the relay.
@@ -234,7 +237,7 @@ final class LiveTranscriber {
         // torn down the moment he talks back to it.
         if session.category != .playAndRecord || session.mode != .voiceChat {
             try session.setCategory(.playAndRecord, mode: .voiceChat,
-                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
+                                    options: [.duckOthers, .defaultToSpeaker, .allowBluetoothHFP])
         }
         try session.setActive(true)
     }
@@ -312,13 +315,24 @@ final class LiveTranscriber {
         inputFormatDescription = "\(Int(inFormat.sampleRate))Hz \(inFormat.channelCount)ch"
         guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw StreamError.noInput }
 
+        // The @Sendable annotation is load-bearing, not decoration.
+        //
+        // AVAudioNodeTapBlock is not declared Sendable, so a closure written
+        // inline here inherits this method's @MainActor isolation. Swift then
+        // inserts a runtime isolation check, and that check calls
+        // dispatch_assert_queue the moment the block runs, which it does on the
+        // realtime audio thread. The assert fails and the app traps: crash on
+        // the very first buffer, with a stack that points at CoreAudio rather
+        // than at the isolation it is really complaining about. Typing the
+        // block @Sendable drops the inference and the check with it.
+        let tap: @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void = { buffer, _ in
+            pump.feed(buffer)
+        }
         // Pass nil so the tap uses the node's own format. Handing installTap a
         // format that disagrees with the hardware is not an error you catch,
         // it is an assertion failure that kills the app, and the converter is
         // rebuilt from the first real buffer anyway so nothing needs to guess.
-        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
-            pump.feed(buffer)
-        }
+        input.installTap(onBus: 0, bufferSize: 2048, format: nil, block: tap)
         engine.prepare()
         try engine.start()
         self.engine = engine
