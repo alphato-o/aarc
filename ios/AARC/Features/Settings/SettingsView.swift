@@ -106,6 +106,7 @@ struct DeveloperSettingsView: View {
         Form {
             Section("Tools") {
                 NavigationLink("Control Room") { ControlRoomView() }
+                NavigationLink("Voice Lab") { VoicePlayground() }
                 NavigationLink("Coach Playground") { CoachPlayground() }
                 NavigationLink("Script Preview (AI)") { ScriptPreviewView() }
                 NavigationLink("Phone-only / Pedometer") { DiagnosticsView() }

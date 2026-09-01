@@ -116,8 +116,11 @@ final class VoiceNoteRecorder: NSObject {
 
     /// Stop and persist. Returns the note id, or nil if there was nothing worth
     /// keeping.
+    ///
+    /// `autoUpload: false` keeps the recording local. The Voice Lab uses it so
+    /// it can time the upload itself rather than racing a fire-and-forget one.
     @discardableResult
-    func stop(context: ModelContext?) -> UUID? {
+    func stop(context: ModelContext?, autoUpload: Bool = true) -> UUID? {
         guard let r = recorder, let noteId = currentNoteId, let runId = currentRunId else { return nil }
         let duration = r.currentTime
         r.stop()
@@ -144,7 +147,9 @@ final class VoiceNoteRecorder: NSObject {
             try? context.save()
         }
         RunEventLog.shared.record("voicenote.recorded", String(format: "%.0fs", duration))
-        Task { await upload(noteId: noteId, runId: runId, duration: duration, context: context) }
+        if autoUpload {
+            Task { await upload(noteId: noteId, runId: runId, duration: duration, context: context) }
+        }
         return noteId
     }
 
@@ -240,6 +245,71 @@ final class VoiceNoteRecorder: NSObject {
     }
 
     enum RecorderError: Error { case couldNotStart }
+
+    // MARK: - Bench
+
+    struct BenchResult { let raw: String; let clean: String; let provider: String }
+
+    enum BenchError: LocalizedError {
+        case noDeviceToken, noAudio, http(Int, String), server(String)
+        var errorDescription: String? {
+            switch self {
+            case .noDeviceToken: return "AARCLiveDeviceToken missing from Info.plist — this build cannot reach the proxy."
+            case .noAudio: return "Recording file not found on disk."
+            case .http(let code, let body): return "HTTP \(code): \(body.prefix(200))"
+            case .server(let msg): return msg
+            }
+        }
+    }
+
+    /// The same upload the real note path uses, but it RETURNS the result
+    /// instead of quietly filing it, and surfaces the failure instead of
+    /// swallowing it. That difference is the whole point of a bench: the
+    /// production path is designed to fail silently so a bad night never costs
+    /// him the audio, which also means it never tells you what broke.
+    ///
+    /// Targets the Cloudflare Worker directly, not `apiBaseURL` — voice notes
+    /// need D1 and R2, and the gateway stubs both.
+    func transcribeForBench(noteId: UUID, runId: UUID) async -> Result<BenchResult, Error> {
+        guard let token = Self.deviceToken else { return .failure(BenchError.noDeviceToken) }
+        let url = Self.fileURL(for: noteId)
+        guard let data = try? Data(contentsOf: url) else { return .failure(BenchError.noAudio) }
+
+        var comps = URLComponents(url: Config.cloudBaseURL.appendingPathComponent("voice-note"),
+                                  resolvingAgainstBaseURL: false)
+        comps?.queryItems = [
+            .init(name: "runId", value: runId.uuidString),
+            .init(name: "noteId", value: noteId.uuidString),
+        ]
+        guard let reqURL = comps?.url else { return .failure(BenchError.noAudio) }
+        var req = URLRequest(url: reqURL)
+        req.httpMethod = "POST"
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        req.setValue("audio/mp4", forHTTPHeaderField: "content-type")
+        req.timeoutInterval = 120
+        req.httpBody = data
+
+        do {
+            let (respData, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let body = String(data: respData, encoding: .utf8) ?? ""
+            guard code == 200,
+                  let obj = try? JSONSerialization.jsonObject(with: respData) as? [String: Any]
+            else { return .failure(BenchError.http(code, body)) }
+
+            // A 200 with status:"failed" is the normal shape when the audio
+            // stored fine but the provider refused it.
+            if (obj["status"] as? String) == "failed" {
+                return .failure(BenchError.server((obj["error"] as? String) ?? "transcription failed"))
+            }
+            return .success(BenchResult(
+                raw: (obj["rawText"] as? String) ?? "",
+                clean: (obj["cleanText"] as? String) ?? "",
+                provider: (obj["provider"] as? String) ?? "unknown"))
+        } catch {
+            return .failure(error)
+        }
+    }
 }
 
 extension VoiceNoteRecorder: AVAudioRecorderDelegate {
