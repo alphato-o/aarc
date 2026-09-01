@@ -133,6 +133,9 @@ struct VoicePlayground: View {
             LabeledContent("Mic format", value: stream.inputFormatDescription)
             LabeledContent("Engine running", value: stream.engineRunning ? "Yes" : "No")
             LabeledContent("Mic callbacks", value: "\(stream.micCallbacks)").monospacedDigit()
+            if stream.rebuilds > 0 {
+                LabeledContent("Engine rebuilds", value: "\(stream.rebuilds)").monospacedDigit()
+            }
             LabeledContent("Frames captured", value: "\(stream.framesCaptured)").monospacedDigit()
             LabeledContent("Packets sent", value: "\(stream.packetsSent)").monospacedDigit()
             LabeledContent("Bytes sent", value: "\(stream.bytesSent / 1024) KB").monospacedDigit()

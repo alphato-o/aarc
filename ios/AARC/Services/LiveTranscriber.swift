@@ -59,6 +59,10 @@ final class LiveTranscriber {
     private var toneTimer: Timer?
     private var startedAt: Date?
     private var micWarned = false
+    private var routeObserver: NSObjectProtocol?
+    private var configObserver: NSObjectProtocol?
+    /// How many times the engine was rebuilt under a moving route.
+    private(set) var rebuilds = 0
 
     /// 16 kHz mono s16le: what the gateway forwards and what every ASR model
     /// wants. 200 ms at that rate is 3200 samples, 6400 bytes.
@@ -155,16 +159,27 @@ final class LiveTranscriber {
         engineRunning = engine?.isRunning ?? false
 
         // Do not make him wait out VOLC's 8 second timeout to learn the mic is
-        // dead. If nothing has arrived from the tap after 2 seconds, say so.
+        // dead. If nothing has arrived after 2s, try one rebuild against the
+        // current route: a route change that lands without a notification we
+        // caught looks exactly like this, and recovering silently beats
+        // reporting a failure he then has to act on.
         if !micWarned, elapsed > 2, micCallbacks == 0, engine != nil {
             micWarned = true
-            note(error: "Mic delivered no audio in 2s (engine running: \(engineRunning), format: \(inputFormatDescription)). Try the transport test to check the socket.")
+            if rebuilds == 0 {
+                rebuildEngine(reason: "no audio in 2s")
+            } else {
+                note(error: "Mic delivered no audio in 2s (engine running: \(engineRunning), format: \(inputFormatDescription), rebuilds: \(rebuilds)). Transport test checks the socket separately.")
+            }
         }
     }
 
     func stop() async {
         timer?.invalidate(); timer = nil
         toneTimer?.invalidate(); toneTimer = nil
+        for observer in [routeObserver, configObserver].compactMap({ $0 }) {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        routeObserver = nil; configObserver = nil
         if let engine {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -203,19 +218,15 @@ final class LiveTranscriber {
 
     private func startCapture(_ ws: URLSessionWebSocketTask) throws {
         let session = AVAudioSession.sharedInstance()
-        // .playAndRecord so a coach line still finishing does not get torn down
-        // the moment he starts talking back to it.
-        try session.setCategory(.playAndRecord, mode: .spokenAudio,
+        // .voiceChat, not .spokenAudio. Two reasons, both learned the hard way
+        // on AirPods Pro: it is the mode built for talking and listening at the
+        // same time over Bluetooth, and it turns on echo cancellation, without
+        // which Ricky's voice in his ears gets transcribed back as if he had
+        // said it. .playAndRecord keeps a coach line that is still finishing
+        // from being torn down the moment he talks back to it.
+        try session.setCategory(.playAndRecord, mode: .voiceChat,
                                 options: [.duckOthers, .defaultToSpeaker, .allowBluetooth])
         try session.setActive(true)
-
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        // Read the format only AFTER the session is active, or it reports the
-        // wrong rate (sometimes 0) and every later conversion is built wrong.
-        let inFormat = input.outputFormat(forBus: 0)
-        inputFormatDescription = "\(Int(inFormat.sampleRate))Hz \(inFormat.channelCount)ch"
-        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw StreamError.noInput }
 
         guard let target = AVAudioFormat(commonFormat: .pcmFormatInt16,
                                          sampleRate: Self.sampleRate,
@@ -227,10 +238,43 @@ final class LiveTranscriber {
         pump.targetFormat = target
         self.pump = pump
 
+        try buildEngine()
+
+        // Activating .playAndRecord with Bluetooth flips AirPods into the
+        // Hands-Free profile, and that route change lands AFTER we start. An
+        // engine built against the old route keeps running and never delivers
+        // a single buffer, which is precisely how this shipped broken: the
+        // socket was fine, VOLC was fine, and the mic was simply never heard.
+        // Rebuild whenever the graph or the route moves under us.
+        let rebuild: @Sendable (Notification) -> Void = { [weak self] _ in
+            Task { @MainActor in self?.rebuildEngine(reason: "route changed") }
+        }
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: nil, queue: .main, using: rebuild)
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main, using: rebuild)
+    }
+
+    /// Builds (or rebuilds) the engine against whatever the hardware is NOW.
+    private func buildEngine() throws {
+        if let old = engine {
+            old.inputNode.removeTap(onBus: 0)
+            old.stop()
+        }
+        guard let pump else { throw StreamError.noInput }
+
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        // Read the format only AFTER the session is active, or it reports the
+        // wrong rate (sometimes 0) and every later conversion is built wrong.
+        let inFormat = input.outputFormat(forBus: 0)
+        inputFormatDescription = "\(Int(inFormat.sampleRate))Hz \(inFormat.channelCount)ch"
+        guard inFormat.sampleRate > 0, inFormat.channelCount > 0 else { throw StreamError.noInput }
+
         // Pass nil so the tap uses the node's own format. Handing installTap a
         // format that disagrees with the hardware is not an error you catch,
         // it is an assertion failure that kills the app, and the converter is
-        // built from the first real buffer anyway so nothing needs to guess.
+        // rebuilt from the first real buffer anyway so nothing needs to guess.
         input.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
             pump.feed(buffer)
         }
@@ -238,6 +282,17 @@ final class LiveTranscriber {
         try engine.start()
         self.engine = engine
         self.engineRunning = engine.isRunning
+    }
+
+    private func rebuildEngine(reason: String) {
+        guard isStreaming, engine != nil else { return }
+        rebuilds += 1
+        do {
+            try buildEngine()
+            status = "listening (recovered: \(reason))"
+        } catch {
+            note(error: "rebuild after \(reason) failed: \(error.localizedDescription)")
+        }
     }
 
     /// Transport test: synthetic 200 ms packets, no microphone involved.
