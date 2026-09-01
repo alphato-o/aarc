@@ -585,6 +585,7 @@ final class ContextualCoach {
             unknownAudio: false,
             currentLyric: selection.line,
             lyricContext: selection.context.isEmpty ? nil : selection.context,
+            fullLyrics: selection.allLines.isEmpty ? nil : selection.allLines,
             lyricLanguage: selection.language,
             runContext: context,
             recentDispatched: recent.isEmpty ? nil : recent,
@@ -598,7 +599,11 @@ final class ContextualCoach {
             // dropped if it sits in the queue too long because by then the
             // song will have moved on.  dedupKey prevents queueing the same
             // line of the same song twice across rapid re-probes.
-            let dedup = "music:\(track.artist)|\(track.title)|\(selection.line)"
+            // Key on the line the MODEL targeted, not our timing guess. It now
+            // picks the song's punchline itself, so the same lyric can come
+            // back as the target from several different playback positions;
+            // keying on the guess would let the same joke through repeatedly.
+            let dedup = "music:\(track.artist)|\(track.title)|\(result.pickedLine ?? selection.line)"
             let segment = UUID()
             ScriptEngine.shared.tryInject(
                 text: result.text,

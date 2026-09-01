@@ -268,6 +268,11 @@ export const MusicCommentRequestSchema = z.object({
     currentLyric: z.string().min(1).max(500).optional(),
     /// 1-3 surrounding lines so the model knows the flow.
     lyricContext: z.array(z.string().min(1).max(500)).max(8).optional(),
+    /// The WHOLE song, one entry per line. The client used to pick the line
+    /// to roast with a most-repeated-line heuristic, which reliably found the
+    /// chorus and just as reliably missed the actual joke. Hand the model the
+    /// lot and let it choose the line worth trolling.
+    fullLyrics: z.array(z.string().min(1).max(500)).max(200).optional(),
     /// "en" | "zh" — language of the lyric. Other languages are
     /// filtered out client-side.
     lyricLanguage: z.enum(["en", "zh"]).optional(),
@@ -290,11 +295,16 @@ export type MusicCommentRequest = z.infer<typeof MusicCommentRequestSchema>;
 
 export const MusicCommentModelOutputSchema = z.object({
     text: z.string().min(1).max(500),
+    /// Which lyric the model decided was the song's punchline. Not used to
+    /// generate anything. It exists so the playground can show whether a
+    /// weak quip came from a bad pick or a bad joke about a good pick.
+    pickedLine: z.string().max(500).optional(),
 });
 
 export interface MusicCommentResponse {
     text: string;
     model: string;
+    pickedLine?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -389,6 +389,8 @@ actor AIClient {
         let text: String?
         let model: String?
         let error: String?
+        /// /music-comment only: which lyric the model chose to troll.
+        let pickedLine: String?
     }
 
     // MARK: - React line (/react-line) — Jessica reacting to a Ricky line
@@ -502,6 +504,10 @@ actor AIClient {
         /// supporting context.
         var currentLyric: String?
         var lyricContext: [String]?
+        /// The whole song. When present the proxy asks the model to find the
+        /// song's punchline itself rather than roasting whatever line our
+        /// timing guess landed on.
+        var fullLyrics: [String]?
         /// "en" | "zh" — gated on iOS side; we only ship these two.
         var lyricLanguage: String?
         var runContext: MusicCommentContext
@@ -515,6 +521,10 @@ actor AIClient {
     struct MusicCommentResult: Sendable {
         let text: String
         let model: String
+        /// The lyric the model decided was the song's punchline. Diagnostic
+        /// only: it tells you whether a flat quip came from a bad pick or a
+        /// bad joke about a good one.
+        let pickedLine: String?
     }
 
     func generateMusicComment(_ request: MusicCommentRequest) async throws -> MusicCommentResult {
@@ -552,7 +562,7 @@ actor AIClient {
         guard let text = envelope.text, let model = envelope.model else {
             throw AIError.proxy("missing fields in proxy response")
         }
-        return MusicCommentResult(text: text, model: model)
+        return MusicCommentResult(text: text, model: model, pickedLine: envelope.pickedLine)
     }
 }
 

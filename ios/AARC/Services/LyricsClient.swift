@@ -565,6 +565,9 @@ actor LyricsClient {
         /// 2-3 lines around it (including the chosen line) for the LLM's
         /// situational context.
         let context: [String]
+        /// The whole song. `line` is only our guess at what is playing; the
+        /// model gets the lot and picks the line actually worth trolling.
+        let allLines: [String]
         /// "en" | "zh" — the only two we ship in this commit.
         let language: String
         /// Which provider the line came from — surfaced in the playground
@@ -589,9 +592,15 @@ actor LyricsClient {
         let context = Array(lines[lo...hi])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+        // Bound the payload: a handful of tracks (live versions, transcribed
+        // rambles) come back with hundreds of lines, and the proxy caps at 200.
+        let body = lines
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
         return Selection(
             line: pick,
             context: context,
+            allLines: Array(body.prefix(200)),
             language: language,
             source: source,
             synced: synced

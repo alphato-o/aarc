@@ -101,6 +101,7 @@ export async function musicCommentHandler(
         text: validatedData.text,
         model,
         provider,
+        pickedLine: validatedData.pickedLine,
     };
     return json({ ok: true, ...response });
 }
@@ -108,7 +109,31 @@ export async function musicCommentHandler(
 async function buildUserPrompt(req: MusicCommentRequest, env: Env): Promise<string> {
     const lines: string[] = [];
 
-    if (req.currentLyric) {
+    const hasFull = !!req.fullLyrics && req.fullLyrics.length > 0;
+
+    if (hasFull) {
+        lines.push("FULL LYRICS. The whole song. YOU pick what to roast:");
+        if (req.lyricLanguage) {
+            lines.push(`(language: ${req.lyricLanguage === "zh" ? "Chinese" : "English"})`);
+        }
+        for (const l of req.fullLyrics!) {
+            lines.push(`- "${l}"`);
+        }
+        lines.push("");
+        lines.push(
+            "FIND THE PUNCHLINE. Read the whole thing and pick the ONE line a human " +
+            "would actually react to: the line that is absurd, overwrought, filthy, " +
+            "unintentionally funny, wildly self-important, or just the bit everyone " +
+            "quotes. That line is your target. It is usually NOT the chorus, and it " +
+            "is usually not the line that happens to be playing right now.",
+        );
+        if (req.currentLyric) {
+            lines.push("");
+            lines.push(`For timing only, the line playing at this second is: "${req.currentLyric}". Use it ONLY if it happens to be the best target anyway. Do not force it.`);
+        }
+    } else if (req.currentLyric) {
+        // No lyric body available (unsynced miss, or an older client): fall
+        // back to the single-line behaviour rather than going silent.
         lines.push("LYRIC LINE BEING SUNG RIGHT NOW (your primary subject — roast THIS line):");
         lines.push(`"${req.currentLyric}"`);
         if (req.lyricLanguage) {
@@ -182,7 +207,16 @@ async function buildUserPrompt(req: MusicCommentRequest, env: Env): Promise<stri
     }
 
     lines.push("");
-    if (req.currentLyric) {
+    if (hasFull) {
+        lines.push(
+            "Pick the punchline, then generate ONE DJ commentary line trolling THAT line. " +
+            "Make it obvious which line you went for: quote or unmistakably reference it. " +
+            "If a line you already used is listed under RECENTLY SPOKEN, pick the next " +
+            "best target instead of repeating yourself. BREVITY IS BITE: 1-2 sentences, " +
+            "at most ~260 characters. One joke, landed, out. " +
+            'JSON only: {"text": "...", "pickedLine": "the exact lyric you targeted"}',
+        );
+    } else if (req.currentLyric) {
         lines.push("Generate ONE DJ commentary line reacting to the lyric line above. BREVITY IS BITE: 1-2 sentences, at most ~260 characters — one joke, landed, out. JSON only.");
     } else {
         lines.push("Generate ONE DJ commentary line about the current track. BREVITY IS BITE: 1-2 sentences, at most ~260 characters — one joke, landed, out. JSON only.");
