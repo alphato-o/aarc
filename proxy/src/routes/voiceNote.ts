@@ -21,6 +21,13 @@ export interface VoiceNoteEnv extends LLMEnv, SentryEnv {
     VOICES?: R2Bucket;
     ELEVENLABS_API_KEY?: string;
     OPENAI_API_KEY?: string;
+    /// Volcano Engine (Doubao) ASR. PREFERRED when set: the founder runs in
+    /// Beijing, where Volc is low-latency and genuinely bilingual — his notes
+    /// mix English and Chinese, which trips providers that assume one
+    /// language. Verified reachable from the Beijing gateway in ~1.3s.
+    /// BOTH are required; the token alone gets "value app.appid is empty".
+    VOLC_APP_ID?: string;
+    VOLC_ACCESS_TOKEN?: string;
     LIVE_DEVICE_TOKEN?: string;
 }
 
@@ -99,6 +106,11 @@ export async function voiceNoteHandler(request: Request, url: URL, env: VoiceNot
 }
 
 async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv): Promise<{ text: string; provider: string }> {
+    // Volcano Engine first when configured — closest to him, and the only one
+    // of the three that is properly bilingual for zh+en in one utterance.
+    if (env.VOLC_APP_ID && env.VOLC_ACCESS_TOKEN) {
+        return await transcribeVolc(audio, env.VOLC_APP_ID, env.VOLC_ACCESS_TOKEN);
+    }
     if (env.OPENAI_API_KEY) {
         const fd = new FormData();
         fd.append("file", new Blob([audio], { type: "audio/mp4" }), "note.m4a");
@@ -128,6 +140,74 @@ async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv): Promise<{ text
         return { text: j.text, provider: "elevenlabs-scribe-v1" };
     }
     throw new Error("no transcription provider configured");
+}
+
+/// Volcano Engine async file ASR (auc). Submit, then poll.
+///
+/// Audio goes inline as base64 rather than by URL: the alternative is exposing
+/// a publicly fetchable link to his private voice notes just so ByteDance can
+/// pull them, and a note is a few hundred KB. Not worth the exposure.
+///
+/// NOTE: written against the v1 auc API and NOT yet verified end to end — the
+/// AppID is not provisioned, so every call so far stops at grant lookup. The
+/// token is structurally accepted by both v1 and v3/bigmodel, so if the AppID
+/// turns out to be a bigmodel one this needs the v3 endpoint + X-Api-* headers
+/// instead. Do not assume this path works until a real transcript comes back.
+async function transcribeVolc(
+    audio: ArrayBuffer, appId: string, token: string,
+): Promise<{ text: string; provider: string }> {
+    const b64 = base64(audio);
+    const reqid = crypto.randomUUID();
+    const app = { appid: appId, token, cluster: "volcengine_input_common" };
+
+    const submit = await fetch("https://openspeech.bytedance.com/api/v1/auc/submit", {
+        method: "POST",
+        headers: { authorization: `Bearer; ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+            app,
+            user: { uid: "aarc" },
+            audio: { format: "m4a", data: b64 },
+            // Punctuation + inverse text normalisation on: he dictates numbers
+            // ("11.15 km", "five fifty-seven") and wants them readable.
+            request: { reqid, sequence: 1, nbest: 1, word_info: 0, show_utterances: false },
+        }),
+    });
+    const sj = await submit.json<{ code?: number; message?: string; resp?: { id?: string } }>();
+    if (!submit.ok || (sj.code !== undefined && sj.code !== 1000 && sj.code !== 0)) {
+        throw new Error(`volc submit ${submit.status} code=${sj.code}: ${(sj.message ?? "").slice(0, 160)}`);
+    }
+
+    // Poll. A 3-minute note typically lands in a few seconds; give it a while
+    // rather than failing a transcript that was nearly ready.
+    for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const q = await fetch("https://openspeech.bytedance.com/api/v1/auc/query", {
+            method: "POST",
+            headers: { authorization: `Bearer; ${token}`, "content-type": "application/json" },
+            body: JSON.stringify({ app, user: { uid: "aarc" }, request: { reqid } }),
+        });
+        const qj = await q.json<{ code?: number; message?: string; result?: { text?: string }[] }>();
+        if (qj.code === 1000 || qj.code === 0) {
+            const text = (qj.result ?? []).map((r) => r.text ?? "").join(" ").trim();
+            if (text) return { text, provider: "volc-auc" };
+            throw new Error("volc returned an empty transcript");
+        }
+        // 2000/2001-style codes mean "still working"; anything else is fatal.
+        if (qj.code !== undefined && qj.code !== 2000 && qj.code !== 2001) {
+            throw new Error(`volc query code=${qj.code}: ${(qj.message ?? "").slice(0, 160)}`);
+        }
+    }
+    throw new Error("volc timed out waiting for the transcript");
+}
+
+function base64(buf: ArrayBuffer): string {
+    const bytes = new Uint8Array(buf);
+    let bin = "";
+    const CHUNK = 0x8000;   // avoid blowing the argument limit on big notes
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
 }
 
 /// Tidy WITHOUT rewriting. He is dictating bug reports and run notes at speed,
