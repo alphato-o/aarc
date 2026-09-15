@@ -199,8 +199,12 @@ final class RemoteTTS: NSObject {
             source: lastWasCacheHit ? "cache" : "fetch",
             cacheKey: key
         )
+        // Full text + the R2 cache key, so a run's coach audio can be rebuilt
+        // afterwards as a timestamped track (the race-recording use case).
+        // 80 chars of text cannot recover the key, and the key IS the MP3.
         RunEventLog.shared.record("tts.play", String(text.prefix(80)),
-                                  data: ["ms": String(lastLatencyMs ?? 0), "cached": String(lastWasCacheHit)])
+                                  data: ["ms": String(lastLatencyMs ?? 0), "cached": String(lastWasCacheHit),
+                                         "key": key, "text": text])
         AudioPlaybackManager.shared.activate()
         // While the queue is in sustained mode (phone-only treadmill),
         // the session is .mixWithOthers WITHOUT ducking. Flip on the
