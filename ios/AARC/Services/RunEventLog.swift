@@ -230,7 +230,10 @@ final class RunEventLog {
             guard let v, v.isFinite, v > 0 else { return "" }
             return String(format: "%.1f", v)
         }
-        record("metrics", "", data: [
+        // Detail carries the numbers too: the live feed home shows only
+        // `detail`, and an empty one left Home Base unable to read HR mid-run.
+        let brief = "d=\(num(distanceMeters)) p=\(num(paceSecPerKm)) hr=\(num(hr))"
+        record("metrics", brief, data: [
             "d": num(distanceMeters),
             "p": num(paceSecPerKm),
             "hr": num(hr),

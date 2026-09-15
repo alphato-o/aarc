@@ -40,7 +40,7 @@ enum MilestoneAnnouncement {
                     let past = crossedMeters - total
                     return "\(distanceText(meters: crossedMeters)). That's \(distanceText(meters: past)) past your goal."
                 }
-                return distanceText(meters: crossedMeters)
+                return distanceText(meters: crossedMeters) + "."
             }
             // One-shot distance trigger (a "surprise roast" the model
             // scattered at an off-grid distance like 2800m). These are
@@ -82,7 +82,7 @@ enum MilestoneAnnouncement {
             // Goal reached — but the run does NOT stop here. Frame the goal
             // as a checkpoint, not an end; everything past it is bonus.
             if let total = plan.totalMeters {
-                return "That's your goal \u{2014} \(distanceText(meters: total)). But we don't stop here. Keep running; tap stop when you've had enough."
+                return "That's your goal: \(distanceText(meters: total)). But we don't stop here. Keep running; tap stop when you've had enough."
             }
             if plan.totalSeconds != nil {
                 return "That's your time. But the clock keeps running until you tap stop."
@@ -96,7 +96,7 @@ enum MilestoneAnnouncement {
     /// warm the TTS cache a few seconds ahead of the split, so it lands
     /// with zero generation latency.
     static func kilometreText(km: Int) -> String {
-        distanceText(meters: Double(km) * 1000)
+        distanceText(meters: Double(km) * 1000) + "."
     }
 
     // MARK: - Formatting helpers
@@ -113,17 +113,17 @@ enum MilestoneAnnouncement {
         let hasHalf = (halfSteps % 2) == 1
 
         if whole == 0 && hasHalf {
-            return "Half a kilometre."
+            return "Half a kilometre"
         }
         if whole == 0 {
             // Shouldn't happen in normal milestone triggers, but be safe.
-            return "\(Int(meters)) metres."
+            return "\(Int(meters)) metres"
         }
         let unit = whole == 1 ? "kilometre" : "kilometres"
         if hasHalf {
-            return "\(whole) and a half \(unit)."
+            return "\(whole) and a half \(unit)"
         }
-        return "\(whole) \(unit)."
+        return "\(whole) \(unit)"
     }
 
     private static func timeText(seconds: Int) -> String {
@@ -153,7 +153,7 @@ enum MilestoneAnnouncement {
             maxKm = 10
         }
         for n in 1...maxKm {
-            texts.append(distanceText(meters: Double(n) * 1000))
+            texts.append(distanceText(meters: Double(n) * 1000) + ".")
         }
         // Halfway-with-distance variants for round distance plans.
         if let totalM = plan.totalMeters {
