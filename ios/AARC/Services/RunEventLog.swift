@@ -442,6 +442,24 @@ final class RunEventLog {
     /// file). Returns true on a 2xx, false on exhaustion / hard failure.
     /// Does NOT touch the pending-runs list — backfill tracks its own
     /// done-set in UserDefaults.
+    /// Re-send every run log on disk. The repair tool for the 2026-09-18
+    /// backfill overwrite: the server now refuses a thin copy over a rich
+    /// one, so re-sending the real JSONL restores what was wiped. Also the
+    /// honest answer to "did it upload?" after a bad night on the network.
+    nonisolated static func reuploadAllLogs() async -> (sent: Int, failed: Int) {
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: runlogsDirectory, includingPropertiesForKeys: nil)) ?? []
+        var sent = 0, failed = 0
+        for url in files where url.pathExtension == "jsonl" {
+            guard let runId = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
+                  let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let lines = text.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+            guard !lines.isEmpty else { continue }
+            if await uploadEventStream(runId: runId, jsonlLines: lines, attempts: 1, spacing: .seconds(1)) { sent += 1 } else { failed += 1 }
+        }
+        return (sent, failed)
+    }
+
     nonisolated static func uploadEventStream(
         runId: UUID,
         jsonlLines: [String],

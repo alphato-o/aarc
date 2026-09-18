@@ -98,6 +98,8 @@ struct SettingsView: View {
 struct DeveloperSettingsView: View {
     @Environment(PhoneSession.self) private var phoneSession
     @State private var pingResult: String?
+    @State private var reuploading = false
+    @State private var reuploadResult: String?
     @State private var pinging = false
     @State private var musixmatchKey: String = UserDefaults.standard.string(forKey: "musixmatch.apiKey") ?? ""
     @State private var sentryDSN: String = UserDefaults.standard.string(forKey: CrashReporter.dsnDefaultsKey) ?? ""
@@ -111,6 +113,20 @@ struct DeveloperSettingsView: View {
                 NavigationLink("Script Preview (AI)") { ScriptPreviewView() }
                 NavigationLink("Phone-only / Pedometer") { DiagnosticsView() }
                 NavigationLink("Permissions") { PermissionsView() }
+                Button {
+                    reuploading = true
+                    Task {
+                        let r = await RunEventLog.reuploadAllLogs()
+                        reuploadResult = "sent \(r.sent), failed \(r.failed)"
+                        reuploading = false
+                    }
+                } label: {
+                    HStack {
+                        Text("Re-upload run logs from disk"); Spacer()
+                        if reuploading { ProgressView() }
+                        else if let reuploadResult { Text(reuploadResult).foregroundStyle(.secondary) }
+                    }
+                }.disabled(reuploading)
             }
 
             Section("Connectivity tests") {
