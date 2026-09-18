@@ -66,6 +66,14 @@ enum RunHistoryBackfill {
             guard !record.isTestData else { return nil }
             guard let hkUUID = record.healthKitWorkoutUUID else { return nil }
             if !force && done.contains(record.id.uuidString) { return nil }
+            // A run the app recorded itself has a full JSONL log on disk and
+            // was uploaded live. Backfilling it sends a metrics-only copy that
+            // the server used to accept as a replacement, wiping the trail and
+            // every coach line (run F35FE1C9, 952 events down to 82 on
+            // 2026-09-18). Backfill exists for the Nike/HealthKit archive only.
+            let ownLog = RunEventLog.runlogsDirectory
+                .appendingPathComponent("\(record.id.uuidString).jsonl")
+            if FileManager.default.fileExists(atPath: ownLog.path) { return nil }
             return PendingRun(
                 runId: record.id,
                 startedAt: record.startedAt,

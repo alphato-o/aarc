@@ -125,6 +125,22 @@ export async function ingestRunHandler(request: Request, env: Env): Promise<Resp
     const tz = typeof startEvent?.data?.tz === "string" ? startEvent.data.tz.slice(0, 64) : "";
     const meta = JSON.stringify({ isTest, name, tz });
 
+    // Never let a thin copy overwrite a rich one. RunHistoryBackfill
+    // synthesises metrics-only logs from HealthKit for runs it thinks were
+    // never uploaded; on 2026-09-18 it re-sent a run the app had already
+    // ingested live with 952 events, and this replace wiped the GPS trail and
+    // every coach line down to 82 metrics rows. If what we already hold has
+    // more events AND the incoming log carries nothing but metrics, keep ours.
+    const existing = await env.DB
+        .prepare("SELECT event_count FROM runs WHERE run_id = ?")
+        .bind(runId)
+        .first<{ event_count: number }>();
+    const THIN = new Set(["metrics", "run.start", "run.end"]);
+    const incomingIsThin = events.every((e) => THIN.has(e.type));
+    if (existing && existing.event_count > events.length && incomingIsThin) {
+        return json({ ok: true, runId, kept: true, existingEvents: existing.event_count, incomingEvents: events.length });
+    }
+
     // Replace any previous copy (retries after a half-applied failure).
     await env.DB.batch([
         env.DB.prepare("DELETE FROM run_events WHERE run_id = ?").bind(runId),
