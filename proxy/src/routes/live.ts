@@ -58,6 +58,14 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         let recent: unknown[] = [];
         try { recent = JSON.parse(row.recent_events); } catch { /* reset */ }
         recent = recent.concat(b.events).slice(-MAX_RECENT);
+        // Pin venue/city so they survive the rolling window (see 0010).
+        let venue: string | null = null, city: string | null = null;
+        for (const e of b.events as Array<{ type?: string; detail?: string }>) {
+            if (e?.type === "venue.confirmed" && e.detail) venue = e.detail;
+            if (e?.type === "ambient" && e.detail && e.detail !== "no-location") city = e.detail;
+        }
+        if (venue) await env.DB.prepare("UPDATE live_run SET venue = ? WHERE run_id = ?").bind(venue, b.runId).run();
+        if (city) await env.DB.prepare("UPDATE live_run SET city = ? WHERE run_id = ?").bind(city, b.runId).run();
         await env.DB.prepare("UPDATE live_run SET recent_events = ?, last_event_at = ? WHERE run_id = ?")
             .bind(JSON.stringify(recent), now, b.runId).run();
         return json({ ok: true, count: recent.length });
@@ -89,8 +97,8 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
     if (request.method === "GET" && p === "/live/status") {
         if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
         const row = await env.DB
-            .prepare("SELECT run_id, started_at, last_event_at, ended_at, recent_events FROM live_run WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1")
-            .first<{ run_id: string; started_at: string; last_event_at: string | null; ended_at: string | null; recent_events: string }>();
+            .prepare("SELECT run_id, started_at, last_event_at, ended_at, recent_events, venue, city FROM live_run WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1")
+            .first<{ run_id: string; started_at: string; last_event_at: string | null; ended_at: string | null; recent_events: string; venue: string | null; city: string | null }>();
         if (!row) return json({ ok: true, active: false });
         const ageMs = row.last_event_at ? Date.now() - new Date(row.last_event_at).getTime() : Infinity;
         const active = ageMs < STALE_MS;
@@ -100,6 +108,7 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
             ok: true, active, runId: row.run_id, startedAt: row.started_at,
             lastEventAt: row.last_event_at, staleSeconds: Math.round(ageMs / 1000),
             eventCount: events.length, recentEvents: events,
+            venue: row.venue ?? null, city: row.city ?? null,
         });
     }
 

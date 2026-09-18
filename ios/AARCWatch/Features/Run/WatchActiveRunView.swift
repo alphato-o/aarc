@@ -68,7 +68,13 @@ struct WatchActiveRunView: View {
 
     @ViewBuilder
     private var coachOverlay: some View {
-        if let line = session.currentCoachLine, line.id != coachDismissedId {
+        // Ending the run always wins. Founder, Shanghai 2026-09-18: Ricky was
+        // "extending a lot" and every new line re-covered the screen, so the
+        // end-run control was unreachable under a 90% black sheet. The overlay
+        // now never shows once the end flow has started, dismisses on any tap,
+        // and times itself out, so a talkative coach cannot pin the watch.
+        if !showEndConfirm, !showSummary,
+           let line = session.currentCoachLine, line.id != coachDismissedId {
             WatchCoachPage(
                 line: line.text,
                 who: line.who,
@@ -79,6 +85,12 @@ struct WatchActiveRunView: View {
             )
             .background(.black.opacity(0.9))
             .transition(.opacity)
+            .contentShape(Rectangle())
+            .onTapGesture { coachDismissedId = line.id }
+            .task(id: line.id) {
+                try? await Task.sleep(for: .seconds(12))
+                if session.currentCoachLine?.id == line.id { coachDismissedId = line.id }
+            }
         }
     }
 
