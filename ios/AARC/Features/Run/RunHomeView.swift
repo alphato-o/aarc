@@ -19,6 +19,7 @@ struct RunHomeView: View {
     }
 
     @State private var orchestrator = RunOrchestrator.shared
+    @State private var preflightError: String?
     @State private var planStore = ScriptPreviewStore.shared
     @State private var liveConsumer = LiveMetricsConsumer.shared
     @State private var phoneSession = PhoneSession.shared
@@ -149,7 +150,18 @@ struct RunHomeView: View {
 
     @ViewBuilder
     private var statusFooter: some View {
-        if let err = orchestrator.lastError {
+        if let err = preflightError {
+            VStack(spacing: 6) {
+                Text("Can't start yet: \(err)")
+                    .font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
+                HStack {
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }.buttonStyle(.bordered).controlSize(.small)
+                    Button("Dismiss") { preflightError = nil }.buttonStyle(.bordered).controlSize(.small)
+                }
+            }
+        } else if let err = orchestrator.lastError {
             errorBox(err)
         } else if orchestrator.phase == .watchTimedOut {
             watchTimeoutCard
@@ -532,6 +544,19 @@ struct RunHomeView: View {
         // routes to RunSimulator when testMode == .simulate).
         if orchestrator.testMode == .simulate {
             await orchestrator.startPhoneOnly(runType: runType)
+            return
+        }
+        // Ask for everything the run needs BEFORE starting it. A new phone has
+        // nothing granted, and a prompt that lands during the start handoff
+        // cost a whole run on 2026-10-10.
+        preflightError = nil
+        let blockers = await PermissionsManager.shared.preflight(
+            needsLocation: runType == .outdoor,
+            needsMotion: runType == .treadmill && trackingSource == .phone
+        )
+        if !blockers.isEmpty {
+            preflightError = blockers.joined(separator: " ")
+            RunEventLog.shared.record("preflight.blocked", preflightError ?? "")
             return
         }
         switch trackingSource {

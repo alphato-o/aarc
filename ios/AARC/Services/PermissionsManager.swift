@@ -91,6 +91,40 @@ final class PermissionsManager {
         motionAuthorized = (motionStatus == .authorized)
     }
 
+    /// Run preflight. Founder, 2026-10-10, first run on a brand-new phone:
+    /// "the permission failed when I press run... you should have thought
+    /// about an initialization check... request it before somebody, probably
+    /// me, initiates that run." Every permission the run needs is requested
+    /// HERE, before the countdown, so the prompts never land mid-start. Returns
+    /// the blockers that remain after asking, each a sentence he can act on.
+    func preflight(needsLocation: Bool, needsMotion: Bool) async -> [String] {
+        await refresh()
+        var blockers: [String] = []
+
+        if healthStore.authorizationStatus(for: HKObjectType.workoutType()) == .notDetermined {
+            await requestHealthKit()
+        }
+        if !healthKitAuthorized {
+            blockers.append("Health access is off. Settings → Health → Data Access → AARC, allow workouts.")
+        }
+        if notificationStatus == .notDetermined {
+            await requestNotifications()
+        }
+        if needsLocation {
+            if locationStatus == .notDetermined { await requestLocation() }
+            if !locationAuthorized {
+                blockers.append("Location is off. Settings → AARC → Location → While Using.")
+            }
+        }
+        if needsMotion {
+            if motionStatus == .notDetermined { await requestMotion() }
+            if !motionAuthorized {
+                blockers.append("Motion & Fitness is off. Settings → AARC → Motion & Fitness.")
+            }
+        }
+        return blockers
+    }
+
     func requestHealthKit() async {
         guard HKHealthStore.isHealthDataAvailable() else { return }
         let workout = HKObjectType.workoutType()
