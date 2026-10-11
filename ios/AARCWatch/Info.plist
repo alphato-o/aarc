@@ -26,15 +26,6 @@
 	<array>
 		<string>workout-processing</string>
 	</array>
-	<!-- iOS-style key kept too; harmless. The load-bearing key on watchOS
-	     is WKBackgroundModes above: without it, watchOS never delivers
-	     handle(workoutConfiguration:) and refuses background workout
-	     starts (HK error 14), which silently killed every phone-initiated
-	     run until 2026-06-11. -->
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>workout-processing</string>
-	</array>
 	<key>NSHealthShareUsageDescription</key>
 	<string>AARC reads your workout data to coordinate the AI companion on your iPhone with the run you're doing.</string>
 	<key>NSHealthUpdateUsageDescription</key>
