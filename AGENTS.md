@@ -69,6 +69,21 @@ These exist because they shed enormous risk and complexity. Follow them; if you 
 - Commit often. A single phase produces many small commits; do not batch a whole phase into one mega-commit.
 - Branch naming: `phase-N/<slug>` for phase work, `fix/<slug>` for bug fixes, `chore/<slug>` for housekeeping. Trunk-based — merge to `main` frequently. Solo project, so PRs are optional unless we want a review checkpoint.
 
+### Version number
+
+Apple's three-section scheme, `MAJOR.MINOR.PATCH`, is `MARKETING_VERSION` in `ios/project.yml`
+and is what TestFlight and the App Store show. It is bumped by hand, with intent:
+
+| Bump | When | Command |
+| --- | --- | --- |
+| patch | fixes only, nothing the runner would call new | `scripts/bump-version.sh patch` |
+| minor | a feature the runner can see or hear | `scripts/bump-version.sh minor` |
+| major | App Store release or a break in saved data / watch protocol | `scripts/bump-version.sh major` |
+
+Version says *what* changed; the build number below says *which* upload. Every TestFlight ship
+bumps the build; only a change worth a release-note line bumps the version. Tag the commit that
+ships a new version: `git tag v0.3.0`.
+
 ### Build number
 
 The watch's main UI and iPhone's Settings → About display `vX.Y.Z (S.HHMMSS)`:
