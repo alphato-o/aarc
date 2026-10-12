@@ -179,7 +179,9 @@ final class RemoteTTS: NSObject {
                 lastError = nil
             } else {
                 // Synth failed (e.g. an ElevenLabs v3 long-line timeout).
-                // Fall back to Apple so the runner is never silent.
+                // Fall back to Apple so the runner is never silent, unless
+                // the synth was cancelled, in which case silence is correct.
+                if Task.isCancelled || (lastError ?? "").hasPrefix("synth cancelled") { return }
                 lastBackend = "Apple (fallback)"
                 activity = .playing(remote: false)
                 RunEventLog.shared.record("tts.fallback", String(text.prefix(80)),
@@ -359,10 +361,21 @@ final class RemoteTTS: NSObject {
             do {
                 let data = try await self.fetchAudioWithOneRetry(text: text, voiceId: voiceId)
                 self.bytesFetchedThisSession += data.count
-                _ = try await AudioCache.shared.store(data: data, forKey: key)
+                do {
+                    _ = try await AudioCache.shared.store(data: data, forKey: key)
+                } catch {
+                    // A fetched file that cannot be stored is the one failure
+                    // the network log can never show. Name it.
+                    self.lastError = "cache store failed: \(error.localizedDescription) (\(data.count) bytes)"
+                    RunEventLog.shared.record("tts.storeFailed", String(text.prefix(80)),
+                                              data: ["bytes": String(data.count), "error": error.localizedDescription])
+                    return
+                }
                 self.lastError = nil
             } catch {
-                if !Task.isCancelled { self.lastError = error.localizedDescription }
+                self.lastError = Task.isCancelled
+                    ? "synth cancelled (\(error.localizedDescription))"
+                    : error.localizedDescription
             }
         }
         inFlightSynths[key] = task
@@ -501,7 +514,15 @@ final class RemoteTTS: NSObject {
                     }
                 }
             }
-            throw lastError ?? RemoteTTSError.transport("all endpoints failed")
+            // Reaching here with no lastError means BOTH attempts ended in
+            // CancellationError, i.e. the caller was cancelled. On the first
+            // TestFlight run (build 196, 2026-10-12) this surfaced as
+            // "Network error: all endpoints failed" and sent every line to
+            // Apple's voice while the server was answering 200 in under a
+            // second. Say what happened, and let cancellation propagate.
+            if let lastError { throw lastError }
+            if Task.isCancelled { throw CancellationError() }
+            throw RemoteTTSError.transport("both attempts ended without a result (cancelled: \(Task.isCancelled))")
         }
     }
 
