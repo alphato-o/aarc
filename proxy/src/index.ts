@@ -7,6 +7,8 @@ import { rankVenuesHandler } from "./routes/rankVenues";
 import { voiceNoteHandler } from "./routes/voiceNote";
 import { ttsHandler } from "./routes/tts";
 import { liveHandler } from "./routes/live";
+import { agentHandler } from "./routes/agent";
+import { venueSearchHandler } from "./routes/venueSearch";
 import {
     ingestRunHandler,
     ingestAudioHandler,
@@ -51,6 +53,7 @@ interface Env {
     /// ADMIN = the agent ("home", /live/status + POST /live/inject). Both are
     /// Worker secrets distinct from the ingest DEVICE_TOKEN.
     LIVE_DEVICE_TOKEN?: string;
+    AMAP_KEY?: string;
     LIVE_ADMIN_TOKEN?: string;
 }
 
@@ -141,6 +144,12 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
 
     if (url.pathname.startsWith("/live/")) {
         return liveHandler(request, url, env);
+    }
+    if (url.pathname.startsWith("/agent/")) {
+        return agentHandler(request, url, env);
+    }
+    if (url.pathname === "/venue-search") {
+        return venueSearchHandler(request, url, env);
     }
 
     if (request.method === "POST" && url.pathname === "/ingest-run") {

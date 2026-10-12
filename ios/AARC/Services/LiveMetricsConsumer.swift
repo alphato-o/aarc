@@ -259,9 +259,18 @@ final class LiveMetricsConsumer {
                 VenueConfirm.shared.begin(candidates: VenueConfirm.uiTestSeed)
             } else {
                 Task { @MainActor in
+                    // The treadmill picker may already have settled this
+                    // before the run started; keep the city fix, skip the ask.
+                    let alreadyPicked = VenueConfirm.shared.resolved
                     if let v = await VenueLocator.shared.capture() {
                         PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city)
-                        VenueConfirm.shared.begin(candidates: v.venues)
+                        if alreadyPicked {
+                            if let name = PlaceContext.shared.treadmillVenue {
+                                PlaceContext.shared.setConfirmedVenue(name)
+                            }
+                        } else {
+                            VenueConfirm.shared.begin(candidates: v.venues)
+                        }
                     }
                 }
             }

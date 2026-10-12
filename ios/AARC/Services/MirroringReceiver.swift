@@ -105,10 +105,28 @@ extension MirroringReceiver: @preconcurrency HKWorkoutSessionDelegate {
             case .ended, .stopped:
                 // Persistence still rides the WC workoutEnded event (it
                 // carries the HK workout UUID, which only exists after
-                // finishWorkout on the watch). Here we just drop the
-                // mirror reference.
+                // finishWorkout on the watch). Here we drop the mirror
+                // reference, AND we act on the end right now.
+                //
+                // Founder, 2026-10-12: he ended on the watch while the phone
+                // was mid-line; nothing happened until the line finished, then
+                // the phone said the watch was gone instead of ending the run.
+                // The watch ending its session IS the end signal. Kill speech
+                // immediately so the end is felt, then give WatchConnectivity
+                // five seconds to deliver the UUID-bearing message; if it does
+                // not, finalise anyway (the record adopts the UUID later).
                 self.mirroredSession = nil
                 self.currentRunId = nil
+                VoiceFeedbackQueue.shared.stopAll()
+                RunEventLog.shared.record("run.mirrorEnded", "watch session ended; speech stopped, 5s grace for workoutEnded")
+                Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(5))
+                    if LiveMetricsConsumer.shared.isRunActive {
+                        RunEventLog.shared.record("run.endFromMirror", "workoutEnded never arrived; ending from the mirror state")
+                        LiveMetricsConsumer.shared.endNow()
+                        LiveMetricsConsumer.shared.ingestEnded(workoutUUID: nil, salvagedRealRun: !RunOrchestrator.shared.isTestRun)
+                    }
+                }
             default:
                 break
             }

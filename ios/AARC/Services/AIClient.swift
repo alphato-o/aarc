@@ -384,6 +384,67 @@ actor AIClient {
         return DynamicLineResult(text: text, model: model)
     }
 
+    // MARK: - Agent thread (/agent/*) — the Home Base terminal
+
+    struct AgentMessage: Decodable, Identifiable, Sendable {
+        let id: Int
+        let role: String      // "user" | "agent"
+        let text: String
+        let created_at: String
+    }
+
+    private var liveDeviceToken: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "AARCLiveDeviceToken") as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// Send a line to the agent. Cloudflare only (D1).
+    func agentSend(_ text: String) async throws -> Int {
+        guard let token = liveDeviceToken else { throw AIError.proxy("no device token") }
+        let url = await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/send")
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 15
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+        let (data, resp) = try await session.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = obj["id"] as? Int else { throw AIError.proxy("send failed") }
+        return id
+    }
+
+    /// Thread rows after `since` (0 = latest page).
+    func agentThread(since: Int) async throws -> [AgentMessage] {
+        guard let token = liveDeviceToken else { throw AIError.proxy("no device token") }
+        var comps = URLComponents(url: await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/thread"),
+                                  resolvingAgainstBaseURL: false)!
+        comps.queryItems = [.init(name: "since", value: String(since))]
+        var req = URLRequest(url: comps.url!); req.timeoutInterval = 15
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        let (data, resp) = try await session.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200 else { throw AIError.proxy("thread failed") }
+        struct Env: Decodable { let ok: Bool; let messages: [AgentMessage] }
+        return try decoder.decode(Env.self, from: data).messages
+    }
+
+    /// Typed venue search via the proxy (Amap in China). nil = provider not
+    /// configured, so the caller falls back to Apple's search.
+    func venueSearch(_ q: String, lat: Double?, lon: Double?, city: String?) async -> [String]? {
+        guard let token = liveDeviceToken else { return nil }
+        var comps = URLComponents(url: await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("venue-search"),
+                                  resolvingAgainstBaseURL: false)!
+        var items = [URLQueryItem(name: "q", value: q)]
+        if let lat, let lon { items += [.init(name: "lat", value: String(lat)), .init(name: "lon", value: String(lon))] }
+        if let city { items.append(.init(name: "city", value: city)) }
+        comps.queryItems = items
+        var req = URLRequest(url: comps.url!); req.timeoutInterval = 10
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        guard let (data, resp) = try? await session.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = obj["results"] as? [[String: Any]] else { return nil }
+        return results.compactMap { $0["name"] as? String }
+    }
+
     private struct DynamicEnvelope: Decodable {
         let ok: Bool
         let text: String?

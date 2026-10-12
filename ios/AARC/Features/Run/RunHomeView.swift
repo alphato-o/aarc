@@ -20,6 +20,7 @@ struct RunHomeView: View {
 
     @State private var orchestrator = RunOrchestrator.shared
     @State private var preflightError: String?
+    @State private var showVenuePicker = false
     @State private var planStore = ScriptPreviewStore.shared
     @State private var liveConsumer = LiveMetricsConsumer.shared
     @State private var phoneSession = PhoneSession.shared
@@ -42,6 +43,12 @@ struct RunHomeView: View {
                 .onChange(of: planStore.planKind) { _, _ in schedulePreGen() }
                 .onChange(of: planStore.distanceKm) { _, _ in schedulePreGen() }
                 .onChange(of: planStore.timeMinutes) { _, _ in schedulePreGen() }
+                .sheet(isPresented: $showVenuePicker) {
+                    VenuePickerSheet {
+                        showVenuePicker = false
+                        Task { await startTapped(.treadmill) }
+                    }
+                }
                 .fullScreenCover(isPresented: Binding(
                     get: { liveConsumer.isRunActive },
                     set: { _ in }
@@ -493,7 +500,9 @@ struct RunHomeView: View {
             // Slide-to-start (not tap) so a stray touch can't begin a run.
             VStack(spacing: 14) {
                 SlideToStart(label: "Treadmill", icon: "figure.run.treadmill", tint: .green) {
-                    Task { await startTapped(.treadmill) }
+                    // Venue first, run second: the picker settles where he is
+                    // before the countdown so the coaches never guess the gym.
+                    showVenuePicker = true
                 }
                 .accessibilityIdentifier("startTreadmill")
                 SlideToStart(label: "Outdoor", icon: "figure.run", tint: .accentColor) {

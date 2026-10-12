@@ -108,6 +108,7 @@ struct DeveloperSettingsView: View {
         Form {
             Section("Tools") {
                 NavigationLink("Control Room") { ControlRoomView() }
+                NavigationLink("Home Base terminal") { HomeBaseTerminal() }
                 NavigationLink("Voice Lab") { VoicePlayground() }
                 NavigationLink("Coach Playground") { CoachPlayground() }
                 NavigationLink("Script Preview (AI)") { ScriptPreviewView() }

@@ -240,6 +240,25 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
     /// travel agents, hotel supply shops and bus stops named after hotels. With
     /// it we get the language-independence of a category lookup over the only
     /// transport that actually works on device in China.
+    /// Typed search for the treadmill picker: whatever he types, anywhere
+    /// near the last fix, no category filter. The category filters above are
+    /// tuned for the automatic sweep; a human typing "Regent" or "健身" does
+    /// not want them. Returns names nearest-first.
+    func search(_ query: String) async -> [String] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 2 else { return [] }
+        let loc = await oneShot()
+        let req = MKLocalSearch.Request()
+        req.naturalLanguageQuery = q
+        req.resultTypes = .pointOfInterest
+        if let loc {
+            req.region = MKCoordinateRegion(center: loc.coordinate,
+                                            latitudinalMeters: 20_000, longitudinalMeters: 20_000)
+        }
+        guard let resp = try? await MKLocalSearch(request: req).start() else { return [] }
+        if let loc { return rankedNames(resp.mapItems, near: loc, cap: false) }
+        return resp.mapItems.compactMap(\.name)
+    }
     private func searchNames(_ query: String, near loc: CLLocation) async -> [String] {
         let req = MKLocalSearch.Request()
         req.naturalLanguageQuery = query
@@ -254,12 +273,12 @@ final class VenueLocator: NSObject, CLLocationManagerDelegate {
 
     /// Hard-cap by ACTUAL distance (the request region/radius is only a hint)
     /// and sort nearest-first.
-    private func rankedNames(_ items: [MKMapItem], near loc: CLLocation) -> [String] {
+    private func rankedNames(_ items: [MKMapItem], near loc: CLLocation, cap: Bool = true) -> [String] {
         items
             .compactMap { item -> (String, CLLocationDistance)? in
                 guard let name = item.name,
                       let d = item.placemark.location?.distance(from: loc),
-                      d <= Self.maxVenueMeters else { return nil }
+                      !cap || d <= Self.maxVenueMeters else { return nil }
                 return (name, d)
             }
             .sorted { $0.1 < $1.1 }

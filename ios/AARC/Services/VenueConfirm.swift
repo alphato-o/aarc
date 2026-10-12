@@ -61,6 +61,27 @@ final class VenueConfirm {
     }
 
     /// The runner tapped a venue — it's where they are. Fact.
+    /// Picked BEFORE the run from the treadmill picker (list, typed search,
+    /// or typed by hand). Resolves the question so the in-run card never
+    /// asks, and takes any name: a gym he will never see again is still the
+    /// right answer for tonight.
+    func preconfirm(_ name: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return }
+        candidates = [n]; cohortStart = 0
+        PlaceContext.shared.setConfirmedVenue(n)
+        resolved = true
+        RunEventLog.shared.record("venue.confirmed", n, data: ["via": "picker"])
+    }
+
+    /// Picker said "skip": stop asking for this run.
+    func skipForThisRun() {
+        resolved = true
+        RunEventLog.shared.record("venue.skipped", "picker")
+    }
+
+    func resetForNewRun() { candidates = []; cohortStart = 0; resolved = false; paused = false }
+
     func confirmVenue(_ name: String) {
         guard cohort.contains(name) else { return }
         PlaceContext.shared.setConfirmedVenue(name)
