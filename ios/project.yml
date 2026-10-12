@@ -48,6 +48,14 @@ targets:
         SUPPORTS_MACCATALYST: NO
         SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD: NO
         ENABLE_PREVIEWS: YES
+      configs:
+        # Release = App Store signing, owned by the mini (the release box).
+        # Manual, because Xcode will not mint App Store profiles headless.
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "AARC App Store mini"
+          DEVELOPMENT_TEAM: GK7889VKDF
     dependencies:
       - package: AARCKit
       - target: AARCWatch
@@ -85,6 +93,14 @@ targets:
         # Live Activity widget + LastRunWidget home-screen widget;
         # bundle is loaded by the host iOS app.
         ENABLE_PREVIEWS: YES
+      configs:
+        # Release = App Store signing, owned by the mini (the release box).
+        # Manual, because Xcode will not mint App Store profiles headless.
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "AARC LiveActivity App Store mini"
+          DEVELOPMENT_TEAM: GK7889VKDF
     dependencies:
       - package: AARCKit
     postBuildScripts:
@@ -121,6 +137,14 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         PROVISIONING_PROFILE_SPECIFIER: "AARC Watch Development"
         DEVELOPMENT_TEAM: GK7889VKDF
+      configs:
+        # Release = App Store signing, owned by the mini (the release box).
+        # Manual, because Xcode will not mint App Store profiles headless.
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Apple Distribution"
+          PROVISIONING_PROFILE_SPECIFIER: "AARC Watch App Store mini"
+          DEVELOPMENT_TEAM: GK7889VKDF
     dependencies:
       - package: AARCKit
     postBuildScripts:
