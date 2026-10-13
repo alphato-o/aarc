@@ -125,7 +125,8 @@ final class LiveMetricsConsumer {
         // has even answered the identity request. Same runId, same start
         // time, log appended, nothing replayed.
         if currentRunId == nil { resumedFromMarker = false }
-        if currentRunId == nil, let m = UnfinishedRunStore.pending, Self.markerIsResumable(m) {
+        if currentRunId == nil, let m = UnfinishedRunStore.pending,
+           Self.markerIsResumable(m, allowTest: RunOrchestrator.shared.testMode == .real) {
             pendingRunType = RunType(rawValue: m.runTypeRaw) ?? pendingRunType
             pendingPersonalityId = m.personalityId
             ingestStarted(runId: m.runId, startedAt: m.startedAt, resuming: true)
@@ -179,8 +180,14 @@ final class LiveMetricsConsumer {
     /// A marker is worth resuming when it belongs to a real run that was
     /// alive recently. Six hours covers a marathon with margin; older is a
     /// run that ended without us and belongs to recovery, not resume.
-    nonisolated static func markerIsResumable(_ m: UnfinishedRunStore.Marker, now: Date = .now) -> Bool {
-        !m.isTest && now.timeIntervalSince(m.lastSeenAt) < 6 * 3600 && now.timeIntervalSince(m.startedAt) < 8 * 3600
+    /// `allowTest` is true when the persisted test mode is `.real` (a test run
+    /// he is actually running, just not written to Health): that run is as
+    /// worth resuming as any other. A desk simulation (`.simulate`) died with
+    /// the app and must not come back as a ghost.
+    nonisolated static func markerIsResumable(_ m: UnfinishedRunStore.Marker, allowTest: Bool = false, now: Date = .now) -> Bool {
+        (!m.isTest || allowTest)
+            && now.timeIntervalSince(m.lastSeenAt) < 6 * 3600
+            && now.timeIntervalSince(m.startedAt) < 8 * 3600
     }
 
     /// Set when the current run was re-keyed from the crash breadcrumb

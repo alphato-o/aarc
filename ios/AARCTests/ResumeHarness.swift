@@ -68,6 +68,12 @@ struct ResumeHarness {
                                               runTypeRaw: "outdoor", personalityId: "roast_coach",
                                               isTest: false, lastSeenAt: .now.addingTimeInterval(-120))
         #expect(LiveMetricsConsumer.markerIsResumable(fresh))
+        // A test run he actually ran (mode .real) resumes; a desk sim never.
+        let testRun = UnfinishedRunStore.Marker(runId: UUID(), startedAt: .now.addingTimeInterval(-900),
+                                                runTypeRaw: "treadmill", personalityId: "roast_coach",
+                                                isTest: true, lastSeenAt: .now.addingTimeInterval(-30))
+        #expect(LiveMetricsConsumer.markerIsResumable(testRun, allowTest: true))
+        #expect(!LiveMetricsConsumer.markerIsResumable(testRun, allowTest: false))
     }
 
     @Test("a resumed run keeps the engines alive and ends exactly once")
