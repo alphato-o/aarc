@@ -57,9 +57,9 @@ final class VoiceNoteRecorder: NSObject {
     // MARK: - Recording
 
     func requestPermission() async -> Bool {
-        await withCheckedContinuation { c in
-            AVAudioApplication.requestRecordPermission { ok in c.resume(returning: ok) }
-        }
+        // Async API: the completion-block form is called on an arbitrary
+        // queue and an inline closure here would inherit @MainActor (trap).
+        await AVAudioApplication.requestRecordPermission()
     }
 
     func start(runId: UUID) async {

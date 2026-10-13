@@ -108,7 +108,13 @@ final class PhoneSession: NSObject {
               session.activationState == .activated,
               session.isReachable,
               let data = try? encoder.encode(event) else { return }
-        session.sendMessageData(data, replyHandler: nil, errorHandler: { _ in })
+        // @Sendable is load-bearing (see sendStateEvent): an inline closure
+        // literal here inherits @MainActor and TRAPS when WC reports a send
+        // failure on its own queue. Field crashes 13 Oct 2026, build 198,
+        // twice: both on a Home Base subtitle push the moment the watch
+        // went unreachable.
+        let onError: @Sendable (any Error) -> Void = { _ in }
+        session.sendMessageData(data, replyHandler: nil, errorHandler: onError)
     }
 
     // MARK: - Envelope

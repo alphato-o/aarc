@@ -175,9 +175,13 @@ final class PermissionsManager {
         let from = Date().addingTimeInterval(-60)
         let to = Date()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            p.queryPedometerData(from: from, to: to) { _, _ in
+            // @Sendable is load-bearing: CoreMotion calls this on its own
+            // queue; an inline closure here inherits @MainActor and traps.
+            // Field crash 12 Oct 2026 (build 196), CMPedometerUpdateQueue.
+            let handler: @Sendable (CMPedometerData?, (any Error)?) -> Void = { _, _ in
                 cont.resume()
             }
+            p.queryPedometerData(from: from, to: to, withHandler: handler)
         }
         await refresh()
     }
