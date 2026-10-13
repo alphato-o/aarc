@@ -97,6 +97,17 @@ struct ResumeHarness {
         resetToIdle()
     }
 
+    @Test("a stream with no identity stays alive tick after tick (never self-ended)")
+    func unkeyedStreamIsNotAPhantom() {
+        resetToIdle()
+        let c = LiveMetricsConsumer.shared
+        for d in stride(from: 1000.0, through: 1010.0, by: 1.0) { c.ingest(running(d)) }
+        #expect(c.isRunActive)
+        #expect(c.currentRunId == nil)
+        #expect(c.latest?.distanceMeters == 1010)
+        resetToIdle()
+    }
+
     @Test("identity arriving after metrics adopts the run instead of ending it")
     func metricsBeforeIdentityAdopts() {
         resetToIdle()

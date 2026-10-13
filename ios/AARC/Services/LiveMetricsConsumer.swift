@@ -109,10 +109,15 @@ final class LiveMetricsConsumer {
         // zombie watch session re-mirroring an ended run. Refuse, kill the
         // ghost, and log it — the watch-side fix should prevent this ever firing,
         // so a hit here on the next run pinpoints a path we missed.
-        if currentRunId == nil, !RunOrchestrator.shared.canStartNewRun {
+        // Only a SUMMARY on screen makes unkeyed metrics a phantom. The other
+        // half of canStartNewRun (isRunActive) is set by the previous tick of
+        // this very stream when it arrives before its identity (relaunch
+        // mid-run), so testing it here ended the live watch run on the second
+        // tick. Simulator pair, 2026-10-14; live in builds 198-200.
+        if currentRunId == nil, RunSummaryStore.shared.isPresenting {
             RunEventLog.shared.record(
                 "run.phantomMetrics",
-                "mirrored metrics refused — no active run while !canStartNewRun",
+                "mirrored metrics refused — no active run while a summary is presenting",
                 data: ["state": String(describing: metrics.state)])
             MirroringReceiver.shared.endFromPhone()
             PhoneSession.shared.sendStateEvent(.endWorkout)

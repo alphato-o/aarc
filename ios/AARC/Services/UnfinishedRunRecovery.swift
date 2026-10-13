@@ -125,6 +125,15 @@ enum UnfinishedRunRecovery {
     static func recoverIfNeeded(context: ModelContext) async -> Outcome {
         guard let marker = UnfinishedRunStore.pending else { return .nothingPending }
 
+        // A run that may STILL BE LIVE on the watch is not ours to rescue or
+        // to clear: LiveMetricsConsumer resumes it from this very marker when
+        // the metrics come back (relaunch mid-run). Leave it alone.
+        if LiveMetricsConsumer.markerIsResumable(marker, allowTest: RunOrchestrator.shared.testMode == .real),
+           Date.now.timeIntervalSince(marker.lastSeenAt) < 15 * 60 {
+            RunEventLog.shared.record("run.recoverDeferred",
+                                      "marker \(marker.runId.uuidString.prefix(8)) looks live; leaving it for resume")
+            return .nothingPending
+        }
         // A run that only just started, or a test run, is not worth rescuing.
         let livedFor = marker.lastSeenAt.timeIntervalSince(marker.startedAt)
         if marker.isTest || livedFor < minMeaningfulSeconds {
