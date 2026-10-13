@@ -101,6 +101,20 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         return generateScriptHandler(request, env);
     }
 
+    // Quiet mode (founder, mid-run 2026-10-13: "tone down ricky/jess, more
+    // home base"). A live home_briefing row of kind 'quiet' drops one of
+    // every two live coach calls; the app treats ok:false as a skipped
+    // line, nothing spoken, no fallback. Scripted/per-km lines are
+    // pre-rendered on the phone and untouched.
+    if (request.method === "POST" && ["/dynamic-line", "/react-line", "/music-comment"].includes(url.pathname)) {
+        const q = await env.DB.prepare(
+            "SELECT COUNT(*) AS c FROM home_briefing WHERE kind='quiet' AND (expires_at IS NULL OR expires_at > datetime('now'))"
+        ).first<{ c: number }>().catch(() => null);
+        if (q && q.c > 0 && Math.random() < 0.5) {
+            return new Response(JSON.stringify({ ok: false, error: "quiet mode: line withheld" }),
+                { status: 200, headers: { "content-type": "application/json" } });
+        }
+    }
     if (request.method === "POST" && url.pathname === "/dynamic-line") {
         return dynamicLineHandler(request, env);
     }

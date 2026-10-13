@@ -102,7 +102,12 @@ extension MirroringReceiver: @preconcurrency HKWorkoutSessionDelegate {
                 LiveMetricsConsumer.shared.ingestPaused()
             case .running where fromState == .paused:
                 LiveMetricsConsumer.shared.ingestResumed()
-            case .ended, .stopped:
+            case .stopped:
+                // A stopped mirror is a lost mirror, not an ended workout.
+                // Only drop the reference; the watch may still be running.
+                self.mirroredSession = nil
+                self.currentRunId = nil
+            case .ended:
                 // Persistence still rides the WC workoutEnded event (it
                 // carries the HK workout UUID, which only exists after
                 // finishWorkout on the watch). Here we drop the mirror
@@ -114,18 +119,20 @@ extension MirroringReceiver: @preconcurrency HKWorkoutSessionDelegate {
                 // The watch ending its session IS the end signal. Kill speech
                 // immediately so the end is felt, then give WatchConnectivity
                 // five seconds to deliver the UUID-bearing message; if it does
-                // not, finalise anyway (the record adopts the UUID later).
+                // not AND the metrics stream has gone silent too, finalise
+                // (ingestEnded is idempotent; a late UUID just gets adopted).
                 self.mirroredSession = nil
                 self.currentRunId = nil
                 VoiceFeedbackQueue.shared.stopAll()
                 RunEventLog.shared.record("run.mirrorEnded", "watch session ended; speech stopped, 5s grace for workoutEnded")
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(5))
-                    if LiveMetricsConsumer.shared.isRunActive {
-                        RunEventLog.shared.record("run.endFromMirror", "workoutEnded never arrived; ending from the mirror state")
-                        LiveMetricsConsumer.shared.endNow()
-                        LiveMetricsConsumer.shared.ingestEnded(workoutUUID: nil, salvagedRealRun: !RunOrchestrator.shared.isTestRun)
-                    }
+                    let c = LiveMetricsConsumer.shared
+                    let silent = c.lastUpdateAt.map { Date.now.timeIntervalSince($0) > 4 } ?? true
+                    guard c.isRunActive, silent else { return }
+                    RunEventLog.shared.record("run.endFromMirror", "workoutEnded never arrived and stream is silent; ending from the mirror state")
+                    c.endNow()
+                    c.ingestEnded(workoutUUID: nil, salvagedRealRun: !RunOrchestrator.shared.isTestRun)
                 }
             default:
                 break

@@ -165,6 +165,7 @@ final class LiveMetricsConsumer {
     }
 
     func ingestStarted(runId: UUID, startedAt: Date) {
+        endHandled = false
         // Dedupe: queued WC transports can replay workoutStarted (e.g.
         // a userInfo copy landing after the sendMessage copy). A repeat
         // of the current run must not reset the engines mid-run.
@@ -369,7 +370,21 @@ final class LiveMetricsConsumer {
         RunSummaryStore.shared.capture()
     }
 
+    /// Set once an end has been processed for the current run; a second end
+    /// (mirror fallback racing the WC message, or vice versa) must not tear
+    /// everything down twice. A late UUID is still adopted.
+    private var endHandled = false
+
     func ingestEnded(workoutUUID: UUID?, salvagedRealRun: Bool = false) {
+        if endHandled {
+            RunEventLog.shared.record("run.endDuplicate", "second end signal ignored; uuid=\(workoutUUID?.uuidString.prefix(8) ?? "nil")")
+            if let workoutUUID {
+                lastFinishedWorkoutUUID = workoutUUID
+                Task { await persistRun(workoutUUID: workoutUUID) }
+            }
+            return
+        }
+        endHandled = true
         endSweepTask?.cancel()
         endSweepTask = nil
         // THE GATE (Qingdao, 2026-08-09). Persist the run to the database
