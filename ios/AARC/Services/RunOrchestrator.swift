@@ -543,6 +543,15 @@ final class RunOrchestrator {
     /// background, then hand the result to ScriptEngine.replaceScript.
     /// Uses the pre-gen full task if it's in flight; otherwise spawns
     /// a fresh request.
+    /// Relaunch mid-run: the engines are up on an empty script; fetch a full
+    /// one and swap it in pre-marked to the current distance, so nothing the
+    /// runner already passed is spoken again. Quiet on failure, like the
+    /// normal swap: the live layers carry the run meanwhile.
+    func resumeScriptAfterRelaunch(runType: RunType, personalityId: String) {
+        scheduleFullScriptSwap(plan: ScriptPreviewStore.shared.currentPlan,
+                               runType: runType, personalityId: personalityId)
+    }
+
     private func scheduleFullScriptSwap(
         plan: RunPlan,
         runType: RunType,

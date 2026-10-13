@@ -118,6 +118,18 @@ final class LiveMetricsConsumer {
             PhoneSession.shared.sendStateEvent(.endWorkout)
             return
         }
+        // RELAUNCH MID-RUN (founder, 2026-10-14: "if this happens on race
+        // day I need to relaunch and resume, the watch is still emitting").
+        // Metrics are flowing, we know no run, and the crash breadcrumb says
+        // which run this is: re-key every engine to it NOW, before the watch
+        // has even answered the identity request. Same runId, same start
+        // time, log appended, nothing replayed.
+        if currentRunId == nil { resumedFromMarker = false }
+        if currentRunId == nil, let m = UnfinishedRunStore.pending, Self.markerIsResumable(m) {
+            pendingRunType = RunType(rawValue: m.runTypeRaw) ?? pendingRunType
+            pendingPersonalityId = m.personalityId
+            ingestStarted(runId: m.runId, startedAt: m.startedAt, resuming: true)
+        }
         self.latest = metrics
         self.lastUpdateAt = .now
         // Keep the crash breadcrumb's clock current so recovery can tell a
@@ -164,8 +176,20 @@ final class LiveMetricsConsumer {
         )
     }
 
-    func ingestStarted(runId: UUID, startedAt: Date) {
+    /// A marker is worth resuming when it belongs to a real run that was
+    /// alive recently. Six hours covers a marathon with margin; older is a
+    /// run that ended without us and belongs to recovery, not resume.
+    nonisolated static func markerIsResumable(_ m: UnfinishedRunStore.Marker, now: Date = .now) -> Bool {
+        !m.isTest && now.timeIntervalSince(m.lastSeenAt) < 6 * 3600 && now.timeIntervalSince(m.startedAt) < 8 * 3600
+    }
+
+    /// Set when the current run was re-keyed from the crash breadcrumb
+    /// rather than started here. Harness B reads it.
+    private(set) var resumedFromMarker = false
+
+    func ingestStarted(runId: UUID, startedAt: Date, resuming: Bool = false) {
         endHandled = false
+        resumedFromMarker = resuming
         // Dedupe: queued WC transports can replay workoutStarted (e.g.
         // a userInfo copy landing after the sendMessage copy). A repeat
         // of the current run must not reset the engines mid-run.
@@ -233,8 +257,9 @@ final class LiveMetricsConsumer {
         // The DEVICE's timezone is the source of truth for displaying run times
         // (the dashboard renders in this tz, not the viewer's browser / UTC).
         RunEventLog.shared.record(
-            "run.start",
-            "runType=\(pendingRunType.rawValue);isTest=\(RunOrchestrator.shared.isTestRun ? 1 : 0)",
+            resuming ? "run.resume" : "run.start",
+            "runType=\(pendingRunType.rawValue);isTest=\(RunOrchestrator.shared.isTestRun ? 1 : 0)"
+                + (resuming ? ";from=marker" : ""),
             data: ["name": runTitle, "tz": TimeZone.current.identifier])
 
         // Real-world surroundings for the coaches — outdoor runs only.
@@ -258,6 +283,13 @@ final class LiveMetricsConsumer {
             // one-shot capture.
             if AppEnv.uiTest {
                 VenueConfirm.shared.begin(candidates: VenueConfirm.uiTestSeed)
+            } else if resuming {
+                // Mid-run relaunch: never re-ask where he is.
+                Task { @MainActor in
+                    if let v = await VenueLocator.shared.capture() {
+                        PlaceContext.shared.setTreadmillContext(coord: v.coord, city: v.city)
+                    }
+                }
             } else {
                 Task { @MainActor in
                     // The treadmill picker may already have settled this
@@ -284,7 +316,18 @@ final class LiveMetricsConsumer {
         // Wipe the previous run's chart so the new run starts clean.
         LiveRunChartStore.shared.reset()
 
-        if let script = ScriptPreviewStore.shared.latest {
+        if resuming {
+            // Whatever script is cached belongs to a start that already
+            // happened (or to a different run): starting it would replay the
+            // opener and every km line. Start empty, then let the orchestrator
+            // generate a full script and swap it in pre-marked to NOW.
+            ScriptEngine.shared.start(
+                script: GeneratedScript(scriptId: "resume-\(runId.uuidString.prefix(8))", model: "none", messages: []),
+                plan: ScriptPreviewStore.shared.currentPlan
+            )
+            RunOrchestrator.shared.resumeScriptAfterRelaunch(
+                runType: pendingRunType, personalityId: pendingPersonalityId)
+        } else if let script = ScriptPreviewStore.shared.latest {
             ScriptEngine.shared.start(
                 script: script,
                 plan: ScriptPreviewStore.shared.currentPlan
@@ -366,6 +409,7 @@ final class LiveMetricsConsumer {
     /// for the summary.
     func endNow() {
         guard isRunActive else { return }
+        resumedFromMarker = false
         latest = latest?.with(state: .ended)   // isRunActive → false immediately
         RunSummaryStore.shared.capture()
     }

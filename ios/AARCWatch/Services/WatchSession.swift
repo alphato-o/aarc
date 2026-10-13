@@ -184,6 +184,9 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         Task { @MainActor in
             self.isReachable = isReachable
             self.log.info("[watch] reachability → \(isReachable)")
+            // The phone just came back (relaunch after a crash, or out of
+            // the pocket): tell it which run this is, so it re-keys itself.
+            if isReachable { WorkoutSessionHost.shared.resendIdentityIfRunning() }
         }
     }
 

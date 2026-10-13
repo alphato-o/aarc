@@ -415,6 +415,25 @@ final class WorkoutSessionHost: NSObject {
         )
     }
 
+    /// Re-announce the live run to the phone. Called when the phone asks
+    /// (it relaunched mid-run and adopted our mirrored session with no
+    /// runId of its own) and whenever WC reachability comes back. Both
+    /// channels, same as the original announcement, so whichever transport
+    /// is alive carries it. No-op when nothing is running.
+    func resendIdentityIfRunning() {
+        guard session != nil, state == .running || state == .paused, let runId = currentRunId else { return }
+        WatchBreadcrumbs.shared.drop("identity resent \(runId.uuidString.prefix(8))")
+        sendMirror(.identity(
+            runId: runId,
+            runType: currentRunType,
+            personalityId: "roast_coach",
+            startedAt: startedAt ?? .now
+        ))
+        WatchSession.shared.sendStateEvent(
+            .workoutStarted(runId: runId, startedAt: startedAt ?? .now)
+        )
+    }
+
     // MARK: - Mirroring data channel
 
     private static let persistedRunIdKey = "aarc.run.persistedRunId"
@@ -756,6 +775,19 @@ final class WorkoutSessionHost: NSObject {
 // MARK: - HKWorkoutSessionDelegate
 
 extension WorkoutSessionHost: @preconcurrency HKWorkoutSessionDelegate {
+    nonisolated func workoutSession(
+        _ workoutSession: HKWorkoutSession,
+        didReceiveDataFromRemoteWorkoutSession data: [Data]
+    ) {
+        Task { @MainActor in
+            let decoder = JSONDecoder()
+            for d in data {
+                guard let payload = try? decoder.decode(MirrorPayload.self, from: d) else { continue }
+                if case .identityRequest = payload { self.resendIdentityIfRunning() }
+            }
+        }
+    }
+
     nonisolated func workoutSession(
         _ workoutSession: HKWorkoutSession,
         didChangeTo toState: HKWorkoutSessionState,

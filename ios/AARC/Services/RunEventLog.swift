@@ -112,9 +112,13 @@ final class RunEventLog {
         let fm = FileManager.default
         try? fm.createDirectory(at: Self.runlogsDirectory, withIntermediateDirectories: true)
         let url = Self.logFileURL(for: runId)
-        fm.createFile(atPath: url.path, contents: nil)
+        // Resume after a crash mid-run reopens the SAME run's log: append,
+        // never truncate, or the pre-crash half of the evidence is gone.
+        let resumed = fm.fileExists(atPath: url.path)
+        if !resumed { fm.createFile(atPath: url.path, contents: nil) }
         do {
             fileHandle = try FileHandle(forWritingTo: url)
+            if resumed { try fileHandle?.seekToEnd() }
         } catch {
             fileHandle = nil
             log.error("RunEventLog could not open \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")

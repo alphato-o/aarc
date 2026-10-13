@@ -55,6 +55,16 @@ final class MirroringReceiver: NSObject {
         mirroredSession = session
         session.delegate = self
         log.info("[mirror] adopted mirrored session (state=\(session.state.rawValue))")
+        // Relaunched into a live run (crash mid-run): we have the session but
+        // no runId. Ask the watch to re-announce; the marker-based resume in
+        // LiveMetricsConsumer.ingest covers the seconds until it answers.
+        if LiveMetricsConsumer.shared.currentRunId == nil {
+            RunEventLog.shared.record("run.identityRequested", "mirrored session adopted with no run; asking the watch")
+            if let data = try? JSONEncoder().encode(MirrorPayload.identityRequest) {
+                let done: @Sendable (Bool, (any Error)?) -> Void = { _, _ in }
+                session.sendToRemoteWorkoutSession(data: data, completion: done)
+            }
+        }
     }
 
     /// Phone-side End: stop the activity directly on the mirrored
@@ -83,6 +93,8 @@ final class MirroringReceiver: NSObject {
                 LiveMetricsConsumer.shared.ingestStarted(runId: runId, startedAt: startedAt)
             case .metrics(let metrics):
                 LiveMetricsConsumer.shared.ingest(metrics)
+            case .identityRequest:
+                break   // phone → watch only
             }
         }
     }

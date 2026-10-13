@@ -18,4 +18,9 @@ public enum MirrorPayload: Codable, Sendable {
     case identity(runId: UUID, runType: RunType, personalityId: String, startedAt: Date)
     /// 1 Hz live metrics — same snapshot the WC path carries.
     case metrics(LiveMetrics)
+    /// Phone → watch. Sent when the phone adopts a mirrored session it has
+    /// no run for (relaunch after a crash mid-run): "tell me who you are".
+    /// The watch answers with a fresh `.identity`. Older watch builds fail
+    /// to decode it and log; harmless.
+    case identityRequest
 }

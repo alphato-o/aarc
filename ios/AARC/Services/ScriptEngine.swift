@@ -77,6 +77,9 @@ final class ScriptEngine {
         VoiceFeedbackQueue.shared.resetStats()
     }
 
+    /// Harness B hook: has this message id been fired (or pre-marked)?
+    func isFired(_ messageId: String) -> Bool { firedMessageIds.contains(messageId) }
+
     func stop() {
         self.isActive = false
         self.script = nil
