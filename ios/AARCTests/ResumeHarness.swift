@@ -97,6 +97,23 @@ struct ResumeHarness {
         resetToIdle()
     }
 
+    @Test("identity arriving after metrics adopts the run instead of ending it")
+    func metricsBeforeIdentityAdopts() {
+        resetToIdle()
+        // No breadcrumb (or a non-resumable one): metrics land first and flip
+        // us to running with no runId; the watch's identity follows.
+        let c = LiveMetricsConsumer.shared
+        c.ingest(running(2500))
+        #expect(c.isRunActive)
+        #expect(c.currentRunId == nil)
+        let id = UUID()
+        c.ingestStarted(runId: id, startedAt: .now.addingTimeInterval(-900))
+        #expect(c.currentRunId == id)
+        #expect(c.isRunActive)
+        c.endNow()
+        resetToIdle()
+    }
+
     @Test("a script swapped in mid-run pre-marks everything already passed")
     func replaceScriptPreMarks() {
         let msgs: [ScriptMessage] = [1000.0, 2000.0, 3000.0, 4000.0].enumerated().map { i, d in

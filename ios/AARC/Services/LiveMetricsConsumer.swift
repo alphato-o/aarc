@@ -211,13 +211,25 @@ final class LiveMetricsConsumer {
         // canStartNewRun is false == phantom → refuse, and tell the watch to
         // stop the ghost so it doesn't keep re-announcing.
         if runId != currentRunId, !RunOrchestrator.shared.canStartNewRun {
-            RunEventLog.shared.record(
-                "run.phantomBlocked",
-                "stale start ignored (summary up / run active)",
-                data: ["runId": runId.uuidString])
-            PhoneSession.shared.sendStateEvent(.endWorkout)
-            MirroringReceiver.shared.endFromPhone()
-            return
+            // METRICS-BEFORE-IDENTITY (found on the simulator pair, 2026-10-14,
+            // and live in builds 198-200): after a relaunch the watch's 1 Hz
+            // stream lands before its workoutStarted/identity does, `ingest`
+            // flips us to "running" with no runId, and this guard then read
+            // the late identity as a phantom and ENDED THE LIVE WORKOUT. The
+            // stream we are already showing IS this run: adopt it. Only a
+            // known different run, or a summary on screen, is a phantom.
+            if currentRunId == nil, isRunActive, !RunSummaryStore.shared.isPresenting {
+                RunEventLog.shared.record("run.adoptUnkeyed",
+                                          "identity arrived after metrics; adopting \(runId.uuidString.prefix(8))")
+            } else {
+                RunEventLog.shared.record(
+                    "run.phantomBlocked",
+                    "stale start ignored (summary up / run active)",
+                    data: ["runId": runId.uuidString])
+                PhoneSession.shared.sendStateEvent(.endWorkout)
+                MirroringReceiver.shared.endFromPhone()
+                return
+            }
         }
 
         // Anti-double-tracking: if the user already fell back to
