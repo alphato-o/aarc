@@ -4,21 +4,21 @@
 /// during a run and logs the result so the Control Room can show what real
 /// ambient data was fetched + put into the script-generation context.
 
-import { fetchAmbient, pushAmbientBlock, type AmbientInput } from "../lib/ambient";
+import { fetchAmbient, pushAmbientBlock, type AmbientInput, type AmbientEnv } from "../lib/ambient";
 
 const json = (data: unknown): Response =>
     new Response(JSON.stringify(data), {
         headers: { "content-type": "application/json", "access-control-allow-origin": "*" },
     });
 
-export async function ambientHandler(request: Request): Promise<Response> {
+export async function ambientHandler(request: Request, env?: AmbientEnv): Promise<Response> {
     let input: AmbientInput = {};
     try {
         input = ((await request.json()) as AmbientInput) ?? {};
     } catch {
         return new Response("bad json", { status: 400 });
     }
-    const resolved = await fetchAmbient(input);
+    const resolved = await fetchAmbient(input, env);
     const lines: string[] = [];
     pushAmbientBlock(lines, input, resolved);
     return json({ resolved, block: lines.join("\n") });

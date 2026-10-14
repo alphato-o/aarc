@@ -24,6 +24,7 @@ import { dashHandler, dashAuthPollHandler, dashAuthApproveHandler } from "./rout
 import { mapTileHandler } from "./routes/mapTile";
 import { staticMapHandler } from "./routes/staticMap";
 import { ambientHandler } from "./routes/ambient";
+import { airCnHandler, airCnPushHandler } from "./routes/airCn";
 import { landingHandler } from "./routes/landing";
 import { waitlistSubmitHandler, waitlistListHandler } from "./routes/waitlist";
 import { personalNotesGetHandler, personalNotesPutHandler } from "./routes/personalNotes";
@@ -90,7 +91,18 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
     }
 
     if (request.method === "POST" && url.pathname === "/ambient") {
-        return ambientHandler(request);
+        return ambientHandler(request, env);
+    }
+
+    if (request.method === "GET" && url.pathname === "/air-cn") {
+        return airCnHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/air-cn/push") {
+        if (!env.LIVE_ADMIN_TOKEN || request.headers.get("x-aarc-admin") !== env.LIVE_ADMIN_TOKEN) {
+            return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), { status: 401, headers: { "content-type": "application/json" } });
+        }
+        return airCnPushHandler(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/staticmap") {

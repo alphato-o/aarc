@@ -97,7 +97,7 @@ async function buildUserPrompt(req: z.infer<typeof RoastPoolRequestSchema>, n: n
     lines.push(`- run type: ${c.runType}`);
     const vProfileRaw = await fetchVenueProfile(env, req.ambient?.venueConfirmed ? req.ambient?.venue : undefined);
     const vProfile = vProfileRaw && req.ambient?.venue ? formatVenueProfile(req.ambient!.venue!, vProfileRaw) : null;
-    pushAmbientBlock(lines, req.ambient, await fetchAmbient(req.ambient ?? {}), vProfile);
+    pushAmbientBlock(lines, req.ambient, await fetchAmbient(req.ambient ?? {}, env), vProfile);
     await pushBriefingBlock(lines, env, "ricky", { chance: 1 });
 
     if (req.personalNotes && req.personalNotes.length > 0) {

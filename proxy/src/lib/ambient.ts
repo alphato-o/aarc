@@ -9,6 +9,10 @@
 /// hour (module memo + edge cacheTtl) so it costs ~one fetch/hour/location,
 /// not one per line. Every piece fails soft — a dead feed just omits itself.
 
+import { fetchChinaStationAir, inChinaBox, type AirCnEnv } from "./airChina";
+
+export type AmbientEnv = AirCnEnv;
+
 export interface AmbientInput {
     lat?: number;
     lon?: number;
@@ -29,10 +33,17 @@ interface Resolved {
     isDay?: boolean;
     sunrise?: string;
     sunset?: string;
-    aqi?: number;          // European AQI — tracks the user's local weather app
+    aqi?: number;          // station: China-scale AQI (what the watch shows); model fallback: US AQI
     pm25?: number;         // PM2.5 µg/m³ — the concrete, standard-agnostic number
     aqiCategory?: string;
     pollutant?: string;
+    aqiSource?: "station" | "model";
+    aqiScale?: "CN" | "US";
+    usAqi?: number;        // station path only: US-scale read of the same PM2.5
+    usCategory?: string;
+    aqiStation?: string;   // station path only: nearest official monitor
+    aqiStationKm?: number;
+    aqiAsOf?: string;      // "HH:MM" local time of the station reading
     worldNews?: string[];
     cityNews?: string[];
 }
@@ -102,7 +113,7 @@ async function rssTitles(url: string, n: number): Promise<string[]> {
     }
 }
 
-export async function fetchAmbient(input: AmbientInput): Promise<Resolved> {
+export async function fetchAmbient(input: AmbientInput, env?: AmbientEnv): Promise<Resolved> {
     if (input.lat == null || input.lon == null) {
         // No location → still try city news only.
         return input.city ? { cityNews: await rssTitles(newsUrl(input.city), 2) } : {};
@@ -120,9 +131,10 @@ export async function fetchAmbient(input: AmbientInput): Promise<Resolved> {
         `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${lat}&longitude=${lon}` +
         `&current=european_aqi,us_aqi,pm2_5,pm10,ozone`;
 
-    const [wx, aq, world, city] = await Promise.all([
+    const [wx, aq, station, world, city] = await Promise.all([
         getJSON(wxURL),
         getJSON(aqURL),
+        inChinaBox(lat, lon) ? fetchChinaStationAir(lat, lon, env) : Promise.resolve(null),
         rssTitles("https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en", 2),
         input.city ? rssTitles(newsUrl(input.city), 2) : Promise.resolve([]),
     ]);
@@ -138,10 +150,27 @@ export async function fetchAmbient(input: AmbientInput): Promise<Resolved> {
     }
     if (wx?.daily?.sunrise?.[0]) data.sunrise = clockOf(wx.daily.sunrise[0]);
     if (wx?.daily?.sunset?.[0]) data.sunset = clockOf(wx.daily.sunset[0]);
-    if (aq?.current) {
+    if (station) {
+        // Measured beats modelled: in China the Open-Meteo model is routinely a
+        // category off (see airChina.ts). Headline the station's own AQI so it
+        // matches the runner's watch; carry the US-scale read alongside.
+        data.aqi = station.aqi;
+        data.aqiScale = "CN";
+        data.aqiSource = "station";
+        data.aqiCategory = station.quality;
+        data.pm25 = station.pm25;
+        data.pollutant = station.pollutant;
+        data.usAqi = station.usAqi;
+        data.usCategory = station.usCategory;
+        data.aqiStation = station.station;
+        data.aqiStationKm = station.stationKm;
+        data.aqiAsOf = station.asOf;
+    } else if (aq?.current) {
         // US AQI is the headline (founder's preference); PM2.5 µg/m³ rides
         // along as the concrete anchor.
         data.aqi = round(aq.current.us_aqi);
+        data.aqiScale = "US";
+        data.aqiSource = "model";
         data.pm25 = round(aq.current.pm2_5);
         data.aqiCategory = aqiCat(data.aqi);
         data.pollutant = dominant(aq.current);
@@ -202,8 +231,15 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
     }
     if (r.aqi != null || r.pm25 != null) {
         const bits: string[] = [];
-        if (r.aqi != null) bits.push(`US AQI ${r.aqi}${r.aqiCategory ? ` (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""})` : ""}`);
-        if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³`);
+        if (r.aqiSource === "station") {
+            bits.push(`AQI ${r.aqi} (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""}; China scale, the same number the runner's watch shows)`);
+            if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³${r.usAqi != null ? ` (US scale ${r.usAqi}, ${r.usCategory})` : ""}`);
+            bits.push(`measured at the official ${r.aqiStation} monitor ${r.aqiStationKm} km away${r.aqiAsOf ? `, ${r.aqiAsOf} reading` : ""}`);
+        } else {
+            if (r.aqi != null) bits.push(`US AQI ${r.aqi}${r.aqiCategory ? ` (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""})` : ""}`);
+            if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³`);
+            bits.push("modelled, not measured: treat as approximate and never contradict what the runner's watch says");
+        }
         facts.push(`- air quality: ${bits.join(", ")}`);
     }
     if (r.sunset || r.sunrise) {

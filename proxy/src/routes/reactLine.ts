@@ -237,7 +237,7 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
     pushPlaceBlock(lines, c.place);
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
-    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}), vProfile);
+    pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);
     await pushBriefingBlock(lines, env, "jessica");
 
     if (req.personalNotes && req.personalNotes.length > 0) {
