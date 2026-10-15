@@ -204,7 +204,7 @@ final class RunEventLog {
     }
 
     func recordSpeech(text: String, voiceId: String, source: String, cacheKey: String) {
-        if !audioManifest.contains(cacheKey) {
+        if !cacheKey.isEmpty, !audioManifest.contains(cacheKey) {
             audioManifest.append(cacheKey)
         }
         record("speech", text, data: [

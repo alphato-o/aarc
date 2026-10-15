@@ -427,6 +427,12 @@ struct RunListRow: View {
                         .background(.orange.opacity(0.25), in: Capsule())
                         .foregroundStyle(.orange)
                 }
+                if run.raceModeRaw != "off" {
+                    Text(run.raceModeRaw == "actual" ? "RACE" : "RACE · TRAINING").font(.caption2.bold())
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(.purple.opacity(0.22), in: Capsule())
+                        .foregroundStyle(.purple)
+                }
             }
 
             HStack(spacing: 12) {

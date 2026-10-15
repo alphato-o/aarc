@@ -467,6 +467,17 @@ final class ContextualCoach {
                 let result = try await AIClient.shared.generateDynamicLine(request)
                 // If the run ended while we were waiting, don't talk.
                 guard self.isRunning, !Task.isCancelled else { return }
+                // Race mode: the proxy may hand back a Home Base flash instead
+                // of a Ricky line. Different voice, no Jessica reaction.
+                if let voice = result.voiceId, voice == RemoteTTS.homeVoiceId {
+                    RunEventLog.shared.record("home.flash", String(result.text.prefix(80)))
+                    Speaker.shared.speak(result.text, priority: .coaching, source: "home:flash",
+                                         expiresAfter: 150, voiceId: voice, decisionAt: decisionAt)
+                    self.lastFiredTrigger = trigger.rawValue
+                    self.lastFiredAt = AppClock.now
+                    self.lastError = nil
+                    return
+                }
                 // Coaching observations expire if they sit behind a long
                 // milestone burst — a pace_drop comment 2 minutes late is
                 // noise. Milestones at the front of the queue take priority

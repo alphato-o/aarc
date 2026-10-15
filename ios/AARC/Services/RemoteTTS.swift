@@ -186,6 +186,9 @@ final class RemoteTTS: NSObject {
                 activity = .playing(remote: false)
                 RunEventLog.shared.record("tts.fallback", String(text.prefix(80)),
                                           data: ["reason": lastError ?? "synth failed", "backend": "local"])
+                // The timeline export reads "speech" rows; a local-voice line
+                // is still a line the runner heard.
+                RunEventLog.shared.recordSpeech(text: text, voiceId: "local", source: "fallback", cacheKey: "")
                 await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
                 return
             }

@@ -1,0 +1,80 @@
+import Foundation
+import AARCKit
+import os
+
+/// Race mode: Home Base calls every kilometre in its own voice. Numbers first
+/// (split, average, heart rate), then whatever the proxy found worth saying:
+/// history, surroundings, weather, a flash from the control room. The script
+/// engine hands the kilometre here instead of to Ricky or Jessica.
+@MainActor
+@Observable
+final class HomeBaseReadout {
+    static let shared = HomeBaseReadout()
+    private let log = Logger(subsystem: "club.aarun.AARC", category: "HomeBaseReadout")
+
+    private(set) var isProducing = false
+    private(set) var lastKm = 0
+    private var task: Task<Void, Never>?
+    private var recentLines: [String] = []
+
+    func reset() {
+        task?.cancel(); task = nil
+        isProducing = false
+        lastKm = 0
+        recentLines = []
+    }
+
+    func deliver(km: Int, metrics: LiveMetrics) {
+        guard km > lastKm else { return }
+        lastKm = km
+        task?.cancel()
+        isProducing = true
+        let projected = RunDirector.shared.projected(distance: metrics.distanceMeters, elapsed: metrics.elapsed)
+        let plan = ScriptPreviewStore.shared.currentPlan
+        let runType = LiveMetricsConsumer.shared.pendingRunType
+        let context = AIClient.DynamicLineContext(
+            elapsedSeconds: projected.elapsed,
+            distanceMeters: projected.distance,
+            currentHR: metrics.currentHeartRate,
+            avgHR: nil,
+            currentPaceSecPerKm: metrics.currentPaceSecPerKm,
+            avgPaceSecPerKm: metrics.avgPaceSecPerKm,
+            planKind: plan.kind.rawValue,
+            planDistanceKm: plan.distanceKm,
+            planTimeMinutes: plan.timeMinutes,
+            runType: runType.rawValue,
+            stationarySeconds: nil,
+            progressFraction: RunDirector.shared.progressFraction,
+            place: PlaceContext.shared.llmInfo,
+            ambient: PlaceContext.shared.ambientInfo
+        )
+        let request = AIClient.HomeBaseReadoutRequest(
+            km: km,
+            runContext: context,
+            lastSplitSecPerKm: metrics.lastSplit?.paceSecPerKm,
+            avgHR: metrics.lastSplit?.avgHeartRate,
+            recentLines: recentLines.isEmpty ? nil : recentLines
+        )
+        RunEventLog.shared.record("home.readout.request", "km \(km)")
+        let decisionAt = AppClock.now
+        task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isProducing = false; self.task = nil }
+            do {
+                let result = try await AIClient.shared.homeBaseReadout(request)
+                guard !Task.isCancelled, LiveMetricsConsumer.shared.isRunActive else { return }
+                self.recentLines.append(result.text)
+                if self.recentLines.count > 6 { self.recentLines.removeFirst() }
+                RunEventLog.shared.record("home.readout", String(result.text.prefix(80)), data: ["km": String(km)])
+                // Milestone priority: it belongs on the marker, and it may
+                // preempt banter. Expires if the queue is somehow jammed past
+                // the next kilometre; a stale readout is worse than none.
+                Speaker.shared.speak(result.text, priority: .milestone, source: "home:readout:km\(km)",
+                                     expiresAfter: 240, voiceId: RemoteTTS.homeVoiceId, decisionAt: decisionAt)
+            } catch {
+                self.log.error("readout km \(km) failed: \(error.localizedDescription, privacy: .public)")
+                RunEventLog.shared.record("home.readout.failed", error.localizedDescription, data: ["km": String(km)])
+            }
+        }
+    }
+}

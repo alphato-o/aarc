@@ -380,9 +380,13 @@ final class WorkoutSessionHost: NSObject {
             self.routeTrailPoints = []
             self.routeBuilder = HKWorkoutRouteBuilder(healthStore: healthStore, device: nil)
             self.location = LocationProvider { [weak self] locs in
+                // Same bar as the phone-only path: a cold fix with 100 m
+                // error is not part of the route Health keeps forever.
+                let usable = locs.filter { $0.horizontalAccuracy > 0 && $0.horizontalAccuracy < 30 }
+                guard !usable.isEmpty else { return }
                 Task { @MainActor in
-                    self?.routeBuilder?.insertRouteData(locs) { _, _ in }
-                    self?.appendTrail(locs)
+                    self?.routeBuilder?.insertRouteData(usable) { _, _ in }
+                    self?.appendTrail(usable)
                 }
             }
             self.location?.start()

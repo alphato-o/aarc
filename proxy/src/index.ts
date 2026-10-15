@@ -25,6 +25,8 @@ import { mapTileHandler } from "./routes/mapTile";
 import { staticMapHandler } from "./routes/staticMap";
 import { ambientHandler } from "./routes/ambient";
 import { airCnHandler, airCnPushHandler } from "./routes/airCn";
+import { homeBaseReadoutHandler } from "./routes/homeBase";
+import { generateFlash, HOME_BASE_VOICE_ID } from "./lib/homeBase";
 import { landingHandler } from "./routes/landing";
 import { waitlistSubmitHandler, waitlistListHandler } from "./routes/waitlist";
 import { personalNotesGetHandler, personalNotesPutHandler } from "./routes/personalNotes";
@@ -118,7 +120,31 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
     // every two live coach calls; the app treats ok:false as a skipped
     // line, nothing spoken, no fallback. Scripted/per-km lines are
     // pre-rendered on the phone and untouched.
+    // Race mode (founder, 2026-10-15): the app stamps runContext.raceMode on
+    // every live line call. Jessica and the music lines are withheld one in
+    // two; Ricky's dynamic lines one in three, and one in three of the rest
+    // comes back as a Home Base flash in Kristen's voice. Per-km lines are
+    // Home Base's outright (see /home-base/readout).
     if (request.method === "POST" && ["/dynamic-line", "/react-line", "/music-comment"].includes(url.pathname)) {
+        let peek: any = null;
+        try { peek = await request.clone().json(); } catch { peek = null; }
+        const mode = peek?.runContext?.raceMode;
+        if (mode === "training" || mode === "actual") {
+            const withheld = { ok: false, error: "race mode: line withheld" };
+            const r = Math.random();
+            if (url.pathname !== "/dynamic-line") {
+                if (r < 0.5) return new Response(JSON.stringify(withheld), { status: 200, headers: { "content-type": "application/json" } });
+            } else {
+                if (r < 0.33) return new Response(JSON.stringify(withheld), { status: 200, headers: { "content-type": "application/json" } });
+                if (r < 0.55 && peek?.trigger !== "opener") {
+                    const flash = await generateFlash(peek.runContext, env).catch(() => null);
+                    if (flash) {
+                        return new Response(JSON.stringify({ ok: true, text: flash.text, model: flash.model, voiceId: HOME_BASE_VOICE_ID }),
+                            { status: 200, headers: { "content-type": "application/json" } });
+                    }
+                }
+            }
+        }
         const q = await env.DB.prepare(
             "SELECT COUNT(*) AS c FROM home_briefing WHERE kind='quiet' AND (expires_at IS NULL OR expires_at > datetime('now'))"
         ).first<{ c: number }>().catch(() => null);
@@ -129,6 +155,10 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
     }
     if (request.method === "POST" && url.pathname === "/dynamic-line") {
         return dynamicLineHandler(request, env);
+    }
+
+    if (request.method === "POST" && url.pathname === "/home-base/readout") {
+        return homeBaseReadoutHandler(request, env);
     }
 
     if (request.method === "POST" && url.pathname === "/react-line") {

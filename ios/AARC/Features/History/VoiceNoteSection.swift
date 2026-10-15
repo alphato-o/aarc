@@ -90,6 +90,11 @@ struct VoiceNoteSection: View {
         }
     }
 
+    private func noteDuration(_ note: VoiceNoteRecord) -> TimeInterval {
+        let url = VoiceNoteRecorder.fileURL(for: note.id)
+        return (try? AVAudioPlayer(contentsOf: url))?.duration ?? 0
+    }
+
     private func noteRow(_ note: VoiceNoteRecord) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
@@ -100,8 +105,10 @@ struct VoiceNoteSection: View {
                         .font(.title2)
                 }
                 .buttonStyle(.plain)
-                Text(note.recordedAt, format: .dateTime.hour().minute())
-                    .font(.caption).foregroundStyle(.secondary)
+                // Length first, clock second: the clock alone read as a
+                // 20-minute recording (founder, 2026-10-15).
+                Text("\(timeString(noteDuration(note))) · \(note.recordedAt.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 Spacer()
                 if recorder.transcribing.contains(note.id) {
                     ProgressView().controlSize(.mini)

@@ -2,6 +2,10 @@ import Foundation
 import Observation
 import AARCKit
 
+enum RaceMode: String, CaseIterable, Sendable {
+    case off, training, actual
+}
+
 /// How a run is being conducted for testing. See `RunOrchestrator.testMode`.
 enum RunTestMode: String, CaseIterable, Sendable {
     case off, real, simulate
@@ -59,6 +63,23 @@ final class RunOrchestrator {
     }
     /// Any test run (real or simulated) — flags the RunRecord + skips Health.
     var isTestRun: Bool { testMode != .off }
+
+    /// Race mode (founder, 2026-10-15). `.training` = a race rehearsal: every
+    /// spoken line is kept on the run timeline for the camera cut, Ricky and
+    /// Jessica are toned down server-side, and Home Base reads the numbers out
+    /// at every kilometre. `.actual` is reserved for the 25 Oct marathon and
+    /// currently behaves as training until its own rules are built.
+    nonisolated private static let kRaceMode = "aarc.run.raceMode"
+    var raceMode: RaceMode =
+        RaceMode(rawValue: UserDefaults.standard.string(forKey: kRaceMode) ?? "") ?? .off {
+        didSet { UserDefaults.standard.set(raceMode.rawValue, forKey: Self.kRaceMode) }
+    }
+    /// Read without touching the main actor: request encoders stamp this on
+    /// every line call so the proxy knows the run's mode.
+    nonisolated static var raceModeRawForRequests: String? {
+        let v = UserDefaults.standard.string(forKey: kRaceMode) ?? "off"
+        return v == "off" ? nil : v
+    }
     var isSimulating: Bool { testMode == .simulate }
 
     /// Human-readable reason shown on the watch-timeout card.

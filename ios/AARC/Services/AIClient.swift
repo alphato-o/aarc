@@ -208,6 +208,8 @@ actor AIClient {
         /// unchanged and send nothing.
         var place: PlaceInfo? = nil
         var ambient: AmbientInfo? = nil
+        /// "training" | "actual" while race mode is on; nil otherwise.
+        var raceMode: String? = RunOrchestrator.raceModeRawForRequests
     }
 
     struct DynamicLineRequest: Codable, Sendable {
@@ -229,6 +231,51 @@ actor AIClient {
     struct DynamicLineResult: Sendable {
         let text: String
         let model: String
+        /// Set when the proxy answered in another voice (a Home Base flash
+        /// standing in for a Ricky line under race mode).
+        var voiceId: String? = nil
+    }
+
+    // MARK: - Home Base readout (race mode)
+
+    struct HomeBaseReadoutRequest: Codable, Sendable {
+        var km: Int
+        var runContext: DynamicLineContext
+        var lastSplitSecPerKm: Double?
+        var avgHR: Double?
+        var recentLines: [String]?
+    }
+
+    /// Race mode: Home Base reads the kilometre out — numbers, history,
+    /// surroundings — in its own voice. Same envelope as /dynamic-line.
+    func homeBaseReadout(_ request: HomeBaseReadoutRequest) async throws -> DynamicLineResult {
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("home-base/readout")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        urlRequest.timeoutInterval = 20
+        urlRequest.httpBody = try encoder.encode(request)
+        let net = await NetworkActivityMonitor.shared.begin(service: "LLM", label: "home-base/readout")
+        await NetworkActivityMonitor.shared.awaiting(net)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await withOneRetry { [session, urlRequest] in
+                try await session.data(for: urlRequest)
+            }
+        } catch {
+            await NetworkActivityMonitor.shared.fail(net, error.localizedDescription)
+            throw error
+        }
+        await NetworkActivityMonitor.shared.finish(net, bytes: data.count)
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+            throw AIError.transport("home-base/readout failed")
+        }
+        let envelope = try decoder.decode(DynamicEnvelope.self, from: data)
+        guard envelope.ok, let text = envelope.text else {
+            throw AIError.proxy(envelope.error ?? "missing text")
+        }
+        return DynamicLineResult(text: text, model: envelope.model ?? "home", voiceId: envelope.voiceId)
     }
 
     /// Generate the fast-start opener line so the runner can start
@@ -381,7 +428,7 @@ actor AIClient {
         guard let text = envelope.text, let model = envelope.model else {
             throw AIError.proxy("missing fields in proxy response")
         }
-        return DynamicLineResult(text: text, model: model)
+        return DynamicLineResult(text: text, model: model, voiceId: envelope.voiceId)
     }
 
     // MARK: - Agent thread (/agent/*) — the Home Base terminal
@@ -452,6 +499,8 @@ actor AIClient {
         let error: String?
         /// /music-comment only: which lyric the model chose to troll.
         let pickedLine: String?
+        /// Race mode: the proxy may answer in Home Base's voice.
+        let voiceId: String?
     }
 
     // MARK: - React line (/react-line) — Jessica reacting to a Ricky line
@@ -468,7 +517,8 @@ actor AIClient {
         /// Real surroundings (outdoor runs) — see PlaceInfo.
         var place: PlaceInfo? = nil
         var ambient: AmbientInfo? = nil
-    }
+            var raceMode: String? = RunOrchestrator.raceModeRawForRequests
+}
 
     struct ReactLineRequest: Codable, Sendable {
         var personalityId: String = "jessica"
@@ -554,7 +604,8 @@ actor AIClient {
         /// Real surroundings (outdoor runs) — see PlaceInfo.
         var place: PlaceInfo? = nil
         var ambient: AmbientInfo? = nil
-    }
+            var raceMode: String? = RunOrchestrator.raceModeRawForRequests
+}
 
     struct MusicCommentRequest: Codable, Sendable {
         var personalityId: String = "roast_coach"

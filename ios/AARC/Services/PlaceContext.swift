@@ -374,6 +374,9 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
 
     private func consider(_ loc: CLLocation) {
         guard isActive else { return }
+        // Cold-start fixes land hundreds of metres out; they were the stray
+        // points at the start of every outdoor map. Not route material.
+        guard loc.horizontalAccuracy > 0, loc.horizontalAccuracy <= 30 else { return }
         // Every fix feeds the route geometry; geocoding/POI below throttles.
         routeShape.add(loc)
         lastWGS = loc.coordinate
@@ -390,7 +393,9 @@ final class PlaceContext: NSObject, CLLocationManagerDelegate {
         } else {
             trail.append(pt)
         }
-        if trail.count > 1200 { trail.removeFirst(trail.count - 1200) }
+        // 8 m spacing × 42 km ≈ 5300 points; the old 1200 cap silently
+        // dropped the first half of any run past ~10 km.
+        if trail.count > 8000 { trail.removeFirst(trail.count - 8000) }
         // Log the raw WGS-84 fix every ~20m for the web dashboard map, which
         // renders on WGS-84 OSM tiles (NOT GCJ — that's the iOS-map datum).
         let logged = lastGpsLogAt.map { loc.distance(from: $0) > 20 } ?? true

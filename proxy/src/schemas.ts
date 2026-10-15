@@ -217,6 +217,9 @@ export const DynamicLineRequestSchema = z.object({
         stationarySeconds: z.number().nonnegative().optional(),
         place: PlaceSchema.optional(),
         ambient: AmbientSchema.optional(),
+        /// Race mode (founder, 2026-10-15): the proxy tones the coaches down
+        /// and lets Home Base carry the kilometres while this is set.
+        raceMode: z.enum(["off", "training", "actual"]).optional(),
     }),
     recentDispatched: softStrings(32, 1600),
     customNote: z.string().max(300).optional(),
@@ -285,6 +288,9 @@ export const MusicCommentRequestSchema = z.object({
         runType: z.enum(["outdoor", "treadmill"]),
         place: PlaceSchema.optional(),
         ambient: AmbientSchema.optional(),
+        /// Race mode (founder, 2026-10-15): the proxy tones the coaches down
+        /// and lets Home Base carry the kilometres while this is set.
+        raceMode: z.enum(["off", "training", "actual"]).optional(),
     }),
     recentDispatched: softStrings(32, 1600),
     personalNotes: softStrings(40, 600),
@@ -332,6 +338,9 @@ export const ReactLineRequestSchema = z.object({
         progressFraction: z.number().optional(),
         place: PlaceSchema.optional(),
         ambient: AmbientSchema.optional(),
+        /// Race mode (founder, 2026-10-15): the proxy tones the coaches down
+        /// and lets Home Base carry the kilometres while this is set.
+        raceMode: z.enum(["off", "training", "actual"]).optional(),
     }),
     /// Recent exchange (both voices) so she doesn't repeat and can build on it.
     recentDispatched: softStrings(32, 1600),
@@ -362,3 +371,15 @@ export interface ReactLineResponse {
     text: string;
     model: string;
 }
+
+/// Race mode: Home Base's per-kilometre readout. Reuses the dynamic-line
+/// run context so the phone sends one shape everywhere.
+export const HomeBaseReadoutRequestSchema = z.object({
+    km: z.number().int().positive(),
+    runContext: DynamicLineRequestSchema.shape.runContext,
+    lastSplitSecPerKm: z.number().positive().optional(),
+    avgHR: z.number().positive().optional(),
+    recentLines: softStrings(8, 600),
+    runId: z.string().max(64).optional(),
+});
+export type HomeBaseReadoutRequest = z.infer<typeof HomeBaseReadoutRequestSchema>;

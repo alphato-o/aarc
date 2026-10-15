@@ -34,6 +34,7 @@ struct RunDetailView: View {
                 }
                 chartSection
                 calibrationSection
+                if !isNike { VoiceLineExportSection(run: run) }
                 if !isNike { VoiceNoteSection(runId: run.id) }
                 if isLoading { loadingHint }
                 if let loadError {

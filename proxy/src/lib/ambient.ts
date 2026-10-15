@@ -235,6 +235,8 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
             bits.push(`AQI ${r.aqi} (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""}; China scale, the same number the runner's watch shows)`);
             if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³${r.usAqi != null ? ` (US scale ${r.usAqi}, ${r.usCategory})` : ""}`);
             bits.push(`measured at the official ${r.aqiStation} monitor ${r.aqiStationKm} km away${r.aqiAsOf ? `, ${r.aqiAsOf} reading` : ""}`);
+            // A clean night in Beijing is news; the model's smog reflex is not.
+            if ((r.aqi ?? 999) <= 100) bits.push("the air is CLEAN tonight: do not mention smog, haze or pollution in any line");
         } else {
             if (r.aqi != null) bits.push(`US AQI ${r.aqi}${r.aqiCategory ? ` (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""})` : ""}`);
             if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³`);

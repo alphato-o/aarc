@@ -75,8 +75,17 @@ final class VoiceNoteRecorder: NSObject {
             // .playAndRecord (not .record) so the coach voices aren't torn down
             // if a line is still finishing when he starts talking.
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker])
+            // No .defaultToSpeaker: it pins the route to the built-in mic and
+            // speaker, so the earbuds' mic was ignored and the music, now out
+            // of the phone speaker, ended up on the note (founder, 2026-10-15).
+            // Bluetooth HFP keeps capture on the earbuds he is wearing.
+            try session.setCategory(.playAndRecord, mode: .spokenAudio,
+                                    options: [.duckOthers, .allowBluetoothHFP, .allowBluetoothA2DP])
+            if let bt = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
+                try? session.setPreferredInput(bt)
+            }
             try session.setActive(true)
+            RunEventLog.shared.record("voicenote.input", session.currentRoute.inputs.first?.portType.rawValue ?? "none")
             // SPEECH settings, not music settings. The default 44.1kHz/high
             // profile recorded his 2m50s note as 9.7MB (~456kbps) — which then
             // failed to transcribe at all, because base64-ing it blew the

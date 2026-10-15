@@ -28,7 +28,7 @@ struct RunMapView: View {
     @State private var mode: ColorMode = .pace
     @State private var camera: MapCameraPosition = .automatic
 
-    private var segments: [(a: CLLocationCoordinate2D, b: CLLocationCoordinate2D, color: Color)] {
+    private var segments: [(coords: [CLLocationCoordinate2D], color: Color)] {
         Self.coloredSegments(points, mode: mode)
     }
 
@@ -40,7 +40,7 @@ struct RunMapView: View {
                         .stroke(.gray.opacity(0.45), style: StrokeStyle(lineWidth: 3, dash: [6, 6]))
                 }
                 ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
-                    MapPolyline(coordinates: [seg.a, seg.b])
+                    MapPolyline(coordinates: seg.coords)
                         .stroke(seg.color, style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
                 }
                 ForEach(pois) { poi in
@@ -94,24 +94,47 @@ struct RunMapView: View {
 
     // MARK: - Performance coloring
 
+    /// Every trail point is drawn (a 200 m park loop must look like a loop,
+    /// not a polygon: the old ~140-segment downsample kept one point per
+    /// 60-70 m). Overlay count is bounded by grouping consecutive points into
+    /// runs of one colour bucket, so a 10 km run is a few dozen polylines.
     static func coloredSegments(_ points: [PlaceContext.TrailPoint], mode: ColorMode)
-        -> [(a: CLLocationCoordinate2D, b: CLLocationCoordinate2D, color: Color)] {
+        -> [(coords: [CLLocationCoordinate2D], color: Color)] {
         guard points.count > 1 else { return [] }
-        // Downsample to ~140 segments so we don't spawn hundreds of overlays.
-        let stride = max(1, points.count / 140)
-        var reduced: [PlaceContext.TrailPoint] = []
-        var i = 0
-        while i < points.count { reduced.append(points[i]); i += stride }
-        if reduced.last?.coord.latitude != points.last?.coord.latitude { reduced.append(points[points.count - 1]) }
-
-        let vals = reduced.compactMap { mode == .pace ? $0.kmh : $0.hr }.filter { $0 > 0 }
-        let lo = vals.min() ?? 0, hi = vals.max() ?? 1
-        var out: [(CLLocationCoordinate2D, CLLocationCoordinate2D, Color)] = []
-        for j in 1..<reduced.count {
-            let v = (mode == .pace ? reduced[j].kmh : reduced[j].hr) ?? 0
-            out.append((reduced[j-1].coord, reduced[j].coord, color(for: v, lo: lo, hi: hi, mode: mode)))
+        let raw: [Double] = points.map { (mode == .pace ? $0.kmh : $0.hr) ?? 0 }
+        // Light smoothing so the colour does not flicker point to point.
+        var vals = raw
+        if raw.count > 5 {
+            for i in 0..<raw.count {
+                let lo = max(0, i - 2), hi = min(raw.count - 1, i + 2)
+                let window = raw[lo...hi].filter { $0 > 0 }
+                vals[i] = window.isEmpty ? 0 : window.reduce(0, +) / Double(window.count)
+            }
         }
+        let present = vals.filter { $0 > 0 }
+        let lo = present.min() ?? 0, hi = present.max() ?? 1
+        func bucket(_ v: Double) -> Int {
+            guard v > 0, hi > lo else { return -1 }
+            return min(9, Int(((v - lo) / (hi - lo)) * 10))
+        }
+        var out: [(coords: [CLLocationCoordinate2D], color: Color)] = []
+        var current: [CLLocationCoordinate2D] = [points[0].coord]
+        var currentBucket = bucket(vals[1])
+        for j in 1..<points.count {
+            let b = bucket(vals[j])
+            if b != currentBucket {
+                out.append((current, color(for: bucketValue(currentBucket, lo: lo, hi: hi), lo: lo, hi: hi, mode: mode)))
+                current = [points[j - 1].coord]
+                currentBucket = b
+            }
+            current.append(points[j].coord)
+        }
+        out.append((current, color(for: bucketValue(currentBucket, lo: lo, hi: hi), lo: lo, hi: hi, mode: mode)))
         return out
+    }
+
+    private static func bucketValue(_ b: Int, lo: Double, hi: Double) -> Double {
+        b < 0 ? 0 : lo + (Double(b) + 0.5) / 10 * (hi - lo)
     }
 
     private static func color(for v: Double, lo: Double, hi: Double, mode: ColorMode) -> Color {

@@ -34,6 +34,10 @@ final class RunRecord {
     /// schema simplicity; convert to/from `AARCKit.RunType` at the edges.
     var runTypeRaw: String = "outdoor"
 
+    /// "off" | "training" | "actual": the race-mode switch at run start.
+    /// Drives the RACE badge in History. Lightweight migration (defaulted).
+    var raceModeRaw: String = "off"
+
     /// Where this run came from. "aarc" (default) for runs AARC coached, or
     /// "nike" for runs imported from the Nike Run Club archive. Nike runs are
     /// view-only history (no coaching, no share card) — see NikeImporter.
@@ -107,6 +111,7 @@ final class RunRecord {
         isTestData: Bool = false,
         healthKitWorkoutUUID: UUID? = nil,
         runTypeRaw: String = "outdoor",
+        raceModeRaw: String = "off",
         source: String = "aarc",
         externalId: String? = nil,
         importedTitle: String? = nil,
@@ -125,6 +130,7 @@ final class RunRecord {
         self.isTestData = isTestData
         self.healthKitWorkoutUUID = healthKitWorkoutUUID
         self.runTypeRaw = runTypeRaw
+        self.raceModeRaw = raceModeRaw
         self.source = source
         self.externalId = externalId
         self.importedTitle = importedTitle

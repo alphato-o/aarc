@@ -63,6 +63,7 @@ final class ScriptEngine {
     // MARK: - API
 
     func start(script: GeneratedScript, plan: RunPlan) {
+        HomeBaseReadout.shared.reset()
         self.script = script
         self.plan = plan
         self.firedMessageIds.removeAll()
@@ -326,6 +327,14 @@ final class ScriptEngine {
         // the dark early tone, she's the vivid reward late). On her km, keep
         // the factual announcement above but skip Ricky's scripted riff and
         // let Jessica deliver the moment instead.
+        // Race mode: Home Base owns every kilometre. The factual announcement
+        // above still plays; the coaches' riff is replaced by the readout.
+        if message.triggerSpec.type == .distance, RunOrchestrator.shared.raceMode != .off {
+            let km = max(1, Int((metrics.distanceMeters / 1000).rounded()))
+            RunEventLog.shared.record("milestone.owner", "home", data: ["km": String(km)])
+            HomeBaseReadout.shared.deliver(km: km, metrics: metrics)
+            return
+        }
         if message.triggerSpec.type == .distance, RunDirector.shared.isActive {
             let km = max(1, Int((metrics.distanceMeters / 1000).rounded()))
             if RunDirector.shared.milestoneOwnerIsJessica(km: km) {

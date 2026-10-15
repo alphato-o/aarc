@@ -81,6 +81,7 @@ struct RunHomeView: View {
                 .layoutPriority(1)
             trackingSourcePicker
             testRunToggle
+            raceModeToggle
             liveShareToggle
             watchUnreachableBanner
             startButtons
@@ -113,6 +114,50 @@ struct RunHomeView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(liveShare ? Color.teal.opacity(0.12) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Race mode: the rehearsal switch for the marathon. Turning it on also
+    /// turns live sharing on, since Home Base needs the feed to call the race.
+    @ViewBuilder
+    private var raceModeToggle: some View {
+        VStack(spacing: 8) {
+            Toggle(isOn: Binding(
+                get: { orchestrator.raceMode != .off },
+                set: { on in
+                    orchestrator.raceMode = on ? .training : .off
+                    if on { liveShare = true }
+                }
+            )) {
+                Label {
+                    Text(orchestrator.raceMode != .off ? "Race mode — lines recorded, Home Base calls the km" : "Race mode")
+                        .font(.subheadline)
+                } icon: {
+                    Image(systemName: "flag.checkered")
+                }
+                .foregroundStyle(orchestrator.raceMode != .off ? .purple : .secondary)
+            }
+            .tint(.purple)
+
+            if orchestrator.raceMode != .off {
+                Picker("", selection: Binding(
+                    get: { orchestrator.raceMode },
+                    set: { orchestrator.raceMode = $0 }
+                )) {
+                    Text("Training race").tag(RaceMode.training)
+                    Text("Actual race").tag(RaceMode.actual)
+                }
+                .pickerStyle(.segmented)
+                Text(orchestrator.raceMode == .actual
+                     ? "Actual-race rules are not built yet: runs as a training race for now."
+                     : "Every line goes on the timeline. Ricky and Jessica step back; Home Base reads the numbers every km.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(orchestrator.raceMode != .off ? Color.purple.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 10))
     }
 
