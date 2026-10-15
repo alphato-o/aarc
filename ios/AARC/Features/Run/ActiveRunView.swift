@@ -21,6 +21,8 @@ struct ActiveRunView: View {
     @State private var subtitleStore = LiveSubtitleStore.shared
     @State private var venueConfirm = VenueConfirm.shared
     @State private var earpiece = EarpieceBattery.shared
+    @State private var camera = OsmoCameraLink.shared
+    @State private var cameraDirector = RaceCameraDirector.shared
     @State private var showEndConfirm = false
 
     var onDismiss: () -> Void = {}
@@ -86,6 +88,7 @@ struct ActiveRunView: View {
     private var content: some View {
         VStack(spacing: 10) {
             statusStrip
+            if consumer.awaitingGate { corralCard }
             cockpit
             runMapCard
             // Swap zone: takes ALL remaining space, so its size is identical
@@ -154,6 +157,13 @@ struct ActiveRunView: View {
     @ViewBuilder
     private var statusStrip: some View {
         HStack(spacing: 8) {
+            if consumer.awaitingGate {
+                Text("IN THE CORRAL")
+                    .font(.caption.bold())
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(.green.opacity(0.25), in: Capsule())
+                    .foregroundStyle(.green)
+            }
             if let metrics = consumer.latest, metrics.state == .paused {
                 Text("PAUSED")
                     .font(.caption.bold())
@@ -187,9 +197,53 @@ struct ActiveRunView: View {
             ForEach(earpiece.devices) { d in
                 batteryChip(icon: "earbuds", level: d.level)
             }
+            if cameraDirector.isActive { cameraChip }
         }
         .frame(minHeight: 8)
         .padding(.bottom, 4)
+    }
+
+    /// Race mode: the Osmo at a glance. Red dot while it records; the
+    /// battery is the number he swaps on.
+    private var cameraChip: some View {
+        HStack(spacing: 3) {
+            Image(systemName: camera.state == .connected ? "camera.fill" : "camera.slash")
+            if camera.state == .connected, let s = camera.snapshot {
+                if s.isRecording { Circle().fill(.red).frame(width: 6, height: 6) }
+                if let b = s.batteryPercent {
+                    Image(systemName: batterySymbol(b))
+                    Text("\(b)%").font(.caption2.monospacedDigit())
+                }
+            } else {
+                Text(camera.state == .awaitingConfirm ? "allow" : "off").font(.caption2)
+            }
+        }
+        .font(.caption2)
+        .foregroundStyle(camera.state == .connected ? batteryTint(camera.snapshot?.batteryPercent ?? 100) : .orange)
+    }
+
+    /// Race day, before the gate: the watch holds the clock. This is the
+    /// backup for the wrist button (same message to the watch).
+    private var corralCard: some View {
+        VStack(spacing: 8) {
+            Text("Session live. The race clock starts when you cross the timing mat.")
+                .font(.caption).foregroundStyle(.white.opacity(0.8))
+                .multilineTextAlignment(.center)
+            Button {
+                if let id = consumer.currentRunId { PhoneSession.shared.sendStateEvent(.markGate(runId: id)) }
+            } label: {
+                Text("I CROSSED THE GATE")
+                    .font(.headline.bold())
+                    .frame(maxWidth: .infinity, minHeight: 56)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.green)
+            if let report = cameraDirector.lastReport {
+                Text(report).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+            }
+        }
+        .padding(12)
+        .background(.green.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
     }
 
     private func batteryChip(icon: String, level: Int) -> some View {

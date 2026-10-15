@@ -19,6 +19,7 @@ struct RunHomeView: View {
     }
 
     @State private var orchestrator = RunOrchestrator.shared
+    @State private var camera = OsmoCameraLink.shared
     @State private var preflightError: String?
     @State private var showVenuePicker = false
     @State private var planStore = ScriptPreviewStore.shared
@@ -149,16 +150,39 @@ struct RunHomeView: View {
                 }
                 .pickerStyle(.segmented)
                 Text(orchestrator.raceMode == .actual
-                     ? "Actual-race rules are not built yet: runs as a training race for now."
-                     : "Every line goes on the timeline. Ricky and Jessica step back; Home Base reads the numbers every km.")
+                     ? "Race day: the watch starts in the corral and holds the race clock until you tap CROSSED THE GATE on the wrist. Camera rolls from the corral."
+                     : "Every line goes on the timeline. Ricky and Jessica step back; Home Base reads the numbers every km. The Osmo records the run.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 6) {
+                    Image(systemName: "camera.fill")
+                    Text(cameraLine)
+                    Spacer()
+                    if camera.state == .off, OsmoCameraLink.isEnabled {
+                        Button("Connect") { camera.activate() }.font(.caption2.bold())
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(camera.state == .connected ? .green : .secondary)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(orchestrator.raceMode != .off ? Color.purple.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private var cameraLine: String {
+        guard OsmoCameraLink.isEnabled else { return "Camera control is off (Settings)" }
+        switch camera.state {
+        case .connected: return "Camera " + (camera.snapshot?.summary ?? "connected")
+        case .off: return camera.isPaired ? "Camera paired, not connected" : "Camera not paired yet (Settings)"
+        case .awaitingConfirm: return "Allow the pairing on the camera"
+        case .scanning, .connecting, .handshaking: return "Camera: connecting…"
+        case .offline: return "Camera offline, waiting"
+        case .rejected: return "Camera rejected the pairing"
+        case .bluetoothOff: return "Bluetooth is off"
+        }
     }
 
     @ViewBuilder

@@ -244,6 +244,17 @@ actor AIClient {
         var lastSplitSecPerKm: Double?
         var avgHR: Double?
         var recentLines: [String]?
+        var camera: CameraInfo?
+    }
+
+    /// The Osmo's state at readout time (race mode). Home Base mentions it
+    /// only when it needs attention.
+    struct CameraInfo: Codable, Sendable {
+        var connected: Bool
+        var recording: Bool
+        var batteryPercent: Int?
+        var remainMinutes: Int?
+        var tempOver: Int
     }
 
     /// Race mode: Home Base reads the kilometre out — numbers, history,

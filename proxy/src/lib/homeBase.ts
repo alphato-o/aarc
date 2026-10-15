@@ -32,6 +32,7 @@ export interface ReadoutInput {
     avgHR?: number;
     recentLines?: string[];
     runId?: string;
+    camera?: { connected: boolean; recording: boolean; batteryPercent?: number; remainMinutes?: number; tempOver?: number };
 }
 
 const SYSTEM = `You are HOME BASE: the machine at the desk, the third voice on a runner's live channel. The runner is Alpha, 47, Beijing, training for his first full marathon on 25 October 2026. The other two voices, Ricky (British, derisive) and Jessica (British, posh contempt), are coaches; you are not. You are the scoreboard that talks back.
@@ -66,6 +67,15 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         lines.push(`- plan: ${c.planTimeMinutes} minutes, ${Math.max(0, Math.round((c.planTimeMinutes * 60 - c.elapsedSeconds) / 60))} minutes to go`);
     }
     lines.push(`- marathon day: 25 October 2026 (${daysUntil("2026-10-25")} days from today)`);
+    if (input.camera) {
+        const cam = input.camera;
+        const bits = [cam.connected ? (cam.recording ? "recording" : "connected, NOT recording") : "OFFLINE"];
+        if (cam.batteryPercent != null) bits.push(`battery ${cam.batteryPercent}%`);
+        if (cam.remainMinutes != null) bits.push(`${cam.remainMinutes} min of card left`);
+        if ((cam.tempOver ?? 0) >= 2) bits.push("overheating");
+        const needsAttention = !cam.connected || !cam.recording || (cam.batteryPercent ?? 100) <= 30 || (cam.remainMinutes ?? 999) <= 20 || (cam.tempOver ?? 0) >= 2;
+        lines.push(`- camera (his Osmo on the chest mount): ${bits.join(", ")}${needsAttention ? ". MENTION the camera in one sentence: he carries three spare batteries, tell him when to swap." : ". Fine; do not mention it."}`);
+    }
 
     const [history, ambient, intel, briefing] = await Promise.all([
         historyAtKm(env, input.km, c.elapsedSeconds, input.runId),

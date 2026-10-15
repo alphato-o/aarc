@@ -53,7 +53,8 @@ final class HomeBaseReadout {
             runContext: context,
             lastSplitSecPerKm: metrics.lastSplit?.paceSecPerKm,
             avgHR: metrics.lastSplit?.avgHeartRate,
-            recentLines: recentLines.isEmpty ? nil : recentLines
+            recentLines: recentLines.isEmpty ? nil : recentLines,
+            camera: RaceCameraDirector.shared.readoutInfo
         )
         RunEventLog.shared.record("home.readout.request", "km \(km)")
         let decisionAt = AppClock.now

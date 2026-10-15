@@ -34,6 +34,15 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
     /// older watch builds (optional keeps the WC payload back-compatible)
     /// and on phone-only runs.
     public let watchBatteryLevel: Double?
+    /// Race day (founder, 2026-10-16): the watch session starts in the start
+    /// corral, but the race clock starts when he presses "crossed the gate" on
+    /// the wrist. While true, elapsed/distance/energy are held at zero and the
+    /// phone keeps every engine quiet. After the press the watch subtracts the
+    /// at-gate values, so everything downstream sees a run that began at the
+    /// gate. nil/false on every other run (older watch builds send nothing).
+    public let awaitingGate: Bool?
+    /// Wall-clock moment of the gate press, once it happened.
+    public let gateCrossedAt: Date?
 
     public init(
         elapsed: TimeInterval,
@@ -45,7 +54,9 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         cadenceStepsPerMinute: Double? = nil,
         lastSplit: Split?,
         state: WorkoutState,
-        watchBatteryLevel: Double? = nil
+        watchBatteryLevel: Double? = nil,
+        awaitingGate: Bool? = nil,
+        gateCrossedAt: Date? = nil
     ) {
         self.elapsed = elapsed
         self.distanceMeters = distanceMeters
@@ -57,6 +68,8 @@ public struct LiveMetrics: Codable, Sendable, Hashable {
         self.lastSplit = lastSplit
         self.state = state
         self.watchBatteryLevel = watchBatteryLevel
+        self.awaitingGate = awaitingGate
+        self.gateCrossedAt = gateCrossedAt
     }
 
     /// Zero-state snapshot. Used as a stand-in when a consumer needs a

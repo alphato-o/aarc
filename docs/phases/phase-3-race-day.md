@@ -23,6 +23,8 @@
 | 3.1.4 | Fueling plan: list of (distanceKm, what) | UI | Saved with race |
 | 3.1.5 | Hydration plan: every Nkm or fixed list | UI | Saved with race |
 | 3.1.6 | Course notes (free text) feed the LLM | UI | Visible in generated script |
+| ✅ 3.1.7 | Corral-then-gate start (Actual race): watch session starts in the corral, race clock starts on the wrist "CROSSED THE GATE" tap (phone backup button); metrics race-relative from the gate | watch + phone, build 203 | Device test pending: tap on a training race, splits and chart start at 0 from the gate |
+| ✅ 3.1.8 | DJI Osmo over BLE in race mode: pair once, record with the session, restart after a battery swap, battery ladder 30/20/10/5, offline/back-online, heat and card warnings, Home Base readout gets the camera facts | `Services/Camera/*`, build 203 | Bench-tested protocol from a laptop 16 Oct; in-app link device test pending |
 
 ### 3.2 — Branched script generation
 

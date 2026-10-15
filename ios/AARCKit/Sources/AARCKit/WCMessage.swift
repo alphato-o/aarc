@@ -7,7 +7,12 @@ public enum WCMessage: Codable, Sendable {
     // Phone → Watch
     /// Phone is initiating a run. Watch should skip the preparing phase
     /// because the phone already has a script ready and stored locally.
-    case startWorkout(runId: UUID, runType: RunType, personalityId: String)
+    /// `waitForGate` (race day): start the session now but hold the race clock
+    /// until the runner presses "crossed the gate" on the watch. Optional so an
+    /// older build on either side still decodes the message.
+    case startWorkout(runId: UUID, runType: RunType, personalityId: String, waitForGate: Bool? = nil)
+    /// Phone-side "I crossed the gate" button (a backup for the wrist one).
+    case markGate(runId: UUID)
     /// Phone gave up waiting for the watch and fell back to phone-only.
     /// If the watch is still pending/counting down this runId, abandon
     /// it; if it just started it, end + discard — never double-track.
@@ -46,6 +51,8 @@ public enum WCMessage: Codable, Sendable {
     /// run and reply with .scriptReady or .scriptFailed.
     case prepareWorkout(runId: UUID, runType: RunType, personalityId: String)
     case workoutStarted(runId: UUID, startedAt: Date)
+    /// The runner pressed "crossed the gate": the race clock starts here.
+    case gateCrossed(runId: UUID, at: Date)
     case workoutPaused
     case workoutResumed
     case workoutEnded(healthKitWorkoutUUID: UUID)

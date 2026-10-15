@@ -276,9 +276,14 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         case .scriptFailed(let reason):
             WorkoutSessionHost.shared.onScriptFailed(reason: reason)
 
-        case .startWorkout(let runId, let runType, let personalityId):
+        case .startWorkout(let runId, let runType, let personalityId, let waitForGate):
             handleStartCommand(runId: runId, runType: runType, personalityId: personalityId,
-                               sentAt: sentAt, isLive: isLive)
+                               sentAt: sentAt, isLive: isLive, waitForGate: waitForGate ?? false)
+
+        case .markGate(let runId):
+            if WorkoutSessionHost.shared.currentRunId == runId {
+                WorkoutSessionHost.shared.crossGate()
+            }
 
         case .cancelStart(let runId):
             // Unburn the ledger so a later re-dispatch of this id isn't
@@ -314,7 +319,7 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
 
         // Inbound only from the phone-initiation path; ignore all
         // outbound message cases that should never come back to us.
-        case .hapticCue, .companionMessageDispatched,
+        case .hapticCue, .companionMessageDispatched, .gateCrossed,
              .prepareWorkout, .workoutStarted, .workoutPaused,
              .workoutResumed, .workoutEnded,
              .heartLine, .startAck, .startDeclined:
@@ -345,7 +350,8 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
     ///    the phone falls back immediately instead of timing out.
     /// 4. Early ACK — the phone learns within ~1s that we're on it.
     @MainActor
-    private func handleStartCommand(runId: UUID, runType: RunType, personalityId: String, sentAt: Date?, isLive: Bool) {
+    private func handleStartCommand(runId: UUID, runType: RunType, personalityId: String, sentAt: Date?, isLive: Bool,
+                                    waitForGate: Bool = false) {
         // Staleness. Store-and-forward channels (userInfo/appContext —
         // incl. the activation snapshot, which re-delivers the last
         // context on EVERY launch forever) must carry a fresh sentAt;
@@ -385,7 +391,8 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
                 runId: runId,
                 personalityId: personalityId,
                 prepareScriptOnPhone: false,
-                skipCountdown: true
+                skipCountdown: true,
+                waitForGate: waitForGate
             )
             // If the start failed (e.g. HealthKit not authorized on a
             // background launch), tell the phone NOW so it offers

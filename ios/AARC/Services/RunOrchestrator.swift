@@ -238,7 +238,8 @@ final class RunOrchestrator {
         // Channel 1+2: WC sendMessage (instant when reachable) +
         // applicationContext (latest-state, delivered on watch activation).
         PhoneSession.shared.sendStartCommand(
-            .startWorkout(runId: pending.runId, runType: pending.runType, personalityId: pending.personalityId)
+            .startWorkout(runId: pending.runId, runType: pending.runType, personalityId: pending.personalityId,
+                          waitForGate: waitForGate)
         )
 
         // Channel 3: HealthKit startWatchApp — background-launches the
@@ -330,9 +331,14 @@ final class RunOrchestrator {
     func linkBecameReachable() {
         guard phase == .awaitingWatch, let p = pendingWatchStart else { return }
         PhoneSession.shared.sendStartCommand(
-            .startWorkout(runId: p.runId, runType: p.runType, personalityId: p.personalityId)
+            .startWorkout(runId: p.runId, runType: p.runType, personalityId: p.personalityId,
+                          waitForGate: waitForGate)
         )
     }
+
+    /// Race day only: the watch starts in the corral and holds the race clock
+    /// for the gate press. A training race starts the clock at once.
+    var waitForGate: Bool { raceMode == .actual && testMode != .simulate }
 
     /// User picked "Start on phone instead" from the timeout card.
     /// Cancels the watch-side start (best effort) so a late delivery

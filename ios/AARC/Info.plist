@@ -36,7 +36,7 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>AARC shows your Bluetooth earphones battery level on the run screen.</string>
+	<string>AARC shows your Bluetooth earphones battery level on the run screen and, in race mode, starts and watches your DJI Osmo camera.</string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>AARC reads workouts your Apple Watch records so it can show your run history and personalise your AI companion. AARC does not write its own workouts on the phone.</string>
 	<key>NSHealthUpdateUsageDescription</key>
@@ -56,6 +56,7 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>bluetooth-central</string>
 		<string>fetch</string>
 		<string>location</string>
 	</array>

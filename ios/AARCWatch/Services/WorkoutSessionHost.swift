@@ -43,6 +43,22 @@ final class WorkoutSessionHost: NSObject {
     var countdownRemaining: Int = 0
     private var countdownTask: Task<Void, Never>?
 
+    /// Race day (founder, 2026-10-16): the session starts in the start corral
+    /// (GPS warm, HR running, camera rolling) but the race clock starts when
+    /// he presses "crossed the gate". Until then the published metrics hold
+    /// elapsed/distance at zero; after it they are the raw builder values
+    /// minus what stood on the clock at the gate. HealthKit keeps the whole
+    /// session, queue included; the race is what the phone sees.
+    var awaitingGate = false
+    var gateCrossedAt: Date?
+    /// Raw session clock while in the corral, for the wrist display.
+    var corralElapsed: TimeInterval = 0
+    private var pendingWaitForGate = false
+    private struct GateOffset: Codable {
+        let elapsed: Double, distance: Double, energy: Double, steps: Double, at: Date
+    }
+    private var gateOffset: GateOffset?
+
     /// Watchdog for the `.preparing` phase: if the phone doesn't answer
     /// (scriptReady/scriptFailed) within this window, surface an error
     /// with a "start without coach" escape — the watch must NEVER wedge
@@ -132,7 +148,8 @@ final class WorkoutSessionHost: NSObject {
         skipHealthKitWrite: Bool = false,
         personalityId: String = "roast_coach",
         prepareScriptOnPhone: Bool = true,
-        skipCountdown: Bool = false
+        skipCountdown: Bool = false,
+        waitForGate: Bool = false
     ) async {
         // Phase guard HERE (not only at call sites): two delivery paths
         // (appContext consumption + the startWatchApp handle() fallback)
@@ -144,6 +161,7 @@ final class WorkoutSessionHost: NSObject {
         self.pendingRunId = runId
         self.pendingIsTestData = isTestData
         self.pendingSkipHealthKitWrite = skipHealthKitWrite
+        self.pendingWaitForGate = waitForGate
 
         if skipCountdown {
             // Phone-initiated (NRC pattern): the user expressed intent on
@@ -393,8 +411,14 @@ final class WorkoutSessionHost: NSObject {
         }
 
         state = .running
+        gateOffset = nil
+        gateCrossedAt = nil
+        awaitingGate = pendingWaitForGate
+        pendingWaitForGate = false
+        UserDefaults.standard.set(awaitingGate, forKey: Self.persistedAwaitingGateKey)
+        UserDefaults.standard.removeObject(forKey: Self.persistedGateOffsetKey)
         startTicker()
-        WatchBreadcrumbs.shared.drop("session running \(currentRunType.rawValue)")
+        WatchBreadcrumbs.shared.drop("session running \(currentRunType.rawValue)\(awaitingGate ? " (corral)" : "")")
 
         // Persist run identity so a crash-relaunch (handleActiveWorkoutRecovery)
         // can reattach with the same runId.
@@ -443,6 +467,47 @@ final class WorkoutSessionHost: NSObject {
     private static let persistedRunIdKey = "aarc.run.persistedRunId"
     private static let persistedRunTypeKey = "aarc.run.persistedRunType"
     private static let lastEndedAtKey = "aarc.run.lastEndedAt"
+    private static let persistedAwaitingGateKey = "aarc.run.persistedAwaitingGate"
+    private static let persistedGateOffsetKey = "aarc.run.persistedGateOffset"
+
+    // MARK: - Race gate
+
+    /// "Crossed the gate": freeze what the builder shows right now as the
+    /// offset, so every later tick is race-relative. Idempotent. Survives a
+    /// crash via UserDefaults (see recoverActiveSession).
+    func crossGate() {
+        guard awaitingGate, let builder else { return }
+        let offset = GateOffset(
+            elapsed: builder.elapsedTime,
+            distance: quantitySum(.distanceWalkingRunning, unit: .meter()),
+            energy: quantitySum(.activeEnergyBurned, unit: .kilocalorie()),
+            steps: quantitySum(.stepCount, unit: .count()),
+            at: Date())
+        gateOffset = offset
+        gateCrossedAt = offset.at
+        awaitingGate = false
+        lastPublishedSplitKm = 0
+        chartSamples = []
+        if let data = try? JSONEncoder().encode(offset) {
+            UserDefaults.standard.set(data, forKey: Self.persistedGateOffsetKey)
+        }
+        UserDefaults.standard.set(false, forKey: Self.persistedAwaitingGateKey)
+        WKInterfaceDevice.current().play(.success)
+        WatchBreadcrumbs.shared.drop("gate crossed at \(Int(offset.elapsed))s / \(Int(offset.distance))m")
+        if let runId = currentRunId {
+            WatchSession.shared.sendStateEvent(.gateCrossed(runId: runId, at: offset.at))
+        }
+        refreshMetrics()
+    }
+
+    private func restoreGateState() {
+        awaitingGate = UserDefaults.standard.bool(forKey: Self.persistedAwaitingGateKey)
+        if let data = UserDefaults.standard.data(forKey: Self.persistedGateOffsetKey),
+           let offset = try? JSONDecoder().decode(GateOffset.self, from: data) {
+            gateOffset = offset
+            gateCrossedAt = offset.at
+        }
+    }
     private let mirrorEncoder = JSONEncoder()
 
     /// Best-effort send over the mirrored session's data channel.
@@ -509,6 +574,7 @@ final class WorkoutSessionHost: NSObject {
                 }
                 self.state = (session.state == .paused) ? .paused : .running
                 self.phase = (session.state == .paused) ? .paused : .running
+                self.restoreGateState()
                 self.startTicker()
                 // Re-establish the mirror (legal on any non-ended session).
                 Task { try? await session.startMirroringToCompanionDevice() }
@@ -606,6 +672,9 @@ final class WorkoutSessionHost: NSObject {
         try? await builder.addMetadata(metadata)
 
         UserDefaults.standard.removeObject(forKey: Self.persistedRunIdKey)
+        UserDefaults.standard.removeObject(forKey: Self.persistedAwaitingGateKey)
+        UserDefaults.standard.removeObject(forKey: Self.persistedGateOffsetKey)
+        awaitingGate = false
         // Stamp the deliberate end so recoverActiveSession can log how long ago
         // we ended when it refuses to resurrect a zombie (phantom diagnostics).
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.lastEndedAtKey)
@@ -665,18 +734,25 @@ final class WorkoutSessionHost: NSObject {
 
     private func refreshMetrics() {
         guard let builder, let startedAt else { return }
-        let elapsed = builder.elapsedTime  // Apple-managed, excludes paused time
-        let distance = quantitySum(.distanceWalkingRunning, unit: .meter())
-        let energy = quantitySum(.activeEnergyBurned, unit: .kilocalorie())
+        let rawElapsed = builder.elapsedTime  // Apple-managed, excludes paused time
+        let rawDistance = quantitySum(.distanceWalkingRunning, unit: .meter())
+        let rawEnergy = quantitySum(.activeEnergyBurned, unit: .kilocalorie())
         let hr = quantityRecent(.heartRate, unit: HKUnit(from: "count/min"))
-        let steps = quantitySum(.stepCount, unit: .count())
+        let rawSteps = quantitySum(.stepCount, unit: .count())
+        corralElapsed = rawElapsed
+        // Race-relative: everything below the gate press is the queue, not
+        // the race. In the corral the run clock stays at zero.
+        let elapsed = awaitingGate ? 0 : max(0, rawElapsed - (gateOffset?.elapsed ?? 0))
+        let distance = awaitingGate ? 0 : max(0, rawDistance - (gateOffset?.distance ?? 0))
+        let energy = awaitingGate ? 0 : max(0, rawEnergy - (gateOffset?.energy ?? 0))
+        let steps = awaitingGate ? 0 : max(0, rawSteps - (gateOffset?.steps ?? 0))
 
         // Rolling 20 s window of (timestamp, distance) for current pace. Was
         // 30 s: a 25 s finishing surge (15 Oct) never showed, the window
         // still held the jog before it. 20 s is as short as the chunky
         // HealthKit distance updates allow without the number flapping.
         let now = Date()
-        distanceWindow.append((now, distance))
+        distanceWindow.append((now, rawDistance))
         let cutoff = now.addingTimeInterval(-20)
         distanceWindow.removeAll { $0.0 < cutoff }
         let currentPace = derivedPace(distanceWindow)
@@ -685,7 +761,7 @@ final class WorkoutSessionHost: NSObject {
         // rolling 30s window so the number is stable but still reactive
         // to changes (a tempo run shows higher cadence within ~30s of
         // the runner picking up).
-        stepWindow.append((now, steps))
+        stepWindow.append((now, rawSteps))
         stepWindow.removeAll { $0.0 < cutoff }
         let cadence = derivedCadence(stepWindow)
 
@@ -694,7 +770,7 @@ final class WorkoutSessionHost: NSObject {
         // Detect new km splits.
         let kmCount = Int(distance / 1000)
         var split: Split? = nil
-        if kmCount > lastPublishedSplitKm {
+        if !awaitingGate, kmCount > lastPublishedSplitKm {
             let kmIndex = lastPublishedSplitKm + 1
             let splitDuration = elapsed - Double(lastPublishedSplitKm) * (avgPace > 0 ? avgPace : 0)
             split = Split(
@@ -716,11 +792,13 @@ final class WorkoutSessionHost: NSObject {
             cadenceStepsPerMinute: cadence,
             lastSplit: split,
             state: state,
-            watchBatteryLevel: Self.batteryLevel()
+            watchBatteryLevel: Self.batteryLevel(),
+            awaitingGate: awaitingGate ? true : nil,
+            gateCrossedAt: gateCrossedAt
         )
 
         // Rolling buffer for the in-run Chart page (~last 80 samples).
-        if state == .running {
+        if state == .running, !awaitingGate {
             chartSamples.append(WatchChartSample(
                 hr: (hr ?? 0) > 0 ? hr : nil,
                 kmh: (currentPace ?? 0) > 0 ? 3600.0 / currentPace! : nil))

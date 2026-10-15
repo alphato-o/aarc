@@ -83,3 +83,17 @@ Code can author + sim-test on one machine and do the device build on another (an
 ## "Headless tests / the feedback sim must never cost money"
 
 They don't, by construction: `RemoteTTS.ensureCached`/`warmMeasured` no-op when a preview (`RunPreview.active`) or UI-test (`AppEnv.uiTest`) is running, and a tripwire in `RemoteTTS.attemptFetch` blocks + counts any ElevenLabs call that slips through. The feedback sim logs `EL leak check: N — want 0` at the end of every run; the external check is a `GET /v1/history` snapshot before/after (delta must be 0). If the count is ever non-zero, a code path bypassed the guards — find it via the logged tripwire.
+
+## DJI Osmo camera (race mode)
+
+- The camera never answers: on the camera, pull down, Settings, Wireless
+  Connection, make sure it is on, and reset the connection. Then Settings in
+  AARC, DJI Osmo camera, Forget camera, Pair the camera.
+- "Allow it on the camera screen" stays: the camera is showing the pairing
+  code; allow it. It times out after a minute and AARC retries.
+- Recording never starts: the camera is in a mode that cannot record (sleep,
+  too hot, playback). Wake it or let it cool; AARC retries every 8 seconds.
+- Status shows but no sound from Home Base: camera lines use the Home Base
+  voice at milestone priority; they wait for a playing coach line to end.
+- Everything DJI-protocol is logged as `camera.*` events in the run log and on
+  the live channel.

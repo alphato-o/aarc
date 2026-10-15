@@ -257,6 +257,9 @@ final class PhoneSession: NSObject {
         case .workoutStarted(let runId, let startedAt):
             LiveMetricsConsumer.shared.ingestStarted(runId: runId, startedAt: startedAt)
 
+        case .gateCrossed(let runId, let at):
+            LiveMetricsConsumer.shared.ingestGateCrossed(runId: runId, at: at)
+
         case .workoutPaused:
             LiveMetricsConsumer.shared.ingestPaused()
 
@@ -289,7 +292,7 @@ final class PhoneSession: NSObject {
             if RunOrchestrator.shared.isSimulating { RunSimulator.shared.end() }
 
         // Outbound-only on phone side; ignore if echoed somehow.
-        case .startWorkout, .cancelStart, .hapticCue,
+        case .startWorkout, .cancelStart, .hapticCue, .markGate,
              .companionMessageDispatched, .scriptReady, .scriptFailed,
              .coachLine, .simStart, .simEnd, .simTrail:
             break

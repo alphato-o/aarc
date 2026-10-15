@@ -31,6 +31,8 @@ struct WatchActiveRunView: View {
             diagnosticsPage.tag(Page.diagnostics)
         }
         .tabViewStyle(.page)
+        .onAppear { if host.awaitingGate { selectedPage = .controls } }
+        .onChange(of: host.awaitingGate) { _, waiting in selectedPage = waiting ? .controls : .metrics }
         // Coach line OVERLAYS the current screen the moment one lands (like the
         // phone) — no need to swipe to a separate page to heart it.
         .overlay { coachOverlay }
@@ -126,7 +128,25 @@ struct WatchActiveRunView: View {
 
     private var controlsPage: some View {
         VStack(spacing: 12) {
-            if host.state == .running {
+            if host.awaitingGate {
+                // Race day: the session is live in the corral; this press
+                // starts the race clock. One tap, no confirm: a missed gate
+                // is worse than a slip, and the phone has a backup button.
+                Button {
+                    host.crossGate()
+                } label: {
+                    VStack(spacing: 2) {
+                        Text("CROSSED THE GATE").font(.headline.bold())
+                        Text("tap when you pass the timing mat").font(.caption2)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 64)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.green)
+                Text("IN CORRAL \u{00B7} \(corralClock)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else if host.state == .running {
                 Button {
                     host.pause()
                 } label: {
@@ -164,6 +184,11 @@ struct WatchActiveRunView: View {
             }
         }
         .padding(.horizontal)
+    }
+
+    private var corralClock: String {
+        let t = Int(host.corralElapsed)
+        return String(format: "%d:%02d", t / 60, t % 60)
     }
 
     // MARK: - Metrics (default centre)

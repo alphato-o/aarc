@@ -381,5 +381,12 @@ export const HomeBaseReadoutRequestSchema = z.object({
     avgHR: z.number().positive().optional(),
     recentLines: softStrings(8, 600),
     runId: z.string().max(64).optional(),
+    camera: z.object({
+        connected: z.boolean(),
+        recording: z.boolean(),
+        batteryPercent: z.number().int().min(0).max(100).optional(),
+        remainMinutes: z.number().int().min(0).optional(),
+        tempOver: z.number().int().min(0).max(3).optional(),
+    }).optional(),
 });
 export type HomeBaseReadoutRequest = z.infer<typeof HomeBaseReadoutRequestSchema>;

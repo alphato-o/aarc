@@ -38,6 +38,11 @@ final class RunRecord {
     /// Drives the RACE badge in History. Lightweight migration (defaulted).
     var raceModeRaw: String = "off"
 
+    /// Race day: when the runner pressed "crossed the gate". The session
+    /// started earlier in the corral; the race clock starts here. nil for
+    /// every other run. Lightweight migration (defaulted).
+    var gateCrossedAt: Date? = nil
+
     /// Where this run came from. "aarc" (default) for runs AARC coached, or
     /// "nike" for runs imported from the Nike Run Club archive. Nike runs are
     /// view-only history (no coaching, no share card) — see NikeImporter.
@@ -112,6 +117,7 @@ final class RunRecord {
         healthKitWorkoutUUID: UUID? = nil,
         runTypeRaw: String = "outdoor",
         raceModeRaw: String = "off",
+        gateCrossedAt: Date? = nil,
         source: String = "aarc",
         externalId: String? = nil,
         importedTitle: String? = nil,
@@ -131,6 +137,7 @@ final class RunRecord {
         self.healthKitWorkoutUUID = healthKitWorkoutUUID
         self.runTypeRaw = runTypeRaw
         self.raceModeRaw = raceModeRaw
+        self.gateCrossedAt = gateCrossedAt
         self.source = source
         self.externalId = externalId
         self.importedTitle = importedTitle

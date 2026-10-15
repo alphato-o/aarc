@@ -19,6 +19,11 @@ final class LiveMetricsConsumer {
     /// Run identity supplied by the watch's `workoutStarted` event.
     var currentRunId: UUID?
     var startedAt: Date?
+    /// Race day: true while the watch session is live in the corral and the
+    /// race clock has not started. Every engine stays quiet; the camera and
+    /// the live channel are already running. Cleared by the gate press.
+    private(set) var awaitingGate = false
+    private(set) var gateCrossedAt: Date?
     /// Stashed by PhoneSession when it sees prepareWorkout (watch-initiated)
     /// or by RunOrchestrator when starting from the phone, so the Live
     /// Activity can label the run "Treadmill" / "Outdoor" correctly.
@@ -130,6 +135,9 @@ final class LiveMetricsConsumer {
         // has even answered the identity request. Same runId, same start
         // time, log appended, nothing replayed.
         if currentRunId == nil { resumedFromMarker = false }
+        // A fresh unkeyed stream (relaunch, or a watch-started run whose
+        // identity is still in flight) carries no gate state from before.
+        if currentRunId == nil, latest == nil { awaitingGate = false; gateCrossedAt = nil }
         if currentRunId == nil, let m = UnfinishedRunStore.pending,
            Self.markerIsResumable(m, allowTest: RunOrchestrator.shared.testMode == .real) {
             pendingRunType = RunType(rawValue: m.runTypeRaw) ?? pendingRunType
@@ -142,6 +150,20 @@ final class LiveMetricsConsumer {
         // 40-minute run that died from a 5-second mis-start. Self-throttled.
         UnfinishedRunStore.touch()
         updateFrozenDetection(metrics)
+        // RACE DAY CORRAL. The watch holds the clock at zero until the gate
+        // press; nothing below may run on queue time (a script opener in the
+        // corral, a 100 m chart bucket full of standing still, a "metrics"
+        // row at 0 m). The camera director and the live channel already run
+        // from ingestStarted, so the corral is still on the record.
+        if metrics.awaitingGate == true {
+            if !awaitingGate {
+                awaitingGate = true
+                RunEventLog.shared.record("race.corral", "session live in the corral; race clock held")
+            }
+            LiveActivityController.shared.update(from: metrics, plan: ScriptPreviewStore.shared.currentPlan)
+            return
+        }
+        if awaitingGate { ingestGateCrossed(runId: currentRunId ?? UUID(), at: metrics.gateCrossedAt ?? .now) }
         // Director runs FIRST so its predictions (next-milestone ETA,
         // protect window) are fresh when ScriptEngine fires and
         // ContextualCoach decides whether there's room for banter.
@@ -254,6 +276,8 @@ final class LiveMetricsConsumer {
         self.currentRunId = runId
         self.startedAt = startedAt
         self.lastFinishedWorkoutUUID = nil
+        self.awaitingGate = false
+        self.gateCrossedAt = nil
 
         // Open the per-run diagnostics log (events + voice archive).
         RunEventLog.shared.startRun(runId: runId)
@@ -273,6 +297,10 @@ final class LiveMetricsConsumer {
         // In-run roast library: one batched call, cached for quiet-stretch
         // dispatch (intra-batch variety + no per-line LLM round-trip).
         RoastPool.shared.fetchIfNeeded(runType: pendingRunType)
+
+        // Race mode: the Osmo starts rolling with the session (corral
+        // included on race day) and is watched for the whole run.
+        RaceCameraDirector.shared.runStarted(raceMode: RunOrchestrator.shared.raceMode)
 
         // Safety net for the lost watch-End (run 3588B1AB): force-finalise a
         // run whose metrics stream has been dead for minutes.
@@ -414,6 +442,17 @@ final class LiveMetricsConsumer {
         return true
     }
 
+    /// The gate press, from the watch event or inferred from the first
+    /// metrics tick without `awaitingGate`. Idempotent.
+    func ingestGateCrossed(runId: UUID, at: Date) {
+        guard awaitingGate else { return }
+        awaitingGate = false
+        gateCrossedAt = at
+        RunEventLog.shared.record("race.gate", "crossed the gate; race clock running",
+                                  data: ["at": ISO8601DateFormatter().string(from: at)])
+        RaceCameraDirector.shared.gateCrossed()
+    }
+
     func ingestPaused() {
         latest = latest?.with(state: .paused)
     }
@@ -434,6 +473,8 @@ final class LiveMetricsConsumer {
     func endNow() {
         guard isRunActive else { return }
         resumedFromMarker = false
+        awaitingGate = false
+        gateCrossedAt = nil
         latest = latest?.with(state: .ended)   // isRunActive → false immediately
         RunSummaryStore.shared.capture()
     }
@@ -495,6 +536,8 @@ final class LiveMetricsConsumer {
         ContextualCoach.shared.stop()
         Conversation.shared.stop()
         RunDirector.shared.stop()
+        RaceCameraDirector.shared.runEnded()
+        awaitingGate = false
         PlaceContext.shared.stop()
         VenueConfirm.shared.reset()
         RoastPool.shared.reset()
@@ -569,6 +612,7 @@ final class LiveMetricsConsumer {
             healthKitWorkoutUUID: nil,
             runTypeRaw: pendingRunType.rawValue,
             raceModeRaw: RunOrchestrator.shared.raceMode.rawValue,
+            gateCrossedAt: gateCrossedAt,
             cachedDistanceMeters: dist,
             cachedDurationSeconds: dur,
             cachedAvgPaceSecPerKm: dist > 0 ? dur / (dist / 1000) : 0,
@@ -614,6 +658,7 @@ final class LiveMetricsConsumer {
             healthKitWorkoutUUID: nil,
             runTypeRaw: pendingRunType.rawValue,
             raceModeRaw: RunOrchestrator.shared.raceMode.rawValue,
+            gateCrossedAt: gateCrossedAt,
             cachedDistanceMeters: dist,
             cachedDurationSeconds: dur,
             cachedAvgPaceSecPerKm: dist > 0 ? dur / (dist / 1000) : 0,
@@ -760,7 +805,10 @@ private extension LiveMetrics {
             energyKcal: energyKcal,
             cadenceStepsPerMinute: cadenceStepsPerMinute,
             lastSplit: lastSplit,
-            state: newState
+            state: newState,
+            watchBatteryLevel: watchBatteryLevel,
+            awaitingGate: awaitingGate,
+            gateCrossedAt: gateCrossedAt
         )
     }
 }
