@@ -62,6 +62,8 @@ final class VoiceNoteRecorder: NSObject {
         await AVAudioApplication.requestRecordPermission()
     }
 
+    private var currentInputRoute: String?
+
     func start(runId: UUID) async {
         guard !isRecording else { return }
         lastError = nil
@@ -85,7 +87,9 @@ final class VoiceNoteRecorder: NSObject {
                 try? session.setPreferredInput(bt)
             }
             try session.setActive(true)
-            RunEventLog.shared.record("voicenote.input", session.currentRoute.inputs.first?.portType.rawValue ?? "none")
+            let input = session.currentRoute.inputs.first
+            currentInputRoute = input.map { "\($0.portName) (\($0.portType.rawValue))" }
+            RunEventLog.shared.record("voicenote.input", currentInputRoute ?? "none")
             // SPEECH settings, not music settings. The default 44.1kHz/high
             // profile recorded his 2m50s note as 9.7MB (~456kbps) — which then
             // failed to transcribe at all, because base64-ing it blew the
@@ -152,6 +156,7 @@ final class VoiceNoteRecorder: NSObject {
         // the network does.
         if let context {
             let rec = VoiceNoteRecord(id: noteId, runId: runId, audioFilePath: url.lastPathComponent)
+            rec.inputRoute = currentInputRoute
             context.insert(rec)
             try? context.save()
         }

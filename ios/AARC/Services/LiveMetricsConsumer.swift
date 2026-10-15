@@ -552,6 +552,7 @@ final class LiveMetricsConsumer {
         // Everything below is already in memory at this moment; not writing it
         // was the whole defect.
         var series = StoredRunSeries()
+        LiveRunChartStore.shared.finishPartialBucket(latest)
         for sample in LiveRunChartStore.shared.samples {
             if let h = sample.heartRate, h > 0 { series.hr.append(.init(t: sample.recordedAt, v: h)) }
             if let pace = sample.paceSecPerKm, pace > 0 { series.pace.append(.init(t: sample.recordedAt, v: pace)) }
@@ -596,6 +597,7 @@ final class LiveMetricsConsumer {
         // Persist the chart series + trail so History can render this test run
         // (no HealthKit workout to read back from).
         var series = StoredRunSeries()
+        LiveRunChartStore.shared.finishPartialBucket(latest)
         for s in LiveRunChartStore.shared.samples {
             if let h = s.heartRate, h > 0 { series.hr.append(.init(t: s.recordedAt, v: h)) }
             if let p = s.paceSecPerKm, p > 0 { series.pace.append(.init(t: s.recordedAt, v: p)) }

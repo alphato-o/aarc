@@ -107,8 +107,14 @@ struct VoiceNoteSection: View {
                 .buttonStyle(.plain)
                 // Length first, clock second: the clock alone read as a
                 // 20-minute recording (founder, 2026-10-15).
-                Text("\(timeString(noteDuration(note))) · \(note.recordedAt.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(timeString(noteDuration(note))) · \(note.recordedAt.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    if let route = note.inputRoute {
+                        Text("via \(route.components(separatedBy: " (").first ?? route)")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
                 Spacer()
                 if recorder.transcribing.contains(note.id) {
                     ProgressView().controlSize(.mini)

@@ -185,6 +185,9 @@ final class VoiceNoteRecord {
     var recordedAt: Date
     var audioFilePath: String
     var transcript: String?
+    /// Port name of the input that recorded it ("Alpha's Powerbeats Pro",
+    /// "iPhone Microphone"); nil for notes before 0.4.1.
+    var inputRoute: String? = nil
 
     init(id: UUID = UUID(), runId: UUID, audioFilePath: String) {
         self.id = id

@@ -11,7 +11,11 @@ struct LiveRunChartSample: Identifiable, Sendable, Hashable {
     /// 100m bucket index. `distanceKm = Double(bucketIndex) * 0.1`.
     let bucketIndex: Int
     let heartRate: Double?
+    /// Mean of the 1 Hz pace ticks inside this bucket, not the single value
+    /// at the crossing: that one value hid a finishing surge (15 Oct).
     let paceSecPerKm: Double?
+    /// Fastest tick inside the bucket, for the surge the mean still softens.
+    var fastestPaceSecPerKm: Double? = nil
     let recordedAt: Date
 
     var id: Int { bucketIndex }
@@ -44,12 +48,46 @@ final class LiveRunChartStore {
     func reset() {
         samples.removeAll(keepingCapacity: true)
         lastBucketIndex = -1
+        resetTicks()
     }
 
     /// Called from LiveMetricsConsumer.ingest. Cheap when no new
     /// bucket has been crossed.
+    private var tickPaceSum: Double = 0
+    private var tickPaceCount: Int = 0
+    private var tickPaceMin: Double = .infinity
+    private var tickHRSum: Double = 0
+    private var tickHRCount: Int = 0
+
+    private func accumulate(_ metrics: LiveMetrics) {
+        if let p = metrics.currentPaceSecPerKm, p > 0 {
+            tickPaceSum += p; tickPaceCount += 1; tickPaceMin = min(tickPaceMin, p)
+        }
+        if let h = metrics.currentHeartRate, h > 0 { tickHRSum += h; tickHRCount += 1 }
+    }
+
+    private func resetTicks() {
+        tickPaceSum = 0; tickPaceCount = 0; tickPaceMin = .infinity; tickHRSum = 0; tickHRCount = 0
+    }
+
+    /// The run ended inside a bucket: record what it held so the last
+    /// hundred metres (where the surge lives) reach the chart.
+    func finishPartialBucket(_ metrics: LiveMetrics?) {
+        guard tickPaceCount > 0 || tickHRCount > 0 else { return }
+        let idx = lastBucketIndex + 1
+        samples.append(LiveRunChartSample(
+            bucketIndex: idx,
+            heartRate: tickHRCount > 0 ? tickHRSum / Double(tickHRCount) : metrics?.currentHeartRate,
+            paceSecPerKm: tickPaceCount > 0 ? tickPaceSum / Double(tickPaceCount) : metrics?.currentPaceSecPerKm,
+            fastestPaceSecPerKm: tickPaceCount > 0 ? tickPaceMin : nil,
+            recordedAt: .now))
+        lastBucketIndex = idx
+        resetTicks()
+    }
+
     func ingest(_ metrics: LiveMetrics) {
         let bucketIndex = Int(metrics.distanceMeters / 100)
+        accumulate(metrics)
         guard bucketIndex > lastBucketIndex else { return }
 
         // Backfill any buckets we skipped (e.g., the metric stream
@@ -58,14 +96,19 @@ final class LiveRunChartStore {
         // positions, and avoids gaps in the chart.
         let firstNew = lastBucketIndex + 1
         for idx in firstNew...bucketIndex {
+            // The bucket just completed gets its own ticks' mean; any
+            // skipped buckets get the current metrics as before.
+            let completed = idx == firstNew && tickPaceCount > 0
             let sample = LiveRunChartSample(
                 bucketIndex: idx,
-                heartRate: metrics.currentHeartRate,
-                paceSecPerKm: metrics.currentPaceSecPerKm,
+                heartRate: completed && tickHRCount > 0 ? tickHRSum / Double(tickHRCount) : metrics.currentHeartRate,
+                paceSecPerKm: completed ? tickPaceSum / Double(tickPaceCount) : metrics.currentPaceSecPerKm,
+                fastestPaceSecPerKm: completed ? tickPaceMin : nil,
                 recordedAt: .now
             )
             samples.append(sample)
         }
+        resetTicks()
         lastBucketIndex = bucketIndex
 
         // Defensive cap.

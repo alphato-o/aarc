@@ -329,7 +329,8 @@ final class ScriptEngine {
         // let Jessica deliver the moment instead.
         // Race mode: Home Base owns every kilometre. The factual announcement
         // above still plays; the coaches' riff is replaced by the readout.
-        if message.triggerSpec.type == .distance, RunOrchestrator.shared.raceMode != .off {
+        if message.triggerSpec.type == .distance, message.triggerSpec.everyMeters == 1000,
+           RunOrchestrator.shared.raceMode != .off {
             let km = max(1, Int((metrics.distanceMeters / 1000).rounded()))
             RunEventLog.shared.record("milestone.owner", "home", data: ["km": String(km)])
             HomeBaseReadout.shared.deliver(km: km, metrics: metrics)

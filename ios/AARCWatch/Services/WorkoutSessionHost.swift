@@ -671,10 +671,13 @@ final class WorkoutSessionHost: NSObject {
         let hr = quantityRecent(.heartRate, unit: HKUnit(from: "count/min"))
         let steps = quantitySum(.stepCount, unit: .count())
 
-        // Maintain a rolling 30s window of (timestamp, distance) for current pace.
+        // Rolling 20 s window of (timestamp, distance) for current pace. Was
+        // 30 s: a 25 s finishing surge (15 Oct) never showed, the window
+        // still held the jog before it. 20 s is as short as the chunky
+        // HealthKit distance updates allow without the number flapping.
         let now = Date()
         distanceWindow.append((now, distance))
-        let cutoff = now.addingTimeInterval(-30)
+        let cutoff = now.addingTimeInterval(-20)
         distanceWindow.removeAll { $0.0 < cutoff }
         let currentPace = derivedPace(distanceWindow)
 
