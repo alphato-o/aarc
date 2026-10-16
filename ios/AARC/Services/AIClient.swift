@@ -42,6 +42,10 @@ actor AIClient {
         /// Sent as VIBE-ONLY calibration; the prompt is strict about
         /// never copying them verbatim. Capped at ~12 most-recent.
         var likedLineExamples: [String]?
+        /// Race pack: "actual" asks for the pre-baked offline script with
+        /// one-shot lines at real places on `courseId`.
+        var raceMode: String?
+        var courseId: String?
 
         /// Convenience — derive a ScriptPlan from a RunPlan + run type.
         static func from(_ plan: RunPlan, runType: RunType, personalityId: String) -> ScriptPlan {

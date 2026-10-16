@@ -68,6 +68,7 @@ struct SettingsView: View {
                     Text("The facts the coaches weave into roasts. Editing moved to my.aarun.club \u{2192} \u{201C}Trolls\u{201D} \u{2014} the long list is impractical to edit on the phone. This device pulls the latest at launch.")
                 }
 
+                RacePackSection()
                 CameraSettingsSection()
 
                 Section("About") {

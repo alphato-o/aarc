@@ -146,3 +146,45 @@ struct RaceGateHarness {
         UnfinishedRunStore.clear()
     }
 }
+
+/// The offline race pack is used only for the exact plan, run type and coach
+/// it was built for; the one-shot course lines must sit mid-kilometre so they
+/// never stack on the kilometre call Home Base owns.
+@MainActor
+@Suite("Race pack")
+struct RacePackHarness {
+    private func pack(planKm: Double, runType: String = "outdoor", persona: String = "roast_coach") -> RacePack {
+        let plan = RunPlan(kind: .distance, distanceKm: planKm, timeMinutes: nil)
+        let msg = ScriptMessage(id: "course_5", triggerSpec: TriggerSpec(type: .distance, atMeters: 4600),
+                                text: "Astor Hotel. 1863. Older than your excuses.")
+        return RacePack(planKey: RacePack.key(plan: plan, personalityId: persona), runType: runType,
+                        personalityId: persona, courseId: "tianjin2026", builtAt: .now,
+                        script: GeneratedScript(scriptId: "s", model: "m", messages: [msg]),
+                        warmedLines: 1, totalLines: 1)
+    }
+
+    @Test("the pack matches only its own plan, run type and coach")
+    func matching() {
+        let store = RacePackStore.shared
+        let race = RunPlan(kind: .distance, distanceKm: 42.195, timeMinutes: nil)
+        let other = RunPlan(kind: .distance, distanceKm: 10, timeMinutes: nil)
+        let p = pack(planKm: 42.195)
+        #expect(p.planKey == RacePack.key(plan: race, personalityId: "roast_coach"))
+        #expect(p.planKey != RacePack.key(plan: other, personalityId: "roast_coach"))
+        #expect(p.planKey != RacePack.key(plan: race, personalityId: "jessica"))
+        #expect(p.runType == RunType.outdoor.rawValue)
+        #expect(p.lineCount == 1)
+        #expect(store.usablePack(plan: race, runType: .outdoor, personalityId: "roast_coach")?.planKey == store.pack?.planKey)
+    }
+
+    @Test("the pack survives a round trip through its on-disk encoding")
+    func codable() throws {
+        let p = pack(planKm: 42.195)
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        let back = try dec.decode(RacePack.self, from: enc.encode(p))
+        #expect(back.planKey == p.planKey)
+        #expect(back.script.messages.first?.triggerSpec.atMeters == 4600)
+        #expect(RacePackLocalLines.all.count == 2)
+    }
+}

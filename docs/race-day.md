@@ -31,6 +31,52 @@ then wherever you were, so tap on the mat.
 If the watch app is relaunched mid-run the gate offset is restored from the
 watch's own store; the phone re-keys itself to the run as before.
 
+## The course: every voice knows where he is
+
+The Tianjin Marathon route (start 友谊路 at 天津大礼堂, finish 宾水西道 at
+天津奥林匹克中心) was traced with Amap through every turn, re-anchored to the
+organiser's kilometre markers, and every kilometre looked up for its street,
+district and landmarks. The aid-station table from the official map and
+hand-written notes (the Astor Hotel at km 5, the 鄱阳路 turnaround at 12.5, the
+Century Clock at 23, the Tianjin Eye on 永乐桥 at 27.5, the Drum Tower at 29,
+the universities at 37, the Water Park at 39) sit on top. The data lives in
+`proxy/src/data/courses/tianjin-2026.json`; `GET /course/tianjin2026` returns
+it and `GET /course/tianjin2026/at?km=27` returns the prompt block for a point.
+
+In **Actual race** mode the proxy adds a RACE COURSE block (where he is, what
+is next, the next aid station, metres to the finish) to every voice: Ricky's
+dynamic lines, Jessica's reactions, the music comments and the Home Base
+kilometre readout. The course is the ground truth when the live GPS place
+block is thin, which in the crowd it will be.
+
+Jessica is broadcast-safe in both race modes: hints and swearing stay,
+nothing explicit, no moaning or screaming. The race recording goes on
+YouTube; bleeps in post are a feature.
+
+## The race pack: the first half hour has no signal
+
+The crowd at the start kills the phone's data for about thirty minutes. The
+pack is the answer: build it at home the night before, on Wi‑Fi.
+
+1. Set the race plan first: 42.2 km, outdoor, Ricky. Then Settings,
+   **Race pack (offline)**, **Build race pack**. It writes a race script with
+   the course in it (the usual skeleton plus one-shot lines at real places,
+   every kilometre from 1 to 8 covered one by one, placed mid-kilometre so they
+   never stack on the kilometre call) and renders every line to audio: the
+   script, the kilometre announcements and Home Base's own gate line. Expect a
+   minute of generation and a few minutes of rendering; the section shows
+   "N of M rendered". Rebuild if the plan or coach changes; the pack is used
+   only for the exact plan it was built for.
+2. At the start, in Actual race mode with a matching pack, the pack IS the
+   script: no opener is generated at the start line and nothing swaps in
+   later. The `race.pack` event on the live channel says so.
+3. Online, Home Base still calls every kilometre and Jessica still reacts.
+   When the readout cannot reach the proxy, Ricky's scripted kilometre line
+   plays instead (`milestone.owner ricky:offline`). Nothing waits on the
+   network; the local voice is the fallback for anything not yet rendered.
+4. The gate press speaks a local Home Base line ("Gate. Race clock running.")
+   with no proxy in the loop.
+
 ## The camera: DJI Osmo Action 6 on the chest mount
 
 Pair once at home, in Settings, "DJI Osmo camera": camera on, tap **Pair the
@@ -83,6 +129,8 @@ line through `/live/inject` in the Home Base voice saying exactly what to press.
 
 - Watch and phone charged; AARC build is the one tested on the last training
   race; race mode set to **Actual race**; live share on.
+- Race pack built the night before for the 42.2 km outdoor plan, Settings
+  shows every line rendered and no "different plan" warning.
 - Camera: fresh battery, card formatted, Video mode, chest mount tight,
   Bluetooth on (Settings, Wireless connection). Pairing already done at home.
 - Powerbeats charged and connected before the corral.

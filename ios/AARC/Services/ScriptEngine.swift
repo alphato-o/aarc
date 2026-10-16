@@ -333,7 +333,9 @@ final class ScriptEngine {
            RunOrchestrator.shared.raceMode != .off {
             let km = max(1, Int((metrics.distanceMeters / 1000).rounded()))
             RunEventLog.shared.record("milestone.owner", "home", data: ["km": String(km)])
-            HomeBaseReadout.shared.deliver(km: km, metrics: metrics)
+            HomeBaseReadout.shared.deliver(km: km, metrics: metrics) { [weak self] in
+                self?.speakScripted(message, metrics: metrics)
+            }
             return
         }
         if message.triggerSpec.type == .distance, RunDirector.shared.isActive {
@@ -345,6 +347,12 @@ final class ScriptEngine {
             }
         }
 
+        speakScripted(message, metrics: metrics)
+    }
+
+    /// Ricky's own line for a trigger: the scripted text, queued with the
+    /// right priority, and offered to Jessica for a reaction.
+    private func speakScripted(_ message: ScriptMessage, metrics: LiveMetrics) {
         let text = nextVariantText(for: message)
         RunEventLog.shared.record("script.dispatch", String(text.prefix(80)),
                                   data: ["trigger": message.triggerSpec.humanDescription])

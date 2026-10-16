@@ -26,6 +26,10 @@
 | ✅ 3.1.7 | Corral-then-gate start (Actual race): watch session starts in the corral, race clock starts on the wrist "CROSSED THE GATE" tap (phone backup button); metrics race-relative from the gate | watch + phone, build 203 | Device test pending: tap on a training race, splits and chart start at 0 from the gate |
 | ✅ 3.1.8 | DJI Osmo over BLE in race mode: pair once, record with the session, restart after a battery swap, battery ladder 30/20/10/5, offline/back-online, heat and card warnings, Home Base readout gets the camera facts | `Services/Camera/*`, build 203 | Bench-tested protocol from a laptop 16 Oct; in-app link device test pending |
 
+| ✅ 3.1.9 | Course knowledge: Tianjin route traced with Amap, re-anchored to the organiser's km markers, per-km street/landmarks/aid stations; RACE COURSE block in every voice in Actual race mode; `GET /course/:id[/at?km=]` | proxy `lib/course.ts`, `data/courses/tianjin-2026.json` | `/course/tianjin2026/at?km=27` names 天津之眼 and the 27.5 km station |
+| ✅ 3.1.10 | Offline race pack: race script with course one-shots generated at home, every line rendered to audio, used as the script in Actual race mode; Home Base km readout falls back to Ricky's scripted line offline; local gate line | `Services/RacePack/*`, Settings "Race pack (offline)", build 204 | Airplane mode after the start: km lines and the gate line still play |
+| ✅ 3.1.11 | Jessica broadcast-safe in race modes (hints and swearing stay; nothing explicit) | proxy `personalities.ts` (private) | A race-mode reaction never contains explicit content |
+
 ### 3.2 — Branched script generation
 
 | # | Task | Deliverable | Acceptance |

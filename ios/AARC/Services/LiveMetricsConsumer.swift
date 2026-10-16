@@ -451,6 +451,10 @@ final class LiveMetricsConsumer {
         RunEventLog.shared.record("race.gate", "crossed the gate; race clock running",
                                   data: ["at": ISO8601DateFormatter().string(from: at)])
         RaceCameraDirector.shared.gateCrossed()
+        // Local line, no proxy: the corral has no signal and the moment
+        // must not pass in silence. Rendered to audio with the race pack.
+        Speaker.shared.speak(RacePackLocalLines.gateCrossed, priority: .milestone, source: "home:gate",
+                             dedupKey: "home:gate", expiresAfter: 60, voiceId: RemoteTTS.homeVoiceId)
     }
 
     func ingestPaused() {

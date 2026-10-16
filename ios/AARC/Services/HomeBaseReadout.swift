@@ -24,7 +24,10 @@ final class HomeBaseReadout {
         recentLines = []
     }
 
-    func deliver(km: Int, metrics: LiveMetrics) {
+    /// `fallback` speaks the pre-baked scripted line for this kilometre when
+    /// the proxy cannot be reached (race day: the first half hour has no
+    /// signal). Online, Home Base calls the kilometre; offline, Ricky does.
+    func deliver(km: Int, metrics: LiveMetrics, fallback: (@MainActor () -> Void)? = nil) {
         guard km > lastKm else { return }
         lastKm = km
         task?.cancel()
@@ -75,6 +78,9 @@ final class HomeBaseReadout {
             } catch {
                 self.log.error("readout km \(km) failed: \(error.localizedDescription, privacy: .public)")
                 RunEventLog.shared.record("home.readout.failed", error.localizedDescription, data: ["km": String(km)])
+                guard !Task.isCancelled, LiveMetricsConsumer.shared.isRunActive, let fallback else { return }
+                RunEventLog.shared.record("milestone.owner", "ricky:offline", data: ["km": String(km)])
+                fallback()
             }
         }
     }

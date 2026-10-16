@@ -145,9 +145,15 @@ final class RunOrchestrator {
         let runId = UUID()
 
         do {
-            let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
-            ScriptPreviewStore.shared.latest = stub
-            prefetchEarlyLines(script: stub)
+            let pack = racePackForStart(plan: plan, runType: runType, personalityId: personalityId)
+            if let pack {
+                ScriptPreviewStore.shared.latest = pack.script
+                prefetchEarlyLines(script: pack.script)
+            } else {
+                let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
+                ScriptPreviewStore.shared.latest = stub
+                prefetchEarlyLines(script: stub)
+            }
 
             if testMode == .simulate {
                 // Desk test: no GPS / pedometer / HealthKit. The simulator
@@ -162,7 +168,9 @@ final class RunOrchestrator {
                     personalityId: personalityId
                 )
             }
-            scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
+            if pack == nil {
+                scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
+            }
             // No watch involvement — no startWorkout WC message, no
             // wrist-cue notification. The phone is tracking, done.
             phase = .idle
@@ -215,10 +223,15 @@ final class RunOrchestrator {
         }
 
         do {
-            let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
-            ScriptPreviewStore.shared.latest = stub
-            prefetchEarlyLines(script: stub)
-            scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
+            if let pack = racePackForStart(plan: plan, runType: runType, personalityId: personalityId) {
+                ScriptPreviewStore.shared.latest = pack.script
+                prefetchEarlyLines(script: pack.script)
+            } else {
+                let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
+                ScriptPreviewStore.shared.latest = stub
+                prefetchEarlyLines(script: stub)
+                scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
+            }
 
             pendingWatchStart = (runId, runType, personalityId)
             watchStartAttempts = 0
@@ -413,11 +426,17 @@ final class RunOrchestrator {
         let plan = ScriptPreviewStore.shared.currentPlan
 
         do {
-            let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
-            ScriptPreviewStore.shared.latest = stub
-            prefetchEarlyLines(script: stub)
-            PhoneSession.shared.sendStateEvent(.scriptReady(scriptId: stub.scriptId))
-            scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
+            if let pack = racePackForStart(plan: plan, runType: runType, personalityId: personalityId) {
+                ScriptPreviewStore.shared.latest = pack.script
+                prefetchEarlyLines(script: pack.script)
+                PhoneSession.shared.sendStateEvent(.scriptReady(scriptId: pack.script.scriptId))
+            } else {
+                let stub = try await prepareOpenerStub(plan: plan, runType: runType, personalityId: personalityId)
+                ScriptPreviewStore.shared.latest = stub
+                prefetchEarlyLines(script: stub)
+                PhoneSession.shared.sendStateEvent(.scriptReady(scriptId: stub.scriptId))
+                scheduleFullScriptSwap(plan: plan, runType: runType, personalityId: personalityId)
+            }
             phase = .idle
         } catch {
             phase = .error
@@ -657,14 +676,27 @@ final class RunOrchestrator {
         }
     }
 
+    /// The race pack's script: the full skeleton plus one-shot lines at real
+    /// places on the course, generated at home so it plays with no signal.
+    func generateRaceScript(plan: RunPlan, runType: RunType, personalityId: String) async throws -> GeneratedScript {
+        try await generateFull(plan: plan, runType: runType, personalityId: personalityId,
+                               skipOpener: false, racePack: true)
+    }
+
     private func generateFull(
         plan: RunPlan,
         runType: RunType,
         personalityId: String,
-        skipOpener: Bool
+        skipOpener: Bool,
+        racePack: Bool = false
     ) async throws -> GeneratedScript {
         var payload = AIClient.ScriptPlan.from(plan, runType: runType, personalityId: personalityId)
         payload.skipOpener = skipOpener
+        if racePack {
+            payload.goal = "race"
+            payload.raceMode = RaceMode.actual.rawValue
+            payload.courseId = RacePackStore.courseId
+        }
         // Pipe the founder's personal-context bullets through as
         // userMemory — the coach uses them as trolling hooks (FydeOS
         // 10 users, Phi Browser dying, will-never-be-Sam-Altman, etc.).
@@ -678,6 +710,22 @@ final class RunOrchestrator {
             payload.likedLineExamples = liked
         }
         return try await AIClient.shared.generateScript(plan: payload)
+    }
+
+    /// Actual race mode with a pack built for this plan: the pack IS the
+    /// script (opener included), so nothing is generated at the start line
+    /// and nothing swaps in later. The live voices still layer on top.
+    private func racePackForStart(plan: RunPlan, runType: RunType, personalityId: String) -> RacePack? {
+        guard raceMode == .actual, !AppEnv.uiTest else { return nil }
+        guard let pack = RacePackStore.shared.usablePack(plan: plan, runType: runType, personalityId: personalityId) else {
+            RunEventLog.shared.record("race.pack", "no pack for this plan; generating live")
+            return nil
+        }
+        RunEventLog.shared.record("race.pack", "using pack", data: [
+            "built": ISO8601DateFormatter().string(from: pack.builtAt),
+            "lines": String(pack.lineCount),
+        ])
+        return pack
     }
 
     private func makeKey(plan: RunPlan, personalityId: String) -> String {
