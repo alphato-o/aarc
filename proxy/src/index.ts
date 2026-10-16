@@ -1,3 +1,5 @@
+import { adminAmapHandler } from "./routes/adminAmap";
+import { courseHandler } from "./routes/course";
 import { generateScriptHandler } from "./routes/generateScript";
 import { dynamicLineHandler } from "./routes/dynamicLine";
 import { reactLineHandler } from "./routes/reactLine";
@@ -198,6 +200,12 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         return dashAuthApproveHandler(request, env);
     }
 
+    if (request.method === "GET" && url.pathname.startsWith("/course/")) {
+        return courseHandler(request, url);
+    }
+    if (url.pathname.startsWith("/admin/amap/")) {
+        return adminAmapHandler(request, url, env);
+    }
     if (url.pathname.startsWith("/live/")) {
         return liveHandler(request, url, env);
     }

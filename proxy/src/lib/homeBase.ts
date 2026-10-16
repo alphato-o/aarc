@@ -7,6 +7,7 @@ import { callLLM, LLMEnv } from "./llm";
 import { fetchAmbient, type AmbientInput, type AmbientEnv } from "./ambient";
 import { fetchLocalIntel, formatLocalIntel, type AmapEnv } from "./amap";
 import { fetchBriefing, type BriefingEnv } from "./briefing";
+import { pushCourseBlock } from "./course";
 
 export const HOME_BASE_VOICE_ID = "Awx8TeMHHpDzbm42nIB6";
 
@@ -27,6 +28,7 @@ export interface ReadoutInput {
         runType: string;
         place?: { road?: string; area?: string; pois?: string[]; route?: string };
         ambient?: AmbientInput;
+        raceMode?: string;
     };
     lastSplitSecPerKm?: number;
     avgHR?: number;
@@ -67,6 +69,7 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         lines.push(`- plan: ${c.planTimeMinutes} minutes, ${Math.max(0, Math.round((c.planTimeMinutes * 60 - c.elapsedSeconds) / 60))} minutes to go`);
     }
     lines.push(`- marathon day: 25 October 2026 (${daysUntil("2026-10-25")} days from today)`);
+    pushCourseBlock(lines, (c as { raceMode?: string }).raceMode, c.distanceMeters);
     if (input.camera) {
         const cam = input.camera;
         const bits = [cam.connected ? (cam.recording ? "recording" : "connected, NOT recording") : "OFFLINE"];

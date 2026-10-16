@@ -6,6 +6,7 @@ import {
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { pushCourseBlock } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
@@ -177,6 +178,7 @@ async function buildUserPrompt(req: MusicCommentRequest, env: Env): Promise<stri
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
     pushPlaceBlock(lines, c.place);
+    pushCourseBlock(lines, c.raceMode, c.distanceMeters);
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);

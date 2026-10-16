@@ -43,6 +43,10 @@ export const GenerateScriptRequestSchema = z
         /// calibration; the prompt is strict about never copying any
         /// of them verbatim. Capped to ~12 most-recent on the client.
         likedLineExamples: softStrings(30, 1600),
+        /// Race day: "actual" turns the script into the pre-baked offline
+        /// pack (course lines at real places, bigger message budget).
+        raceMode: z.enum(["off", "training", "actual"]).optional(),
+        courseId: z.string().max(40).optional(),
     })
     .superRefine((data, ctx) => {
         if (data.planKind === "distance" && data.distanceKm === undefined) {

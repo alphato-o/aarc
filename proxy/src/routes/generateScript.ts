@@ -5,6 +5,7 @@ import {
     ScriptSchema,
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
+import { courseById, courseFor, courseScriptBlock } from "../lib/course";
 import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
@@ -40,13 +41,16 @@ export async function generateScriptHandler(
     }
 
     const userPrompt = await buildUserPrompt(req, env);
+    // The race pack carries ~30 one-shot course lines on top of the usual
+    // skeleton; the normal budget would truncate the JSON mid-array.
+    const maxTokens = racePackCourse(req) ? 8192 : 4096;
 
     let validated: { data: ReturnType<typeof ScriptSchema.parse> };
     let provider: "openrouter" | "anthropic";
     let model: string;
     try {
         const out = await callLLMJSON(
-            { purpose: "script", systemPrompt, userPrompt, maxTokens: 4096, cacheSystem: true },
+            { purpose: "script", systemPrompt, userPrompt, maxTokens, cacheSystem: true },
             env,
             (raw) => {
                 const parsed = JSON.parse(stripCodeFences(raw));
@@ -118,6 +122,21 @@ async function buildUserPrompt(
 
     lines.push(`Run type: ${req.runType}`);
     lines.push(`Goal: ${req.goal}`);
+    const course = racePackCourse(req);
+    if (course) {
+        lines.push(
+            "",
+            "RACE DAY SCRIPT. This is a PRE-BAKED OFFLINE PACK, generated at home the night before the race and played from the phone's own storage:",
+            `- The run is the ${course.name} on ${course.date}, 42.2 km, his FIRST full marathon. The first 30 minutes are in a crowd with no phone signal, so this script is the only voice he hears until the network comes back, and it is the fallback for any kilometre the live voices cannot reach him later.`,
+            "- He starts the race clock himself at the timing gate; distance 0 is the gate, not the corral.",
+            "- ON TOP of the required messages, write ONE-SHOT COURSE LINES: {\"type\":\"distance\",\"atMeters\":N}, each tied to a real place from the course list below. Cover kilometres 1 to 8 one by one (that is the no-signal stretch; every one of them gets a line), then the landmarks: the Astor Hotel (km 5), the 鄱阳路 turnaround (12.5), 春意桥 (13), the half (21), the Century Clock at 天津站 (23), 天津之眼 on 永乐桥 (27.5), 鼓楼 (29), km 30, km 35, the universities on 大学道 (37), 水上公园 (39), the stadium in sight (41). Place every atMeters MID-kilometre (for example 1450, 4600, 12400, 27600) so it never lands on the kilometre call itself, which another voice owns.",
+            "- Each course line NAMES the actual place (Chinese names exactly as given) and uses it: what he can see, what the crowd is doing, what the aid station has, what the bridge does to his legs, how far to the next water. Keep the place facts true to the list; invent only the jokes.",
+            "- The per-km loop pool: 8 variants, race-flavoured (bibs, crowds, gels, cups, the 30 km wall, his first marathon), none naming a kilometre.",
+            "- The HALFWAY line is the half-marathon mat; the NEAR-FINISH line is the last 100 m along the stadium; the FINISH line is the finish, so this once it IS the end.",
+            "- Message count for THIS script: 25 to 35 (the normal 8 to 14 limit does not apply here).",
+        );
+        for (const l of courseScriptBlock(course)) lines.push(l);
+    }
     if (req.skipOpener) {
         lines.push(
             "SKIP THE OPENER: do NOT include a time.atSeconds=0 START ROAST in the script. The opener has already been generated separately and played to the runner. Start the script with the per-km loop, surprise roasts, halfway, etc.",
@@ -143,6 +162,11 @@ async function buildUserPrompt(
     await pushBriefingBlock(lines, env, "ricky", { chance: 1 });
     lines.push("", "Generate the script now. JSON only.");
     return lines.join("\n");
+}
+
+function racePackCourse(req: z.infer<typeof GenerateScriptRequestSchema>) {
+    if (req.raceMode !== "actual") return null;
+    return (req.courseId ? courseById(req.courseId) : null) ?? courseFor(req.raceMode);
 }
 
 function stripCodeFences(text: string): string {

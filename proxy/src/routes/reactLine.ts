@@ -4,9 +4,10 @@ import {
     ReactLineRequestSchema,
     ReactLineResponse,
 } from "../schemas";
-import { reactModeFor, systemPromptFor, runPhaseBlock, JessicaLengthMode } from "../lib/personalities";
+import { reactModeFor, systemPromptFor, runPhaseBlock, jessicaBroadcastPrompt, JessicaLengthMode } from "../lib/personalities";
 import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { pushCourseBlock } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
@@ -68,7 +69,12 @@ export async function reactLineHandler(
     // Absent => "medium" (the established default).
     const lengthMode: JessicaLengthMode = req.lengthMode ?? "medium";
 
-    const systemPrompt = systemPromptFor(req.personalityId, reactModeFor(lengthMode));
+    // Race mode = recorded for a public video: Jessica keeps the character,
+    // drops the pornography (founder, 2026-10-16).
+    const broadcast = req.personalityId === "jessica" && !!req.runContext.raceMode && req.runContext.raceMode !== "off";
+    const systemPrompt = broadcast
+        ? jessicaBroadcastPrompt(lengthMode)
+        : systemPromptFor(req.personalityId, reactModeFor(lengthMode));
     if (!systemPrompt) {
         return json(
             { ok: false, error: `unknown personality: ${req.personalityId}` },
@@ -235,6 +241,7 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
         lines.push(runPhaseBlock(Math.min(0.999, Math.max(0, p)), "jessica"));
     }
     pushPlaceBlock(lines, c.place);
+    pushCourseBlock(lines, c.raceMode, c.distanceMeters);
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);
