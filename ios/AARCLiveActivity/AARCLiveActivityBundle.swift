@@ -5,6 +5,7 @@ import SwiftUI
 struct AARCLiveActivityBundle: WidgetBundle {
     var body: some Widget {
         AARCLiveActivityWidget()
+        ControlRoomActivityWidget()
         LastRunWidget()
     }
 }

@@ -132,38 +132,45 @@ course through the live endpoints as a race run.
 
 ## Talk-back: he speaks, Control Room answers in his ear
 
-Every mode, not only race day. He cannot press buttons or pull the phone out
-mid-run, but a long press on the Powerbeats Pro is Siri, and Siri can hand a
-dictated sentence to the app. "Hey Siri, tell Control Room" (or "talk to
-Control Room", "Home Base listen"; `INAlternativeAppNames` in `Info.plist`
-makes those names resolve to the app) opens the `TellControlRoomIntent`
-(`ios/AARC/Intents/`): Siri asks what to say, he talks, Siri transcribes on
-the earbuds' mic and the app gets text. No app can intercept the earbud button
-itself, and the Now Playing remote commands go to Spotify, so Siri is the only
-hands-free trigger that exists; Siri's own dictation also means no audio
-session juggling mid-run.
+Every mode, run or no run. A long press on the Powerbeats Pro is Siri (no app
+can intercept the earbud button), so Siri is the trigger, but Siri does NOT
+do the listening: its dictation decides on its own when he has stopped and
+cut him off mid-sentence (founder, 17 Oct). Instead:
 
-`ControlRoomChannel.say` records a `voice.said` run event (so the line shows on
-the Control Room page ticker next to his position when the uplink is on) and
-posts it to `POST /agent/send` with `source: voice`, the run id, the km and the
-elapsed time. No signal (the Tianjin start): the line is queued on disk and
-resent from the in-run poll tick or at the next launch. Siri answers "Sent."
-or "No signal yet. I'll send it when it's back."
+1. **"Hey Siri, tell Control Room"** (also "talk to / message Control Room",
+   "Home Base listen"; `INAlternativeAppNames` in `Info.plist`) runs
+   `TellControlRoomIntent`, an iOS 18 `AudioRecordingIntent`, which is what
+   lets a background app open the mic. Siri says "Go."; a rising two-tone cue
+   means the mic is open. A Live Activity ("Control Room, listening", timer)
+   is required by iOS for the background recording and shows on the lock
+   screen and Dynamic Island.
+2. `ControlRoomRecorder` records 16 kHz AAC on the earbud mic with a
+   non-mixable session, so the music pauses and the app owns Now Playing.
+   Pauses are his: nothing ends the line except **a press on the earbud**
+   (play/pause/next all send), **"Hey Siri, send to Control Room"** (or
+   saying "tell Control Room" again), 30 s of silence after speech, or the
+   5 minute cap. "Hey Siri, cancel Control Room" scraps it; 25 s with no
+   speech at all drops it. Coach lines are held while he talks
+   (`VoiceFeedbackQueue.held`) and play afterwards. A falling cue means sent;
+   the music resumes.
+3. `ControlRoomChannel.sendRecording` uploads to `POST /agent/voice`
+   (clientId, runId, km, elapsed, duration). The proxy stores the audio in R2
+   under `talkback/`, transcribes with the voice-note chain (Volc, Whisper,
+   Scribe, then the tidy pass) and puts the transcript on `agent_thread` as a
+   voice row; idempotent on clientId. No signal: the audio stays on disk and
+   resends from the in-run poll tick or at launch.
+4. The agent sees it live in the Claude Code session through the ear loop
+   (`private/ear-loop.sh` as a Monitor: `EAR VOICE #id ... [run xxxx at
+   12.3 km] (recorded 48s): ...`) and answers with `private/reply.sh "<text>"`.
+   In a run the answer comes through the run's inject poll, which now runs for
+   every real run in every mode. Off-run the app keeps itself awake with the
+   silent keepalive for three minutes and plays the answer when it lands.
+   Both play in Kristen's voice. Spoken replies use pinyin plus English, never
+   Chinese characters.
 
-The proxy keeps it on the same `agent_thread` as the Home Base terminal
-(migration 0014 adds `source`, `run_id`, `meta`). `private/live-daemon.sh`
-wakes the agent with `VOICE #id [run xxxx at 12.3 km 1h02m in]: ...`. The
-agent answers with `private/reply.sh "<text>"`, which is `POST /agent/reply
-{speak: true}`: the row goes on the thread and, if he is running, also into
-that run's `live_inject` queue in Kristen's voice (`--silent` for the thread
-only; `--run <id>` to target a run explicitly, otherwise the run of his latest
-line within seven hours). `LiveShareController` now polls `/live/inject` for
-every real run in every mode, uplink or not, so the answer is heard whether or
-not he shares live data. The terminal view labels the rows `you (voice)` and
-`home base (spoken)`.
-
-Device-side verification pending: Siri phrase recognition with the earbuds,
-and the audio session handing back cleanly after Siri (build 207).
+Verified on device 17 Oct (build 208, Siri dictation version): off-run spoken
+reply. Pending on device (build 209): the recorder, the earbud press reaching
+the app, music resuming after, and the in-run path.
 
 ## The camera: DJI Osmo Action 6 on the chest mount
 

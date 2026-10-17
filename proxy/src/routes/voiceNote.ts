@@ -123,7 +123,7 @@ export async function voiceNoteHandler(request: Request, url: URL, env: VoiceNot
 /// and ElevenLabs' key is missing the speech_to_text scope. Hard-failing on
 /// the preferred provider would mean a half-configured account produces no
 /// transcripts at all, when a working fallback was sitting right there.
-async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv, durationS = 0): Promise<{ text: string; provider: string }> {
+export async function transcribe(audio: ArrayBuffer, env: VoiceNoteEnv, durationS = 0): Promise<{ text: string; provider: string }> {
     const attempts: Array<() => Promise<{ text: string; provider: string }>> = [];
     if (env.VOLC_API_KEY) attempts.push(() => volcBig(audio, env.VOLC_API_KEY!));
     if (env.OPENAI_API_KEY) attempts.push(() => transcribeWhisper(audio, env.OPENAI_API_KEY!));
@@ -274,7 +274,7 @@ RULES:
 
 Return ONLY the cleaned text. No preamble, no quotes, no markdown.`;
 
-async function tidy(raw: string, env: VoiceNoteEnv): Promise<string> {
+export async function tidy(raw: string, env: VoiceNoteEnv): Promise<string> {
     const trimmed = raw.trim();
     if (trimmed.length < 12) return trimmed;   // too short to be worth a call
     try {

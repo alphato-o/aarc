@@ -119,6 +119,12 @@ final class VoiceFeedbackQueue {
 
     // MARK: - Diagnostic state
 
+    /// True while he records a line for Control Room: nothing new starts
+    /// talking over him (or into the recording). Lines wait, then play.
+    var held = false {
+        didSet { if oldValue && !held { kickNext() } }
+    }
+
     private(set) var currentlyPlaying: VoiceItem?
     private(set) var pending: [VoiceItem] = []
     /// Time the last item began playing (announcement included). UI uses this
@@ -357,7 +363,7 @@ final class VoiceFeedbackQueue {
 
     private func kickNext() {
         // Already playing? Existing task will advance on completion.
-        guard currentlyPlaying == nil else { return }
+        guard currentlyPlaying == nil, !held else { return }
         guard let next = popNextNonStale() else {
             // Queue empty — let session deactivate on its own grace timer.
             scheduleSessionDeactivate()

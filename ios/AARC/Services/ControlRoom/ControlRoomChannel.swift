@@ -25,6 +25,10 @@ final class ControlRoomChannel {
         let km: Double?
         let elapsed: Double?
         let at: Date
+        /// Set for a recorded line: the audio file name under Documents/talkback.
+        var audioFile: String? = nil
+        var clientId: String? = nil
+        var duration: Double? = nil
     }
 
     private static let pendingKey = "aarc.controlRoom.pending"
@@ -84,11 +88,32 @@ final class ControlRoomChannel {
         return .queued
     }
 
+    /// A line recorded by ControlRoomRecorder. The audio is kept until the
+    /// proxy has transcribed it; a resend is idempotent on clientId.
+    func sendRecording(file: URL, clientId: String, runId: String?, km: Double?,
+                       elapsed: Double?, duration: Double) async -> Outcome {
+        if runId != nil {
+            RunEventLog.shared.record("talkback.recorded", String(format: "%.0fs", duration), data: ["source": "siri"])
+        }
+        let item = Pending(text: "", runId: runId, km: km, elapsed: elapsed, at: .now,
+                           audioFile: file.lastPathComponent, clientId: clientId, duration: duration)
+        let offRun = runId == nil
+        if offRun { holdAwake() }
+        if let id = await send(item) {
+            if offRun { listenForAnswer(after: id); return .listening }
+            return .sent
+        }
+        if offRun { releaseAwake() }
+        pending.append(item)
+        return .queued
+    }
+
     // MARK: - Off-run answer
 
     /// In a run the answer comes through the run's inject poll; off-run there
     /// is no poll, so wait on the thread for the agent's spoken row.
     private func listenForAnswer(after id: Int) {
+        guard id > 0 else { releaseAwake(); return }
         earTask?.cancel()
         earTask = Task { [weak self] in
             let deadline = Date.now.addingTimeInterval(Self.earWindow)
@@ -145,8 +170,22 @@ final class ControlRoomChannel {
     /// The thread row id on success.
     private func send(_ item: Pending) async -> Int? {
         do {
-            let id = try await AIClient.shared.agentSend(item.text, source: "voice", runId: item.runId,
-                                                          km: item.km, elapsed: item.elapsed)
+            let id: Int
+            if let name = item.audioFile, let clientId = item.clientId {
+                let url = ControlRoomRecorder.fileURL(UUID(uuidString: clientId) ?? UUID())
+                guard url.lastPathComponent == name, FileManager.default.fileExists(atPath: url.path) else {
+                    return -1   // audio gone: nothing left to send, let the queue move on
+                }
+                let r = try await AIClient.shared.agentVoice(file: url, clientId: clientId, runId: item.runId,
+                                                             km: item.km, elapsed: item.elapsed,
+                                                             duration: item.duration ?? 0)
+                id = r.id
+                if item.runId != nil { RunEventLog.shared.record("voice.said", r.text, data: ["source": "siri"]) }
+                try? FileManager.default.removeItem(at: url)
+            } else {
+                id = try await AIClient.shared.agentSend(item.text, source: "voice", runId: item.runId,
+                                                         km: item.km, elapsed: item.elapsed)
+            }
             lastSent = .now
             lastError = nil
             return id

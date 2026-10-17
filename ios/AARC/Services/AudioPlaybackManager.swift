@@ -100,6 +100,16 @@ final class AudioPlaybackManager {
         sustainedActive = true
     }
 
+    /// Put the playback session back after a Control Room recording swapped
+    /// the category to .playAndRecord. The cached state no longer matches the
+    /// real session, so it is cleared before re-applying.
+    func reassertAfterRecording() {
+        appliedDuck = nil
+        isSessionActive = false
+        applyCategory(duck: false)
+        if sustainedActive { activate() }
+    }
+
     func endSustained() {
         guard sustainedActive else { return }
         os_log("[audio] endSustained", log: OSLog(subsystem: "club.aarun.AARC", category: "Audio"), type: .info)

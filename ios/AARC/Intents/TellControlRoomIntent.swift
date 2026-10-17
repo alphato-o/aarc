@@ -1,40 +1,63 @@
 import AppIntents
 
-/// "Hey Siri, tell Control Room ..." / long-press on the earbuds, then talk.
+/// "Hey Siri, tell Control Room" (long press on the earbuds, then the phrase).
 ///
-/// Siri does the listening and the dictation (the earbuds' mic, on-device),
-/// so nothing here touches the audio session mid-run; the app only receives
-/// the text. Runs in the app process without bringing it to the foreground.
-struct TellControlRoomIntent: AppIntent {
+/// Siri only opens the mic; the app records until he decides it is done
+/// (founder, 2026-10-17: Siri's own dictation cut him off mid-sentence).
+/// AudioRecordingIntent is what lets a background app start recording.
+/// Saying it again while recording sends.
+struct TellControlRoomIntent: AudioRecordingIntent {
     static let title: LocalizedStringResource = "Tell Control Room"
     static let description = IntentDescription(
-        "Send a spoken message to Control Room during a run. Control Room answers in your ear.")
+        "Record a message for Control Room. Press your earbud, or say \"send to Control Room\", when you're done.")
     static let openAppWhenRun = false
-
-    @Parameter(title: "Message", requestValueDialog: "What do you want to tell Control Room?")
-    var message: String
-
-    static var parameterSummary: some ParameterSummary {
-        Summary("Tell Control Room \(\.$message)")
-    }
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let outcome = await ControlRoomChannel.shared.say(message)
-        switch outcome {
-        case .sent:
+        let recorder = ControlRoomRecorder.shared
+        if recorder.isRecording {
+            await recorder.finish(send: true)
             return .result(dialog: "Sent.")
-        case .listening:
-            return .result(dialog: "Sent. Control Room will answer.")
-        case .queued:
-            return .result(dialog: "No signal yet. I'll send it when it's back.")
         }
+        do {
+            try recorder.start()
+        } catch {
+            return .result(dialog: IntentDialog(stringLiteral: error.localizedDescription))
+        }
+        return .result(dialog: "Go.")
     }
 }
 
-/// Phrases Siri accepts without any setup. `\(.applicationName)` resolves to
-/// "AARC" or any name in Info.plist `INAlternativeAppNames` ("Control Room",
-/// "Home Base"), so "Hey Siri, tell Control Room" works out of the box.
+/// "Hey Siri, send to Control Room": the hands-busy way to finish.
+struct SendToControlRoomIntent: AppIntent {
+    static let title: LocalizedStringResource = "Send to Control Room"
+    static let description = IntentDescription("Send the message you're recording for Control Room.")
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard ControlRoomRecorder.shared.isRecording else { return .result(dialog: "Nothing to send.") }
+        await ControlRoomRecorder.shared.finish(send: true)
+        return .result(dialog: "Sent.")
+    }
+}
+
+/// "Hey Siri, cancel Control Room": scrap the recording.
+struct CancelControlRoomIntent: AppIntent {
+    static let title: LocalizedStringResource = "Cancel Control Room message"
+    static let description = IntentDescription("Throw away the message you're recording for Control Room.")
+    static let openAppWhenRun = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard ControlRoomRecorder.shared.isRecording else { return .result(dialog: "Nothing to cancel.") }
+        await ControlRoomRecorder.shared.finish(send: false)
+        return .result(dialog: "Scrapped.")
+    }
+}
+
+/// Phrases Siri accepts with no setup. `\(.applicationName)` also matches the
+/// Info.plist alternative names ("Control Room", "Home Base").
 struct AARCShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -47,6 +70,25 @@ struct AARCShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Tell Control Room",
             systemImageName: "mic.fill"
+        )
+        AppShortcut(
+            intent: SendToControlRoomIntent(),
+            phrases: [
+                "Send to \(.applicationName)",
+                "\(.applicationName) send",
+                "Send it to \(.applicationName)",
+            ],
+            shortTitle: "Send to Control Room",
+            systemImageName: "paperplane.fill"
+        )
+        AppShortcut(
+            intent: CancelControlRoomIntent(),
+            phrases: [
+                "Cancel \(.applicationName)",
+                "\(.applicationName) cancel",
+            ],
+            shortTitle: "Cancel message",
+            systemImageName: "xmark"
         )
     }
 }

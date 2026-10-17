@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: club.aarun
   createIntermediateGroups: true
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "18.0"
     watchOS: "10.0"
   groupSortPosition: top
   generateEmptyDirectories: true
@@ -19,8 +19,8 @@ settings:
     # both happen to use the same team.
     DEVELOPMENT_TEAM: GK7889VKDF
     ENABLE_HARDENED_RUNTIME: NO
-    MARKETING_VERSION: "0.7.0"
-    CURRENT_PROJECT_VERSION: "208"
+    MARKETING_VERSION: "0.8.0"
+    CURRENT_PROJECT_VERSION: "209"
     GCC_TREAT_WARNINGS_AS_ERRORS: NO
     SWIFT_TREAT_WARNINGS_AS_ERRORS: NO
 

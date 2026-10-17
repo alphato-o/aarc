@@ -482,6 +482,30 @@ actor AIClient {
         return id
     }
 
+    /// Upload a recorded talk-back line; the proxy transcribes it onto the
+    /// thread and returns the row id and the transcript.
+    func agentVoice(file: URL, clientId: String, runId: String?, km: Double?, elapsed: Double?,
+                    duration: Double) async throws -> (id: Int, text: String) {
+        guard let token = liveDeviceToken else { throw AIError.proxy("no device token") }
+        var comps = URLComponents(url: await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/voice"),
+                                  resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = [.init(name: "clientId", value: clientId),
+                                     .init(name: "duration", value: String(Int(duration)))]
+        if let runId { items.append(.init(name: "runId", value: runId)) }
+        if let km { items.append(.init(name: "km", value: String(format: "%.3f", km))) }
+        if let elapsed { items.append(.init(name: "elapsed", value: String(Int(elapsed)))) }
+        comps.queryItems = items
+        var req = URLRequest(url: comps.url!); req.httpMethod = "POST"; req.timeoutInterval = 120
+        req.setValue("audio/mp4", forHTTPHeaderField: "content-type")
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        req.httpBody = try Data(contentsOf: file)
+        let (data, resp) = try await session.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = obj["id"] as? Int else { throw AIError.proxy("voice send failed") }
+        return (id, (obj["text"] as? String) ?? "")
+    }
+
     /// Thread rows after `since` (0 = latest page).
     func agentThread(since: Int) async throws -> [AgentMessage] {
         guard let token = liveDeviceToken else { throw AIError.proxy("no device token") }
