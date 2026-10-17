@@ -13,6 +13,8 @@ export interface LiveEnv {
     DB: D1Database;
     LIVE_DEVICE_TOKEN?: string;
     LIVE_ADMIN_TOKEN?: string;
+    /// The dashboard session cookie value; the race page reads the feed with it.
+    DEVICE_TOKEN?: string;
 }
 
 const MAX_RECENT = 200;
@@ -24,6 +26,19 @@ function isDevice(req: Request, env: LiveEnv): boolean {
 function isAdmin(req: Request, env: LiveEnv): boolean {
     return !!env.LIVE_ADMIN_TOKEN && req.headers.get("x-aarc-admin") === env.LIVE_ADMIN_TOKEN;
 }
+/// Admin header, or the dashboard's session cookie (the race page in a browser).
+export function isAdminOrSession(req: Request, env: LiveEnv): boolean {
+    if (isAdmin(req, env)) return true;
+    if (!env.DEVICE_TOKEN) return false;
+    const header = req.headers.get("cookie") ?? "";
+    for (const part of header.split(";")) {
+        const eq = part.indexOf("=");
+        if (eq > 0 && part.slice(0, eq).trim() === "aarc_session" && part.slice(eq + 1).trim() === env.DEVICE_TOKEN) return true;
+    }
+    return false;
+}
+interface RunRow { run_id: string; started_at: string; last_event_at: string | null; ended_at: string | null; race: number; course: string | null; venue: string | null; city: string | null }
+function safeParse(s: string): unknown { try { return JSON.parse(s); } catch { return null; } }
 function json(data: unknown, status = 200): Response {
     return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
 }
@@ -35,17 +50,17 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
     // POST /live/start { runId, isTest, startedAt } — device
     if (request.method === "POST" && p === "/live/start") {
         if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
-        const b = await request.json<{ runId?: string; isTest?: boolean; startedAt?: string }>();
+        const b = await request.json<{ runId?: string; isTest?: boolean; startedAt?: string; race?: boolean; course?: string }>();
         if (!b.runId) return json({ ok: false, error: "runId required" }, 400);
         if (b.isTest) return json({ ok: true, ignored: "test run" }); // REAL runs only
         // New live run supersedes any prior one.
         await env.DB.batch([
             env.DB.prepare("UPDATE live_run SET ended_at = ? WHERE ended_at IS NULL").bind(now),
             env.DB
-                .prepare("INSERT OR REPLACE INTO live_run (run_id, started_at, last_event_at, ended_at, recent_events) VALUES (?, ?, ?, NULL, '[]')")
-                .bind(b.runId, b.startedAt ?? now, now),
+                .prepare("INSERT OR REPLACE INTO live_run (run_id, started_at, last_event_at, ended_at, recent_events, race, course) VALUES (?, ?, ?, NULL, '[]', ?, ?)")
+                .bind(b.runId, b.startedAt ?? now, now, b.race ? 1 : 0, b.course ?? null),
         ]);
-        return json({ ok: true });
+        return json({ ok: true, race: !!b.race });
     }
 
     // POST /live/events { runId, events:[...] } — device
@@ -53,11 +68,20 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
         const b = await request.json<{ runId?: string; events?: unknown[] }>();
         if (!b.runId || !Array.isArray(b.events)) return json({ ok: false, error: "runId + events required" }, 400);
-        const row = await env.DB.prepare("SELECT recent_events FROM live_run WHERE run_id = ?").bind(b.runId).first<{ recent_events: string }>();
+        const row = await env.DB.prepare("SELECT recent_events, race FROM live_run WHERE run_id = ?").bind(b.runId).first<{ recent_events: string; race: number }>();
         if (!row) return json({ ok: false, error: "no such live run" }, 404);
         let recent: unknown[] = [];
         try { recent = JSON.parse(row.recent_events); } catch { /* reset */ }
-        recent = recent.concat(b.events).slice(-MAX_RECENT);
+        // The rolling window keeps type/detail/t only; the race table keeps data.
+        const slim = (b.events as Array<Record<string, unknown>>).map((e) => ({ t: e?.t, type: e?.type, detail: e?.detail }));
+        recent = recent.concat(slim).slice(-MAX_RECENT);
+        if (row.race) {
+            const ins = env.DB.prepare("INSERT INTO live_event (run_id, t, type, detail, data) VALUES (?, ?, ?, ?, ?)");
+            const stmts = (b.events as Array<Record<string, unknown>>).map((e) =>
+                ins.bind(b.runId, Number(e?.t ?? 0) | 0, String(e?.type ?? ""), String(e?.detail ?? "").slice(0, 400),
+                    e?.data && typeof e.data === "object" ? JSON.stringify(e.data) : null));
+            for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+        }
         // Pin venue/city so they survive the rolling window (see 0010).
         let venue: string | null = null, city: string | null = null;
         for (const e of b.events as Array<{ type?: string; detail?: string }>) {
@@ -109,6 +133,30 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
             lastEventAt: row.last_event_at, staleSeconds: Math.round(ageMs / 1000),
             eventCount: events.length, recentEvents: events,
             venue: row.venue ?? null, city: row.city ?? null,
+        });
+    }
+
+    // GET /live/feed?since=<id>&limit= — ADMIN or dashboard session: the race
+    // run's append-only events after a cursor, plus the run's facts.
+    if (request.method === "GET" && p === "/live/feed") {
+        if (!isAdminOrSession(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const since = Math.max(0, Number(url.searchParams.get("since") ?? 0) | 0);
+        const limit = Math.min(5000, Math.max(1, Number(url.searchParams.get("limit") ?? 3000) | 0));
+        const wantRun = url.searchParams.get("runId");
+        const run = wantRun
+            ? await env.DB.prepare("SELECT run_id, started_at, last_event_at, ended_at, race, course, venue, city FROM live_run WHERE run_id = ?").bind(wantRun).first<RunRow>()
+            : await env.DB.prepare("SELECT run_id, started_at, last_event_at, ended_at, race, course, venue, city FROM live_run WHERE race = 1 ORDER BY started_at DESC LIMIT 1").first<RunRow>();
+        if (!run) return json({ ok: true, run: null, events: [], next: 0 });
+        const rows = await env.DB.prepare("SELECT id, t, type, detail, data FROM live_event WHERE run_id = ? AND id > ? ORDER BY id LIMIT ?")
+            .bind(run.run_id, since, limit).all<{ id: number; t: number; type: string; detail: string; data: string | null }>();
+        const events = (rows.results ?? []).map((r) => ({ id: r.id, t: r.t, type: r.type, detail: r.detail, data: r.data ? safeParse(r.data) : null }));
+        const ageMs = run.last_event_at ? Date.now() - new Date(run.last_event_at).getTime() : Infinity;
+        return json({
+            ok: true,
+            run: { runId: run.run_id, startedAt: run.started_at, lastEventAt: run.last_event_at, endedAt: run.ended_at,
+                   race: !!run.race, course: run.course, venue: run.venue, city: run.city,
+                   active: !run.ended_at && ageMs < STALE_MS, staleSeconds: Math.round(ageMs / 1000) },
+            events, next: events.length ? events[events.length - 1]!.id : since, more: events.length >= limit, serverTime: now,
         });
     }
 

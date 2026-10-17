@@ -9,6 +9,7 @@ import { rankVenuesHandler } from "./routes/rankVenues";
 import { voiceNoteHandler } from "./routes/voiceNote";
 import { ttsHandler } from "./routes/tts";
 import { liveHandler } from "./routes/live";
+import { racePageHandler } from "./routes/racePage";
 import { agentHandler } from "./routes/agent";
 import { venueSearchHandler } from "./routes/venueSearch";
 import {
@@ -208,6 +209,9 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
     }
     if (url.pathname.startsWith("/live/")) {
         return liveHandler(request, url, env);
+    }
+    if (request.method === "GET" && url.pathname === "/race") {
+        return racePageHandler(request, env);
     }
     if (url.pathname.startsWith("/agent/")) {
         return agentHandler(request, url, env);
