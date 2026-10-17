@@ -453,6 +453,7 @@ actor AIClient {
         let id: Int
         let role: String      // "user" | "agent"
         let text: String
+        let source: String?   // "terminal" | "voice" (said through Siri mid-run) | "spoken" (agent line also played in-run)
         let created_at: String
     }
 
@@ -460,14 +461,20 @@ actor AIClient {
         (Bundle.main.object(forInfoDictionaryKey: "AARCLiveDeviceToken") as? String).flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// Send a line to the agent. Cloudflare only (D1).
-    func agentSend(_ text: String) async throws -> Int {
+    /// Send a line to the agent. Cloudflare only (D1). A voice line carries
+    /// the run it was said in and the km, so the agent knows where he was.
+    func agentSend(_ text: String, source: String = "terminal", runId: String? = nil,
+                   km: Double? = nil, elapsed: Double? = nil) async throws -> Int {
         guard let token = liveDeviceToken else { throw AIError.proxy("no device token") }
         let url = await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/send")
         var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 15
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
-        req.httpBody = try JSONSerialization.data(withJSONObject: ["text": text])
+        var body: [String: Any] = ["text": text, "source": source]
+        if let runId { body["runId"] = runId }
+        if let km { body["km"] = km }
+        if let elapsed { body["elapsed"] = elapsed }
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await session.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

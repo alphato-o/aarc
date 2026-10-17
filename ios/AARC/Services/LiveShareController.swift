@@ -13,6 +13,11 @@ import UIKit
 /// the Control Room can put him on the course map live. Batches that fail to
 /// send are kept and resent in order: the first half hour of the Tianjin
 /// start has no signal, and those events arrive in a burst when it returns.
+///
+/// Talk-back (founder, 2026-10-17): the DOWNLINK (inject poll) runs for every
+/// real run in every mode, uplink or not, so an answer to something he said
+/// through Siri reaches his ears. Polling only asks "is there a line for this
+/// run id"; nothing about the run goes up unless sharing or racing.
 @MainActor
 final class LiveShareController {
     static let shared = LiveShareController()
@@ -21,6 +26,8 @@ final class LiveShareController {
     static var enabled: Bool { UserDefaults.standard.bool(forKey: flagKey) }
 
     private var runId: String?
+    /// True when events go up (sharing on, or actual race). False = downlink only.
+    private(set) var uplink = false
     /// True for an actual-race uplink: every event carries its data map.
     private(set) var raceUplink = false
     private var buffer: [[String: Any]] = []
@@ -38,32 +45,40 @@ final class LiveShareController {
             .flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// Begin streaming for a REAL run. No-op for test/sim runs or when off,
-    /// except in actual race mode, which always uplinks.
+    /// Begin the channel for a REAL run. No-op for test/sim runs. The uplink
+    /// (events going home) needs sharing on or actual race mode; the downlink
+    /// (lines coming back) is always on.
     func startIfEnabled(runId: UUID, isTest: Bool, startedAt: Date) {
         let race = RunOrchestrator.shared.raceMode == .actual
-        guard Self.enabled || race, !isTest, Self.token() != nil else { return }
+        guard !isTest, Self.token() != nil else { return }
         self.runId = runId.uuidString
+        uplink = Self.enabled || race
         raceUplink = race
         buffer = []
         droppedEvents = 0
-        let iso = ISO8601DateFormatter().string(from: startedAt)
-        var start: [String: Any] = ["runId": runId.uuidString, "isTest": false, "startedAt": iso]
-        if race { start["race"] = true; start["course"] = RacePackStore.courseId }
-        Task { _ = await self.send("live/start", start) }
-        flushTask?.cancel(); pollTask?.cancel()
-        flushTask = Task { [weak self] in
-            while !Task.isCancelled { try? await Task.sleep(for: .seconds(12)); await self?.flush() }
+        flushTask?.cancel(); pollTask?.cancel(); flushTask = nil
+        if uplink {
+            let iso = ISO8601DateFormatter().string(from: startedAt)
+            var start: [String: Any] = ["runId": runId.uuidString, "isTest": false, "startedAt": iso]
+            if race { start["race"] = true; start["course"] = RacePackStore.courseId }
+            Task { _ = await self.send("live/start", start) }
+            flushTask = Task { [weak self] in
+                while !Task.isCancelled { try? await Task.sleep(for: .seconds(12)); await self?.flush() }
+            }
         }
         pollTask = Task { [weak self] in
-            while !Task.isCancelled { try? await Task.sleep(for: .seconds(10)); await self?.pollInject() }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(10))
+                await self?.pollInject()
+                await ControlRoomChannel.shared.retryPending()
+            }
         }
-        NSLog("[live] sharing started for real run \(runId.uuidString.prefix(8)) race=\(race)")
+        NSLog("[live] channel up for real run \(runId.uuidString.prefix(8)) uplink=\(uplink) race=\(race)")
     }
 
     /// Mirror a run event into the live feed (called from RunEventLog.record).
     func append(type: String, detail: String, t: Double, data: [String: String] = [:]) {
-        guard runId != nil else { return }
+        guard runId != nil, uplink else { return }
         var ev: [String: Any] = ["t": Int(t), "type": type, "detail": String(detail.prefix(220))]
         if raceUplink, !data.isEmpty { ev["data"] = data }
         buffer.append(ev)
@@ -83,6 +98,8 @@ final class LiveShareController {
         guard let rid = runId else { return }
         flushTask?.cancel(); pollTask?.cancel(); flushTask = nil; pollTask = nil
         let pending = buffer; buffer = []; runId = nil; raceUplink = false
+        let hadUplink = uplink; uplink = false
+        guard hadUplink else { NSLog("[live] channel down"); return }
         Task {
             // Best effort: a couple of tries for the tail, then the end mark.
             var rest = pending

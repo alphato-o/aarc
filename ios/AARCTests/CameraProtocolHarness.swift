@@ -188,3 +188,45 @@ struct RacePackHarness {
         #expect(RacePackLocalLines.all.count == 2)
     }
 }
+
+// MARK: - Talk-back channel (Siri → Control Room)
+
+@Suite("Control Room channel", .serialized)
+@MainActor
+struct ControlRoomChannelHarness {
+    private func fresh() -> (ControlRoomChannel, UserDefaults) {
+        let name = "controlroom-test-\(UUID().uuidString)"
+        let d = UserDefaults(suiteName: name)!
+        d.removePersistentDomain(forName: name)
+        return (ControlRoomChannel(defaults: d), d)
+    }
+
+    @Test("a line said in a dead spot is queued, kept in order, and capped")
+    func queue() {
+        let (ch, _) = fresh()
+        #expect(ch.pending.isEmpty)
+        for i in 0..<60 {
+            ch.pending.append(.init(text: "line \(i)", runId: "r", km: Double(i), elapsed: 1, at: .now))
+        }
+        #expect(ch.pending.count == 50)
+        #expect(ch.pending.first?.text == "line 10")
+        #expect(ch.pending.last?.text == "line 59")
+    }
+
+    @Test("the queue survives a relaunch through its on-disk encoding")
+    func persists() {
+        let (ch, d) = fresh()
+        ch.pending = [.init(text: "hey", runId: nil, km: nil, elapsed: nil, at: .now)]
+        let again = ControlRoomChannel(defaults: d)
+        #expect(again.pending.map(\.text) == ["hey"])
+        again.pending = []
+        #expect(d.data(forKey: "aarc.controlRoom.pending") == nil)
+    }
+
+    @Test("an empty line is a no-op, not a queued blank")
+    func blank() async {
+        let (ch, _) = fresh()
+        #expect(await ch.say("   ") == .sent)
+        #expect(ch.pending.isEmpty)
+    }
+}

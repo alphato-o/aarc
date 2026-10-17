@@ -27,7 +27,8 @@ struct HomeBaseTerminal: View {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(messages) { m in
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(m.role == "agent" ? "home base" : "you")
+                                Text(m.role == "agent" ? (m.source == "spoken" ? "home base (spoken)" : "home base")
+                                     : (m.source == "voice" ? "you (voice)" : "you"))
                                     .font(.system(.caption2, design: .monospaced).bold())
                                     .foregroundStyle(m.role == "agent" ? .green : .cyan)
                                 Text(m.text)

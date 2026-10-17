@@ -33,6 +33,23 @@
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>INAlternativeAppNames</key>
+	<array>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Control Room</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Home Base</string>
+		</dict>
+		<dict>
+			<key>INAlternativeAppName</key>
+			<string>Arc</string>
+			<key>INAlternativeAppNamePronunciationHint</key>
+			<string>ark</string>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>

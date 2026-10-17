@@ -130,6 +130,41 @@ the gate press, which is logged on both. Rehearse without a run with the
 replay script (`scratchpad/tianjin/replay.py`, `SPEED=30`), which plays the
 course through the live endpoints as a race run.
 
+## Talk-back: he speaks, Control Room answers in his ear
+
+Every mode, not only race day. He cannot press buttons or pull the phone out
+mid-run, but a long press on the Powerbeats Pro is Siri, and Siri can hand a
+dictated sentence to the app. "Hey Siri, tell Control Room" (or "talk to
+Control Room", "Home Base listen"; `INAlternativeAppNames` in `Info.plist`
+makes those names resolve to the app) opens the `TellControlRoomIntent`
+(`ios/AARC/Intents/`): Siri asks what to say, he talks, Siri transcribes on
+the earbuds' mic and the app gets text. No app can intercept the earbud button
+itself, and the Now Playing remote commands go to Spotify, so Siri is the only
+hands-free trigger that exists; Siri's own dictation also means no audio
+session juggling mid-run.
+
+`ControlRoomChannel.say` records a `voice.said` run event (so the line shows on
+the Control Room page ticker next to his position when the uplink is on) and
+posts it to `POST /agent/send` with `source: voice`, the run id, the km and the
+elapsed time. No signal (the Tianjin start): the line is queued on disk and
+resent from the in-run poll tick or at the next launch. Siri answers "Sent."
+or "No signal yet. I'll send it when it's back."
+
+The proxy keeps it on the same `agent_thread` as the Home Base terminal
+(migration 0014 adds `source`, `run_id`, `meta`). `private/live-daemon.sh`
+wakes the agent with `VOICE #id [run xxxx at 12.3 km 1h02m in]: ...`. The
+agent answers with `private/reply.sh "<text>"`, which is `POST /agent/reply
+{speak: true}`: the row goes on the thread and, if he is running, also into
+that run's `live_inject` queue in Kristen's voice (`--silent` for the thread
+only; `--run <id>` to target a run explicitly, otherwise the run of his latest
+line within seven hours). `LiveShareController` now polls `/live/inject` for
+every real run in every mode, uplink or not, so the answer is heard whether or
+not he shares live data. The terminal view labels the rows `you (voice)` and
+`home base (spoken)`.
+
+Device-side verification pending: Siri phrase recognition with the earbuds,
+and the audio session handing back cleanly after Siri (build 207).
+
 ## The camera: DJI Osmo Action 6 on the chest mount
 
 Pair once at home, in Settings, "DJI Osmo camera": camera on, tap **Pair the

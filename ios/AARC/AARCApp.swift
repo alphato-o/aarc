@@ -104,6 +104,8 @@ struct AARCApp: App {
                     // another go — the audio is already safe, this is catch-up.
                     await VoiceNoteRecorder.shared.retryPending(
                         context: PersistenceStore.shared.container.mainContext)
+                    // A line said to Control Room in a dead spot goes now.
+                    await ControlRoomChannel.shared.retryPending()
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()
