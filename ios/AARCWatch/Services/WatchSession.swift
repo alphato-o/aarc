@@ -22,6 +22,8 @@ final class WatchSession: NSObject {
 
     /// The coach line currently on screen (mirrored from the phone). nil = none.
     var currentCoachLine: CoachLine?
+    /// The phone has the Control Room mic open: show the Send button.
+    var talkbackListeningSince: Date?
     /// Line ids the runner has hearted this session (so the heart stays filled).
     var heartedLineIds: Set<UUID> = []
 
@@ -313,6 +315,14 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         case .simTrail(let lats, let lons, let kmh, let hr):
             WorkoutSessionHost.shared.ingestSimTrail(lats: lats, lons: lons, kmh: kmh, hr: hr)
 
+        case .talkbackState(let listening):
+            if listening {
+                if talkbackListeningSince == nil { WKInterfaceDevice.current().play(.start) }
+                talkbackListeningSince = talkbackListeningSince ?? Date()
+            } else {
+                talkbackListeningSince = nil
+            }
+
         case .liveMetrics(let m):
             // In a sim mirror, metrics flow phone→watch (reverse of a real run).
             WorkoutSessionHost.shared.ingestSimMetrics(m)
@@ -322,9 +332,18 @@ extension WatchSession: @preconcurrency WCSessionDelegate {
         case .hapticCue, .companionMessageDispatched, .gateCrossed,
              .prepareWorkout, .workoutStarted, .workoutPaused,
              .workoutResumed, .workoutEnded,
-             .heartLine, .startAck, .startDeclined:
+             .heartLine, .startAck, .startDeclined, .talkbackSend:
             break
         }
+    }
+
+    // MARK: - Control Room talk-back
+
+    /// The wrist tap: send (or scrap) what the phone is recording.
+    func sendTalkback(cancel: Bool) {
+        talkbackListeningSince = nil
+        WKInterfaceDevice.current().play(cancel ? .failure : .success)
+        sendStateEvent(.talkbackSend(cancel: cancel))
     }
 
     // MARK: - Coach line (heart-from-watch)

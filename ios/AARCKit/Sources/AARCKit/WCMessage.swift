@@ -60,6 +60,12 @@ public enum WCMessage: Codable, Sendable {
     /// Runner hearted the current coach line from the watch. Carries text+who
     /// so the phone can record the like without a lookup.
     case heartLine(id: UUID, text: String, who: String)
+    /// Phone → watch: the Control Room mic is open (true) or closed (false),
+    /// so the watch can show its Send button.
+    case talkbackState(listening: Bool)
+    /// Watch → phone: the Send (or Scrap) tap. Plan B when the phone misses
+    /// the spoken stop phrase (founder, 2026-10-17).
+    case talkbackSend(cancel: Bool)
 }
 
 public enum HapticCueKind: String, Codable, Sendable {

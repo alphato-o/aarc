@@ -35,6 +35,11 @@ struct WatchRootView: View {
                 idleRoot
             }
         }
+        .overlay {
+            if let since = session.talkbackListeningSince {
+                TalkbackSendOverlay(since: since)
+            }
+        }
         .onChange(of: scenePhase) { _, newPhase in
             // Breadcrumb every scene transition: tells us whether watchOS
             // ever actually foregrounded the app after a remote start

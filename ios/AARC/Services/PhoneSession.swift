@@ -287,6 +287,13 @@ final class PhoneSession: NSObject {
             // Runner hearted the current line from the watch.
             LiveSubtitleStore.shared.likeFromWatch(id: id, text: text, who: who)
 
+        case .talkbackSend(let cancel):
+            Task { @MainActor in
+                guard ControlRoomRecorder.shared.isRecording else { return }
+                ControlRoomChannel.shared.diag("talkback: \(cancel ? "scrapped" : "sent") from the watch")
+                await ControlRoomRecorder.shared.finish(send: !cancel)
+            }
+
         case .endWorkout:
             // The watch ended a desk-sim mirror from the wrist — stop the sim.
             if RunOrchestrator.shared.isSimulating { RunSimulator.shared.end() }
@@ -294,7 +301,7 @@ final class PhoneSession: NSObject {
         // Outbound-only on phone side; ignore if echoed somehow.
         case .startWorkout, .cancelStart, .hapticCue, .markGate,
              .companionMessageDispatched, .scriptReady, .scriptFailed,
-             .coachLine, .simStart, .simEnd, .simTrail:
+             .coachLine, .simStart, .simEnd, .simTrail, .talkbackState:
             break
         }
     }

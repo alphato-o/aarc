@@ -201,6 +201,9 @@ final class ControlRoomRecorder: NSObject {
         claimRemoteCommands()
         if !exclusive { Task { await updateActivity("listening-siri") } }
         lastFinishedAt = nil
+        PhoneSession.shared.sendBestEffort(.talkbackState(listening: true))
+        // Music stays on under his voice by choice (founder, 2026-10-17: "I
+        // can talk over the music"); iOS ducks it.
         observeInterruptions()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -225,6 +228,7 @@ final class ControlRoomRecorder: NSObject {
         // arrived; the app was suspended before the upload).
         let bg = UIApplication.shared.beginBackgroundTask(withName: "talkback-send")
         defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
+        PhoneSession.shared.sendBestEffort(.talkbackState(listening: false))
         if otherAudioAtStart { resumeMusicSoon() }
         lastFinishedAt = .now
         closeSegment()
@@ -296,6 +300,7 @@ final class ControlRoomRecorder: NSObject {
     /// Spotify to resume through the connected account.
     private func resumeMusicSoon() {
         Task {
+            // Only Siri pauses it (the side-button send); wait for Siri first.
             for delay in [5.0, 12.0] {
                 try? await Task.sleep(for: .seconds(delay))
                 let session = AVAudioSession.sharedInstance()
