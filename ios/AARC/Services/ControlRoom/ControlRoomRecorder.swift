@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 import ActivityKit
 import MediaPlayer
 import Observation
@@ -51,6 +52,21 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     private var earcon: AVAudioPlayer?
     private var interruptionObserver: NSObjectProtocol?
     private var finishing = false
+    /// True when the session went non-mixable: the earbud press reaches us.
+    private(set) var exclusive = false
+    private var startSteps = ""
+
+    private static func code(_ error: Error) -> String {
+        let e = error as NSError
+        let fourCC: String = {
+            let c = UInt32(bitPattern: Int32(truncatingIfNeeded: e.code))
+            let bytes = [24, 16, 8, 0].map { UInt8((c >> UInt32($0)) & 0xff) }
+            return bytes.allSatisfy({ $0 >= 32 && $0 < 127 }) ? "'" + String(bytes: bytes, encoding: .ascii)! + "'" : ""
+        }()
+        return "\(e.domain) \(e.code) \(fourCC)"
+    }
+
+    private static var foreground: Bool { UIApplication.shared.applicationState == .active }
 
     static func fileURL(_ id: UUID) -> URL {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -72,14 +88,25 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         VoiceFeedbackQueue.shared.held = true
 
         let session = AVAudioSession.sharedInstance()
+        var steps: [String] = []
         do {
-            // Not mixable on purpose: it pauses the music and makes this app
-            // Now Playing, so the earbud's press comes to us.
-            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
+            // A background app may only activate a MIXABLE session (device,
+            // build 209: a non-mixable one failed with "session activation
+            // failed"). So open the mic mixable first, recording, and only
+            // then try to go exclusive (below), which pauses the music and
+            // makes the earbud press ours.
+            try session.setCategory(.playAndRecord, mode: .default,
+                                    options: [.allowBluetoothHFP, .mixWithOthers, .duckOthers])
             if let bt = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
                 try? session.setPreferredInput(bt)
             }
-            try session.setActive(true)
+            do {
+                try session.setActive(true)
+                steps.append("mixable ok")
+            } catch {
+                steps.append("mixable failed \(Self.code(error))")
+                throw error
+            }
             clientId = UUID()
             let settings: [String: Any] = [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -97,8 +124,25 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
             VoiceFeedbackQueue.shared.held = false
             try? session.setActive(false, options: .notifyOthersOnDeactivation)
             AudioPlaybackManager.shared.reassertAfterRecording()
+            ControlRoomChannel.shared.diag("talkback start failed: \(steps.joined(separator: ", ")); \(Self.code(error)); fg=\(Self.foreground)")
             throw error
         }
+        // Now that we are recording (so, playing audio in the background),
+        // try exclusive: music pauses, Now Playing and the earbud press are ours.
+        do {
+            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
+            try session.setActive(true)
+            exclusive = true
+            steps.append("exclusive ok")
+        } catch {
+            exclusive = false
+            steps.append("exclusive refused \(Self.code(error))")
+            try? session.setCategory(.playAndRecord, mode: .default,
+                                     options: [.allowBluetoothHFP, .mixWithOthers, .duckOthers])
+            try? session.setActive(true)
+        }
+        if recorder?.isRecording != true { recorder?.record() }
+        startSteps = steps.joined(separator: ", ")
 
         isRecording = true
         finishing = false
@@ -150,6 +194,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
             await endActivity(phase: nil)
             return
         }
+        ControlRoomChannel.shared.diag("talkback \(String(format: "%.0f", duration))s: \(startSteps)")
         await updateActivity("sending")
         let outcome = await ControlRoomChannel.shared.sendRecording(
             file: url, clientId: clientId.uuidString, runId: runId, km: km,
@@ -220,7 +265,8 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
     private func startActivity() {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let state = ControlRoomActivityAttributes.ContentState(phase: "listening", startedAt: startedAt ?? .now)
+        let state = ControlRoomActivityAttributes.ContentState(
+            phase: exclusive ? "listening" : "listening-siri", startedAt: startedAt ?? .now)
         activityId = (try? Activity.request(attributes: ControlRoomActivityAttributes(),
                                             content: .init(state: state, staleDate: nil)))?.id
     }

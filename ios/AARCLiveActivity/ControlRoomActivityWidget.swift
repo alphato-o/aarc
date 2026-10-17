@@ -16,7 +16,7 @@ struct ControlRoomActivityWidget: Widget {
                     Text(caption(context.state.phase)).font(.subheadline).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if context.state.phase == "listening" {
+                if context.state.phase.hasPrefix("listening") {
                     Text(context.state.startedAt, style: .timer)
                         .font(.title3.monospacedDigit())
                         .frame(maxWidth: 70, alignment: .trailing)
@@ -30,7 +30,7 @@ struct ControlRoomActivityWidget: Widget {
                     Image(systemName: icon(context.state.phase)).foregroundStyle(tint(context.state.phase))
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    if context.state.phase == "listening" {
+                    if context.state.phase.hasPrefix("listening") {
                         Text(context.state.startedAt, style: .timer).monospacedDigit().frame(maxWidth: 60)
                     }
                 }
@@ -40,7 +40,7 @@ struct ControlRoomActivityWidget: Widget {
             } compactLeading: {
                 Image(systemName: icon(context.state.phase)).foregroundStyle(tint(context.state.phase))
             } compactTrailing: {
-                if context.state.phase == "listening" {
+                if context.state.phase.hasPrefix("listening") {
                     Text(context.state.startedAt, style: .timer).monospacedDigit().frame(maxWidth: 44)
                 }
             } minimal: {
@@ -51,7 +51,7 @@ struct ControlRoomActivityWidget: Widget {
 
     private func icon(_ phase: String) -> String {
         switch phase {
-        case "listening": return "mic.fill"
+        case "listening", "listening-siri": return "mic.fill"
         case "sending": return "arrow.up.circle"
         case "queued": return "clock"
         default: return "checkmark.circle"
@@ -59,12 +59,13 @@ struct ControlRoomActivityWidget: Widget {
     }
 
     private func tint(_ phase: String) -> Color {
-        phase == "listening" ? .red : .green
+        phase.hasPrefix("listening") ? .red : .green
     }
 
     private func caption(_ phase: String) -> String {
         switch phase {
         case "listening": return "Listening. Press your earbud to send."
+        case "listening-siri": return "Listening. Say \"send to Control Room\" when done."
         case "sending": return "Sending"
         case "queued": return "No signal. Sends when it's back."
         default: return "Sent"

@@ -24,7 +24,8 @@ struct TellControlRoomIntent: AudioRecordingIntent {
         } catch {
             return .result(dialog: IntentDialog(stringLiteral: error.localizedDescription))
         }
-        return .result(dialog: "Go.")
+        // Not exclusive: the earbud press still belongs to the music app.
+        return .result(dialog: recorder.exclusive ? "Go." : "Go. Say send to Control Room when you're done.")
     }
 }
 
