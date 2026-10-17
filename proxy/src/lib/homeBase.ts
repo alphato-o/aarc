@@ -7,7 +7,7 @@ import { callLLM, LLMEnv } from "./llm";
 import { fetchAmbient, type AmbientInput, type AmbientEnv } from "./ambient";
 import { fetchLocalIntel, formatLocalIntel, type AmapEnv } from "./amap";
 import { fetchBriefing, type BriefingEnv } from "./briefing";
-import { pushCourseBlock } from "./course";
+import { pushCourseBlock, NAMES_RULE } from "./course";
 
 export const HOME_BASE_VOICE_ID = "Awx8TeMHHpDzbm42nIB6";
 
@@ -41,7 +41,10 @@ const SYSTEM = `You are HOME BASE: the machine at the desk, the third voice on a
 
 Register: dry, precise, faintly clinical, a flight controller who has read the whole file. You mock with the RECORD, never with imagery or filth. You speak in the second person. Use "Alpha" sparingly, like a callsign. You may be warm the way an instrument is warm: by reporting something true and good without softening it.
 
+On race day you are also the one who read the city's file: the course notes carry true history and places (STORY HERE). When there is a story at his kilometre, tell it, two sentences, the way a flight controller would brief a crew on the terrain: the fact, precise, then what it means for him right now. You are the tour guide with the clipboard; Ricky and Jessica are the hecklers.
+Shape, which must CHANGE every kilometre: sometimes numbers first, sometimes the place first, sometimes one sentence of weather or the camera first and the split last. Never open two readouts the same way. Never close on a stock phrase ("hold it", "keep it there", "steady"): close on a fact, a number that matters next, or the name of what is coming.
 Hard rules:
+- ${NAMES_RULE}
 - Never state a number that is not in the DATA below. If a comparison is unavailable, say nothing about it.
 - Plain speech for the ear: no lists, no headers, no emoji, no markdown, digits as words only where a listener would say them ("five twenty" for 5:20/km is good; "27 minutes 40" is good).
 - No em-dashes. Short sentences.
@@ -51,7 +54,10 @@ Hard rules:
 export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Promise<{ text: string; model: string }> {
     const c = input.runContext;
     const lines: string[] = [];
-    lines.push(`KILOMETRE ${input.km} just crossed. Deliver the readout: 4 to 6 sentences, 25 to 40 seconds spoken. Order: the split and the average first, then heart rate, then ONE thing from history, surroundings, weather or the control room that is worth his attention right now. End on the number that matters for the next kilometre.`);
+    const race = (c as { raceMode?: string }).raceMode === "actual";
+    lines.push(race
+        ? `KILOMETRE ${input.km} just crossed. Deliver the readout: 5 to 7 sentences, 30 to 45 seconds spoken. Include the split, the average and the heart rate somewhere, in your own order, plus the STORY HERE if the course block has one (told, not read), plus one live thing if it matters (weather, air, the camera, the control room). Vary the shape from the RECENT LINES. End on what is coming next on the course or the number that decides the next kilometre.`
+        : `KILOMETRE ${input.km} just crossed. Deliver the readout: 4 to 6 sentences, 25 to 40 seconds spoken. Include the split and the average, then heart rate, then ONE thing from history, surroundings, weather or the control room that is worth his attention right now, in an order that differs from the RECENT LINES. End on the number that matters for the next kilometre.`);
     lines.push("");
     lines.push("DATA (the only facts you may use):");
     lines.push(`- run clock: ${fmtClock(c.elapsedSeconds)}`);

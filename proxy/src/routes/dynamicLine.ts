@@ -6,7 +6,7 @@ import {
 } from "../schemas";
 import { systemPromptFor, runPhaseBlock } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
-import { pushCourseBlock } from "../lib/course";
+import { pushCourseBlock, pushStoryDirective } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
@@ -207,6 +207,7 @@ async function buildUserPrompt(req: DynamicLineRequest, env: Env): Promise<strin
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);
     await pushBriefingBlock(lines, env, "ricky");
+    pushStoryDirective(lines, c.raceMode, c.distanceMeters, "ricky");
 
     if (req.customNote && req.customNote.trim().length > 0) {
         lines.push("");

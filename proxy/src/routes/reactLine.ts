@@ -7,7 +7,7 @@ import {
 import { reactModeFor, systemPromptFor, runPhaseBlock, jessicaBroadcastPrompt, JessicaLengthMode } from "../lib/personalities";
 import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
-import { pushCourseBlock } from "../lib/course";
+import { pushCourseBlock, pushStoryDirective } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
@@ -242,6 +242,7 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
     }
     pushPlaceBlock(lines, c.place);
     pushCourseBlock(lines, c.raceMode, c.distanceMeters);
+    pushStoryDirective(lines, c.raceMode, c.distanceMeters, "jessica");
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);

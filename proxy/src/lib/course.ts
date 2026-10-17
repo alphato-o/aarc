@@ -7,6 +7,7 @@
 /// lines are specific to the kilometre he is running, not generic.
 
 import tianjin from "../data/courses/tianjin-2026.json";
+import tianjinStories from "../data/courses/tianjin-2026-stories.json";
 
 export interface CourseKm {
     km: number;
@@ -17,6 +18,15 @@ export interface CourseKm {
     stations?: string[];
 }
 
+/// A story tied to a point on the course: told once, around `atM`, in the
+/// voice of whoever is speaking. The facts are true; the jokes are theirs.
+export interface CourseStory {
+    atM: number;
+    span: number;
+    title: string;
+    text: string;
+}
+
 export interface Course {
     id: string;
     name: string;
@@ -25,9 +35,15 @@ export interface Course {
     km: CourseKm[];
     /// (lon, lat, official metres) samples along the route, GCJ-02.
     polyline: [number, number, number][];
+    /// The story pack (founder, 2026-10-17): the city, its history and the
+    /// places on the route, so every voice can be a tour guide with a twist.
+    stories?: CourseStory[];
+    city?: string[];
 }
 
-const COURSES: Record<string, Course> = { tianjin2026: tianjin as unknown as Course };
+const COURSES: Record<string, Course> = {
+    tianjin2026: { ...(tianjin as unknown as Course), stories: tianjinStories.stories as CourseStory[], city: tianjinStories.city as string[] },
+};
 
 export function courseById(id: string): Course | null {
     return COURSES[id] ?? null;
@@ -39,6 +55,22 @@ export function courseFor(raceMode: string | undefined): Course | null {
 }
 
 function fmtKm(m: number): string { return (m / 1000).toFixed(1); }
+
+/// The race is recorded for an English-speaking audience and the voices read
+/// Chinese characters aloud in Mandarin (founder, 2026-10-17: "the
+/// pronunciation is usually funny"). Every Chinese name he hears needs the
+/// English right behind it.
+export const NAMES_RULE = "NAMES, a hard rule for race mode: every Chinese place name you say gets its English meaning or a plain description right after it, the first time, in the same breath: \"马场道, Racecourse Road\", \"鼓楼, the Drum Tower\", \"天津之眼, the Tianjin Eye, the Ferris wheel on the bridge\", \"海河, the Haihe river\". Use the English the course file gives; where it gives none, describe the thing (\"the river road\", \"the station square\"). Never a run of two Chinese names with no English between them. One Chinese name per sentence at most; English names (the Astor, Nankai, the Water Drop) need no Chinese.";
+
+/// The story for this point (covering it, or the next one within `aheadM`).
+export function storyAt(course: Course, distanceMeters: number, aheadM = 700): { here: CourseStory | null; next: CourseStory | null } {
+    const list = course.stories ?? [];
+    let here: CourseStory | null = null;
+    for (const st of list) if (distanceMeters >= st.atM - 150 && distanceMeters <= st.atM + st.span) { here = st; break; }
+    if (!here) for (const st of list) if (st.atM > distanceMeters && st.atM - distanceMeters <= aheadM) { here = st; break; }
+    const next = list.find((st) => st.atM > (here ? here.atM : distanceMeters) + 100) ?? null;
+    return { here, next };
+}
 
 /// Where he is on the course and what is ahead, as prompt lines.
 export function courseBlock(course: Course, distanceMeters: number): string[] {
@@ -63,6 +95,18 @@ export function courseBlock(course: Course, distanceMeters: number): string[] {
     if (station) out.push(`- next aid station: km ${station.km}, ${Math.round((station.km * 1000 - d) / 100) * 100} m ahead (${station.stations!.join(", ")})`);
     out.push(`- remaining: ${fmtKm(course.totalM - d)} km to the finish at 天津奥林匹克中心 (the Water Drop stadium)`);
     out.push("Use these as the REAL surroundings when the live GPS block is thin or absent; name the places as given, in Chinese where they are Chinese. The course is flat; the only climbs are the bridges. Do not recite the list; pick the one thing that sharpens the line.");
+    out.push(NAMES_RULE);
+    const st = storyAt(course, d);
+    if (st.here) {
+        out.push("");
+        out.push(`STORY HERE (${st.here.title}; true, from the course file): ${st.here.text}`);
+        out.push("Tell it the way a tour guide would if the tour guide were you: one or two sentences of the fact, in your own register, hung on what he is doing right now. Never read it out; pick the detail with the most bite. Do not tell the same story twice in a run.");
+    }
+    if (st.next) out.push(`- coming up at km ${fmtKm(st.next.atM)}: ${st.next.title}`);
+    if (course.city?.length) {
+        const pick = course.city[Math.floor(d / 7000) % course.city.length];
+        if (pick) out.push(`- the city, for colour: ${pick}`);
+    }
     return out;
 }
 
@@ -86,5 +130,35 @@ export function courseScriptBlock(course: Course): string[] {
         if (k.stations?.length) bits.push(`station: ${k.stations.join(", ")}`);
         out.push(`- km ${k.km}: ${bits.join("; ")}${k.note ? `. ${k.note}` : ""}`);
     }
+    if (course.city?.length) {
+        out.push("");
+        out.push("THE CITY (true; material for the whole script):");
+        for (const c of course.city) out.push(`- ${c}`);
+    }
+    out.push("");
+    out.push(NAMES_RULE);
+    if (course.stories?.length) {
+        out.push("");
+        out.push("STORIES ALONG THE COURSE (true; each gets ONE line, at the metres given, told your way):");
+        for (const st of course.stories) out.push(`- at ${st.atM} m, "${st.title}": ${st.text}`);
+    }
     return out;
+}
+
+/// True when a story covers this point: the line that fires here is the
+/// tour-guide line and must not be withheld or swapped for a flash.
+export function storyHere(raceMode: string | undefined, distanceMeters: number): CourseStory | null {
+    const course = courseFor(raceMode);
+    if (!course) return null;
+    return storyAt(course, distanceMeters, 0).here;
+}
+
+/// A closing directive for a voice's prompt: this line carries the story.
+export function pushStoryDirective(lines: string[], raceMode: string | undefined, distanceMeters: number, who: "ricky" | "jessica"): void {
+    const st = storyHere(raceMode, distanceMeters);
+    if (!st) return;
+    lines.push("");
+    lines.push(who === "ricky"
+        ? `THIS LINE IS THE TOUR-GUIDE LINE. It must carry the STORY HERE ("${st.title}"): one true, specific detail from it, named as the file names it, then your angle on him. The live shop list and the weather do not matter for this line; the story does.`
+        : `THIS LINE RIDES THE STORY HERE ("${st.title}"). If his line told it, add the detail he left out or turn it on him; if his line ignored it, you tell it, one true detail, your register. Never repeat his wording.`);
 }

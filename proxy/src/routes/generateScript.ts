@@ -43,7 +43,7 @@ export async function generateScriptHandler(
     const userPrompt = await buildUserPrompt(req, env);
     // The race pack carries ~30 one-shot course lines on top of the usual
     // skeleton; the normal budget would truncate the JSON mid-array.
-    const maxTokens = racePackCourse(req) ? 8192 : 4096;
+    const maxTokens = racePackCourse(req) ? 16000 : 4096;
 
     let validated: { data: ReturnType<typeof ScriptSchema.parse> };
     let provider: "openrouter" | "anthropic";
@@ -87,10 +87,13 @@ export async function generateScriptHandler(
         return json({ ok: false, error: "upstream", detail: desc.message }, { status: desc.httpStatus });
     }
 
+    // Race pack: a one-shot on a round kilometre would stack on the kilometre
+    // call, which Home Base owns. Nudge any such line to +350 m, keeping order.
+    const messages = racePackCourse(req) ? nudgeOffKilometres(validated.data) : validated.data;
     const response: GenerateScriptResponse & { provider: string } = {
         scriptId: crypto.randomUUID(),
         model,
-        messages: validated.data,
+        messages,
         provider,
     };
     return json({ ok: true, ...response });
@@ -129,11 +132,11 @@ async function buildUserPrompt(
             "RACE DAY SCRIPT. This is a PRE-BAKED OFFLINE PACK, generated at home the night before the race and played from the phone's own storage:",
             `- The run is the ${course.name} on ${course.date}, 42.2 km, his FIRST full marathon. The first 30 minutes are in a crowd with no phone signal, so this script is the only voice he hears until the network comes back, and it is the fallback for any kilometre the live voices cannot reach him later.`,
             "- He starts the race clock himself at the timing gate; distance 0 is the gate, not the corral.",
-            "- ON TOP of the required messages, write ONE-SHOT COURSE LINES: {\"type\":\"distance\",\"atMeters\":N}, each tied to a real place from the course list below. Cover kilometres 1 to 8 one by one (that is the no-signal stretch; every one of them gets a line), then the landmarks: the Astor Hotel (km 5), the 鄱阳路 turnaround (12.5), 春意桥 (13), the half (21), the Century Clock at 天津站 (23), 天津之眼 on 永乐桥 (27.5), 鼓楼 (29), km 30, km 35, the universities on 大学道 (37), 水上公园 (39), the stadium in sight (41). Place every atMeters MID-kilometre (for example 1450, 4600, 12400, 27600) so it never lands on the kilometre call itself, which another voice owns.",
-            "- Each course line NAMES the actual place (Chinese names exactly as given) and uses it: what he can see, what the crowd is doing, what the aid station has, what the bridge does to his legs, how far to the next water. Keep the place facts true to the list; invent only the jokes.",
-            "- The per-km loop pool: 8 variants, race-flavoured (bibs, crowds, gels, cups, the 30 km wall, his first marathon), none naming a kilometre.",
+            "- ON TOP of the required messages, write ONE-SHOT STORY LINES: {\"type\":\"distance\",\"atMeters\":N}, one for EVERY story in the STORIES ALONG THE COURSE list below, at the metres given (shift each by 150 to 500 m so it never lands on a round kilometre, which another voice owns; keep them in order). You are the tour guide on this run, and the tour guide is Ricky: the fact is true and specific (the last emperor dancing at the Astor, Liddell's Sunday, the bridge where the army met, the walls the occupiers pulled down), the angle is yours, and it lands on HIM, on what he is doing at that moment. Kilometres 1 to 8 are the no-signal stretch: make sure each of them has a line.",
+            "- Name the actual places (Chinese names exactly as given, with the English the file gives). Keep every historical fact exactly as the file states it; invent only the jokes. Never recite; one or two sentences of fact per line, then the knife.",
+            "- The per-km loop pool: 8 variants, race-flavoured (bibs, crowds, gels, cups, the 30 km wall, his first marathon, the city of jokes), none naming a kilometre.",
             "- The HALFWAY line is the half-marathon mat; the NEAR-FINISH line is the last 100 m along the stadium; the FINISH line is the finish, so this once it IS the end.",
-            "- Message count for THIS script: 25 to 35 (the normal 8 to 14 limit does not apply here).",
+            "- Message count for THIS script: 38 to 48 (the normal 8 to 14 limit does not apply here).",
         );
         for (const l of courseScriptBlock(course)) lines.push(l);
     }
@@ -162,6 +165,17 @@ async function buildUserPrompt(
     await pushBriefingBlock(lines, env, "ricky", { chance: 1 });
     lines.push("", "Generate the script now. JSON only.");
     return lines.join("\n");
+}
+
+function nudgeOffKilometres<T extends { triggerSpec: { type: string; atMeters?: number } }>(messages: T[]): T[] {
+    return messages.map((m) => {
+        const at = m.triggerSpec.atMeters;
+        if (m.triggerSpec.type !== "distance" || at === undefined) return m;
+        const rem = at % 1000;
+        if (rem >= 200 && rem <= 800) return m;
+        const base = rem < 200 ? at - rem : at - rem + 1000;
+        return { ...m, triggerSpec: { ...m.triggerSpec, atMeters: base + 350 } };
+    });
 }
 
 function racePackCourse(req: z.infer<typeof GenerateScriptRequestSchema>) {

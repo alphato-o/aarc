@@ -10,6 +10,7 @@ import { voiceNoteHandler } from "./routes/voiceNote";
 import { ttsHandler } from "./routes/tts";
 import { liveHandler } from "./routes/live";
 import { racePageHandler } from "./routes/racePage";
+import { storyHere } from "./lib/course";
 import { agentHandler } from "./routes/agent";
 import { venueSearchHandler } from "./routes/venueSearch";
 import {
@@ -132,7 +133,10 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         let peek: any = null;
         try { peek = await request.clone().json(); } catch { peek = null; }
         const mode = peek?.runContext?.raceMode;
-        if (mode === "training" || mode === "actual") {
+        // A story on the course at this point is never withheld: that line is
+        // the tour guide's (founder, 2026-10-17).
+        const story = mode ? storyHere(mode, Number(peek?.runContext?.distanceMeters ?? 0)) : null;
+        if ((mode === "training" || mode === "actual") && !story) {
             const withheld = { ok: false, error: "race mode: line withheld" };
             const r = Math.random();
             if (url.pathname !== "/dynamic-line") {
