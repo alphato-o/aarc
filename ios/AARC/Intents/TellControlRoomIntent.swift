@@ -24,6 +24,8 @@ struct TellControlRoomIntent: AppIntent {
         switch outcome {
         case .sent:
             return .result(dialog: "Sent.")
+        case .listening:
+            return .result(dialog: "Sent. Control Room will answer.")
         case .queued:
             return .result(dialog: "No signal yet. I'll send it when it's back.")
         }

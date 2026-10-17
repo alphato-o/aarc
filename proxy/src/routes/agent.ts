@@ -93,7 +93,9 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
             }
         }
         const r = await env.DB.prepare("INSERT INTO agent_thread (role, text, source, run_id) VALUES ('agent', ?, ?, ?)")
-            .bind(text, spokenTo ? "spoken" : null, spokenTo).run();
+            // "spoken" even with no run: off-run the phone waits on the thread
+            // for this row and plays it (founder, 2026-10-17).
+            .bind(text, b.speak ? "spoken" : null, spokenTo).run();
         return json({ ok: true, id: r.meta.last_row_id, spokenTo });
     }
 

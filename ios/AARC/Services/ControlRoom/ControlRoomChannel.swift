@@ -15,7 +15,9 @@ import Observation
 final class ControlRoomChannel {
     static let shared = ControlRoomChannel()
 
-    enum Outcome: Equatable { case sent, queued }
+    /// `.listening`: sent with no run on; the app stays awake and speaks the
+    /// answer when it comes.
+    enum Outcome: Equatable { case sent, listening, queued }
 
     struct Pending: Codable, Equatable {
         let text: String
@@ -28,6 +30,10 @@ final class ControlRoomChannel {
     private static let pendingKey = "aarc.controlRoom.pending"
     private let defaults: UserDefaults
     private var retrying = false
+    private var earTask: Task<Void, Never>?
+    /// How long to stay awake for an answer off-run. The agent answers from
+    /// the ear loop (5 s poll) plus thinking time; three minutes is generous.
+    static let earWindow: TimeInterval = 180
     private(set) var lastSent: Date?
     private(set) var lastError: String?
 
@@ -63,9 +69,65 @@ final class ControlRoomChannel {
             RunEventLog.shared.record("voice.said", text, data: ["source": "siri"])
         }
         let item = Pending(text: text, runId: runId, km: km, elapsed: elapsed, at: .now)
-        if await send(item) { return .sent }
+        // Off-run (founder, 2026-10-17: "even if AARC is not running I want to
+        // hear your response"): start the silent keepalive BEFORE the network
+        // call, while Siri still has the app executing, so iOS keeps it awake
+        // in the background until the answer is spoken.
+        let offRun = runId == nil
+        if offRun { holdAwake() }
+        if let id = await send(item) {
+            if offRun { listenForAnswer(after: id); return .listening }
+            return .sent
+        }
+        if offRun { releaseAwake() }
         pending.append(item)
         return .queued
+    }
+
+    // MARK: - Off-run answer
+
+    /// In a run the answer comes through the run's inject poll; off-run there
+    /// is no poll, so wait on the thread for the agent's spoken row.
+    private func listenForAnswer(after id: Int) {
+        earTask?.cancel()
+        earTask = Task { [weak self] in
+            let deadline = Date.now.addingTimeInterval(Self.earWindow)
+            var answered = false
+            while !Task.isCancelled, Date.now < deadline, !answered {
+                try? await Task.sleep(for: .seconds(3))
+                // A run that started meanwhile owns the reply via inject.
+                if LiveMetricsConsumer.shared.currentRunId != nil { break }
+                guard let rows = try? await AIClient.shared.agentThread(since: id) else { continue }
+                for row in rows where row.role == "agent" && row.source == "spoken" {
+                    Speaker.shared.speak(row.text, priority: .milestone, source: "home",
+                                         expiresAfter: 120, voiceId: RemoteTTS.homeVoiceId)
+                    answered = true
+                }
+            }
+            if answered {
+                // Stay awake until the line has actually played.
+                let playDeadline = Date.now.addingTimeInterval(90)
+                try? await Task.sleep(for: .seconds(2))
+                while Date.now < playDeadline,
+                      VoiceFeedbackQueue.shared.currentlyPlaying != nil || !VoiceFeedbackQueue.shared.pending.isEmpty {
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+            self?.releaseAwake()
+        }
+    }
+
+    private func holdAwake() {
+        guard LiveMetricsConsumer.shared.currentRunId == nil else { return }
+        AudioPlaybackManager.shared.beginSustained()
+        BackgroundAudioKeepalive.shared.start()
+    }
+
+    private func releaseAwake() {
+        // Never pull the audio out from under a run that started meanwhile.
+        guard LiveMetricsConsumer.shared.currentRunId == nil else { return }
+        BackgroundAudioKeepalive.shared.stop()
+        AudioPlaybackManager.shared.endSustained()
     }
 
     /// Resend whatever is queued. Called from the in-run poll tick and on
@@ -75,22 +137,23 @@ final class ControlRoomChannel {
         retrying = true
         defer { retrying = false }
         while let item = pending.first {
-            guard await send(item) else { return }
+            guard await send(item) != nil else { return }
             pending.removeFirst()
         }
     }
 
-    private func send(_ item: Pending) async -> Bool {
+    /// The thread row id on success.
+    private func send(_ item: Pending) async -> Int? {
         do {
-            _ = try await AIClient.shared.agentSend(item.text, source: "voice", runId: item.runId,
-                                                     km: item.km, elapsed: item.elapsed)
+            let id = try await AIClient.shared.agentSend(item.text, source: "voice", runId: item.runId,
+                                                          km: item.km, elapsed: item.elapsed)
             lastSent = .now
             lastError = nil
-            return true
+            return id
         } catch {
             lastError = error.localizedDescription
             NSLog("[controlroom] send failed, queued: \(error.localizedDescription)")
-            return false
+            return nil
         }
     }
 }
