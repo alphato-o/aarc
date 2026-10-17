@@ -203,8 +203,15 @@ final class ControlRoomChannel {
         retrying = true
         defer { retrying = false }
         while let item = pending.first {
-            guard await send(item) != nil else { return }
+            guard let id = await send(item) else { return }
             pending.removeAll { $0 == item }
+            // A recorded line delivered late off-run still deserves a spoken
+            // answer (17 Oct: the recovered 111 s line was answered in
+            // silence). Only one listener at a time; the newest wins.
+            if item.audioFile != nil, item.runId == nil, id > 0, LiveMetricsConsumer.shared.currentRunId == nil {
+                holdAwake()
+                listenForAnswer(after: id)
+            }
         }
     }
 
@@ -221,6 +228,13 @@ final class ControlRoomChannel {
                 }
                 lastUpload = .uploading
                 let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+                // An empty file is a recording that never got audio: nothing to send.
+                if size < 1024 {
+                    try? FileManager.default.removeItem(at: url)
+                    await diagNow("talkback: dropped an empty recording (\(size) bytes)")
+                    lastUpload = .failed
+                    return -1
+                }
                 let r: (id: Int, text: String)
                 do {
                     r = try await AIClient.shared.agentVoice(file: url, clientId: clientId, runId: item.runId,
