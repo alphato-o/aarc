@@ -30,6 +30,8 @@
 | ✅ 3.1.10 | Offline race pack: race script with course one-shots generated at home, every line rendered to audio, used as the script in Actual race mode; Home Base km readout falls back to Ricky's scripted line offline; local gate line | `Services/RacePack/*`, Settings "Race pack (offline)", build 204 | Airplane mode after the start: km lines and the gate line still play |
 | ✅ 3.1.11 | Jessica broadcast-safe in race modes (hints and swearing stay; nothing explicit) | proxy `personalities.ts` (private) | A race-mode reaction never contains explicit content |
 
+| ✅ 3.1.12 | Race-day live uplink (GPS, battery, resend) in Actual race mode, append-only race feed, Control Room page my.aarun.club/race driven in Phi Browser for the video B-roll | iOS build 205, proxy `live_event` + `routes/racePage.ts` | Replay script shows the runner moving on the course; real-run check on the next training race |
+
 ### 3.2 — Branched script generation
 
 | # | Task | Deliverable | Acceptance |

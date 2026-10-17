@@ -151,7 +151,7 @@ final class RunEventLog {
         }
 
         // Mirror into the live "back home" feed (no-op unless sharing is on).
-        LiveShareController.shared.append(type: type, detail: detail, t: event.t)
+        LiveShareController.shared.append(type: type, detail: detail, t: event.t, data: data)
 
         guard activeRunId != nil, let handle = fileHandle else { return }
         guard var line = try? encoder.encode(event) else { return }
@@ -220,6 +220,27 @@ final class RunEventLog {
     /// dashboard time-series stays dense without one row per 1Hz tick.
     /// No-op outside an active run. Values map to the shared contract
     /// data shape {"d","p","hr","v"} as strings; nil → "".
+    private var lastBatteryEmit: Date?
+    private var lastBatteryKey = ""
+    /// Watch and phone battery, every 5 minutes or on a 5-point change. The
+    /// Control Room watches both on race day; the camera reports its own.
+    func recordBattery(watch: Double?, phone: Double?) {
+        guard activeRunId != nil else { return }
+        func pct(_ v: Double?) -> String {
+            guard let v, v >= 0 else { return "" }
+            return String(Int((v * 100).rounded()))
+        }
+        let key = "\(pct(watch))/\(pct(phone))"
+        let now = Date()
+        let due = lastBatteryEmit.map { now.timeIntervalSince($0) >= 300 } ?? true
+        let changed = key != lastBatteryKey && (abs((watch ?? 0) * 100 - (Double(lastBatteryKey.split(separator: "/").first ?? "") ?? 0)) >= 5
+                                                || abs((phone ?? 0) * 100 - (Double(lastBatteryKey.split(separator: "/").last ?? "") ?? 0)) >= 5)
+        guard due || changed else { return }
+        lastBatteryEmit = now
+        lastBatteryKey = key
+        record("battery", "watch=\(pct(watch)) phone=\(pct(phone))", data: ["watch": pct(watch), "phone": pct(phone)])
+    }
+
     func recordMetrics(distanceMeters: Double, paceSecPerKm: Double?, hr: Double?, speedMps: Double?) {
         guard activeRunId != nil else { return }
         let bucket = Int(distanceMeters / 100)

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import Observation
 import SwiftData
 import HealthKit
@@ -196,6 +197,10 @@ final class LiveMetricsConsumer {
             hr: metrics.currentHeartRate,
             speedMps: speedMps
         )
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        let phoneBattery = UIDevice.current.batteryLevel
+        RunEventLog.shared.recordBattery(watch: metrics.watchBatteryLevel,
+                                         phone: phoneBattery >= 0 ? Double(phoneBattery) : nil)
         // Live Activity (lock screen + Dynamic Island). Throttled
         // internally to ~1Hz.
         LiveActivityController.shared.update(

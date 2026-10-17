@@ -77,6 +77,33 @@ pack is the answer: build it at home the night before, on Wi‑Fi.
 4. The gate press speaks a local Home Base line ("Gate. Race clock running.")
    with no proxy in the loop.
 
+## The Control Room page: where he is, live
+
+In **Actual race** mode the phone's live uplink is always on (no toggle) and
+carries the full event data: a GPS fix every 20 m with speed and heart rate,
+the metrics line, watch and phone battery every five minutes, the camera
+events, the gate press and every spoken line. Batches that cannot be sent are
+kept and resent in order, so the no-signal first half hour arrives in a burst
+when the signal returns. The Worker stores a race run's events append-only
+(`live_event`), so the whole race can be replayed; `GET /live/feed?since=`
+returns them after a cursor.
+
+`https://my.aarun.club/race` (dashboard login, or once with
+`?key=<LIVE_ADMIN_TOKEN>` from the agent's own browser) draws the runner on
+the course over relayed Amap tiles: a follow view at street level, an
+overview of the whole course, the race clock from the gate, distance, pace,
+average, heart rate, projected finish, next aid station, batteries, camera,
+and a ticker of every line Ricky, Jessica and Home Base said. It polls every
+8 s, retries on its own and shows LIVE / STALE / NO SIGNAL from the age of the
+last event. No external dependencies.
+
+For the race video the Control Room agent drives Phi Browser on the mini
+(`phi-browser` skill, agent Space `aarc-race-control-room`) to show the page
+next to its terminal; that screen is the B-roll, synced to the DJI A-roll by
+the gate press, which is logged on both. Rehearse without a run with the
+replay script (`scratchpad/tianjin/replay.py`, `SPEED=30`), which plays the
+course through the live endpoints as a race run.
+
 ## The camera: DJI Osmo Action 6 on the chest mount
 
 Pair once at home, in Settings, "DJI Osmo camera": camera on, tap **Pair the
@@ -131,6 +158,8 @@ line through `/live/inject` in the Home Base voice saying exactly what to press.
   race; race mode set to **Actual race**; live share on.
 - Race pack built the night before for the 42.2 km outdoor plan, Settings
   shows every line rendered and no "different plan" warning.
+- Control Room page open in Phi on the mini and showing LIVE once the session
+  starts in the corral; screen recording running on the mini.
 - Camera: fresh battery, card formatted, Video mode, chest mount tight,
   Bluetooth on (Settings, Wireless connection). Pairing already done at home.
 - Powerbeats charged and connected before the corral.
