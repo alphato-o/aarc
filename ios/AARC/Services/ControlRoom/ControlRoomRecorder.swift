@@ -20,11 +20,12 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     static let shared = ControlRoomRecorder()
 
     enum RecorderError: LocalizedError {
-        case noMicPermission, couldNotStart
+        case noMicPermission, couldNotStart, noLiveActivity(String)
         var errorDescription: String? {
             switch self {
             case .noMicPermission: return "AARC has no microphone access. Open the app once to allow it."
             case .couldNotStart: return "Couldn't open the microphone."
+            case .noLiveActivity: return "Couldn't show the recording banner, so I didn't open the mic. Check Live Activities for AARC in Settings."
             }
         }
     }
@@ -81,6 +82,13 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         // A background start cannot show the permission prompt.
         guard AVAudioApplication.shared.recordPermission == .granted else { throw RecorderError.noMicPermission }
 
+        // The Live Activity FIRST. AppIntents traps the app ("performed with
+        // an active audio session but without a Live Activity") if the mic
+        // opens without one: that was every crash on builds 209 to 211.
+        startedAt = .now
+        exclusive = false
+        if let reason = startActivity() { throw RecorderError.noLiveActivity(reason) }
+
         let consumer = LiveMetricsConsumer.shared
         runId = consumer.currentRunId?.uuidString
         km = consumer.latest.map { $0.distanceMeters / 1000 }
@@ -123,6 +131,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
             recorder = r
         } catch {
             VoiceFeedbackQueue.shared.held = false
+            Task { await endActivity(phase: nil) }
             try? session.setActive(false, options: .notifyOthersOnDeactivation)
             AudioPlaybackManager.shared.reassertAfterRecording()
             ControlRoomChannel.shared.diag("talkback start failed: \(steps.joined(separator: ", ")); \(Self.code(error)); fg=\(Self.foreground)")
@@ -147,11 +156,10 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
         isRecording = true
         finishing = false
-        startedAt = .now
         heardSpeechAt = nil
         heals = 0
         claimRemoteCommands()
-        startActivity()
+        if !exclusive { Task { await updateActivity("listening-siri") } }
         observeInterruptions()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -241,11 +249,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         for command in [center.togglePlayPauseCommand, center.pauseCommand, center.playCommand,
                         center.nextTrackCommand] {
             command.isEnabled = true
-            let target = command.addTarget { [weak self] _ in
-                Task { @MainActor in await self?.finish(send: true) }
-                return .success
-            }
-            commandTargets.append((command, target))
+            commandTargets.append((command, command.addTarget(handler: Self.remoteHandler())))
         }
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: "Listening",
@@ -253,6 +257,16 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
             MPNowPlayingInfoPropertyPlaybackRate: 1.0,
         ]
         MPNowPlayingInfoCenter.default().playbackState = .playing
+    }
+
+    /// Built outside the main actor on purpose: MediaPlayer calls it on its
+    /// own queue, and a main-actor closure there is a runtime isolation trap.
+    private nonisolated static func remoteHandler()
+        -> @Sendable (MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        { _ in
+            Task { @MainActor in await ControlRoomRecorder.shared.finish(send: true) }
+            return .success
+        }
     }
 
     private func releaseRemoteCommands() {
@@ -267,11 +281,12 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     private func observeInterruptions() {
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
-        ) { [weak self] note in
+        ) { note in
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
             Task { @MainActor in
-                guard let self, self.isRecording, let r = self.recorder else { return }
+                let me = ControlRoomRecorder.shared
+                guard me.isRecording, let r = me.recorder else { return }
                 try? AVAudioSession.sharedInstance().setActive(true)
                 r.record()
             }
@@ -280,12 +295,18 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
     // MARK: - Live Activity (required for a background recording)
 
-    private func startActivity() {
-        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
-        let state = ControlRoomActivityAttributes.ContentState(
-            phase: exclusive ? "listening" : "listening-siri", startedAt: startedAt ?? .now)
-        activityId = (try? Activity.request(attributes: ControlRoomActivityAttributes(),
-                                            content: .init(state: state, staleDate: nil)))?.id
+    /// nil on success, else why it failed.
+    private func startActivity() -> String? {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return "Live Activities are off for AARC" }
+        let state = ControlRoomActivityAttributes.ContentState(phase: "listening", startedAt: startedAt ?? .now)
+        do {
+            activityId = try Activity.request(attributes: ControlRoomActivityAttributes(),
+                                              content: .init(state: state, staleDate: nil)).id
+            return nil
+        } catch {
+            activityId = nil
+            return "\(error.localizedDescription) [\(Self.code(error))]"
+        }
     }
 
     private func updateActivity(_ phase: String) async {

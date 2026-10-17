@@ -6,7 +6,9 @@ import AppIntents
 /// (founder, 2026-10-17: Siri's own dictation cut him off mid-sentence).
 /// AudioRecordingIntent is what lets a background app start recording.
 /// Saying it again while recording sends.
-struct TellControlRoomIntent: AudioRecordingIntent {
+/// LiveActivityIntent too: it is what lets an intent start the required
+/// Live Activity while the app is in the background.
+struct TellControlRoomIntent: AudioRecordingIntent, LiveActivityIntent {
     static let title: LocalizedStringResource = "Tell Control Room"
     static let description = IntentDescription(
         "Record a message for Control Room. Press your earbud, or say \"send to Control Room\", when you're done.")
@@ -24,9 +26,12 @@ struct TellControlRoomIntent: AudioRecordingIntent {
         do {
             try recorder.start()
         } catch {
-            ControlRoomChannel.shared.diag("talkback intent failed: \(error.localizedDescription)")
-            throw error
+            var detail = error.localizedDescription
+            if case ControlRoomRecorder.RecorderError.noLiveActivity(let why) = error { detail += " (\(why))" }
+            await ControlRoomChannel.shared.diagNow("talkback intent failed: \(detail)")
+            throw error   // nothing is recording, so Siri may say why
         }
+        // No speech once the mic is open: Siri talking pauses the recorder.
         return .result()
     }
 }

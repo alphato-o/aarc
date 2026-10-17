@@ -111,7 +111,12 @@ final class ControlRoomChannel {
     /// A one-line diagnostic for the agent, on the thread as a terminal row.
     /// Fire and forget; the agent reads it in the ear loop.
     func diag(_ text: String) {
-        Task { _ = try? await AIClient.shared.agentSend("[diag] " + text, source: "terminal") }
+        Task { await diagNow(text) }
+    }
+
+    /// Awaited variant, for when the process may not live much longer.
+    func diagNow(_ text: String) async {
+        _ = try? await AIClient.shared.agentSend("[diag] " + text, source: "terminal")
     }
 
     // MARK: - Off-run answer
