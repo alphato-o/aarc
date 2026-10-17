@@ -68,7 +68,10 @@ final class LiveShareController {
         }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
+                // 2 s for three minutes after he speaks to Control Room, so the
+                // answer is not waiting on a 10 s poll; 10 s otherwise.
+                let hot = Date() < ControlRoomChannel.shared.hotUntil
+                try? await Task.sleep(for: .seconds(hot ? 2 : 10))
                 await self?.pollInject()
                 await ControlRoomChannel.shared.retryPending()
             }

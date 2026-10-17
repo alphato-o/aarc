@@ -14,6 +14,8 @@
 ///                                                   run (runId, else the run of the latest
 ///                                                   user row), so it is heard mid-run
 ///   GET  /agent/inbox   admin                      → unseen user rows, marks them seen
+///   POST /agent/heard   device  {text, voiceId, at} → a Control Room line started playing
+///   GET  /agent/export  admin   ?from=&to=         → both voices with timestamps, for the video
 ///
 /// Voice rows come from the "Tell Control Room" Siri shortcut (founder,
 /// 2026-10-17): long-press on the earbuds, dictate, done. They carry the run
@@ -35,7 +37,13 @@ function isDevice(req: Request, env: AgentEnv): boolean {
 function isAdmin(req: Request, env: AgentEnv): boolean {
     return !!env.LIVE_ADMIN_TOKEN && req.headers.get("x-aarc-admin") === env.LIVE_ADMIN_TOKEN;
 }
-interface SendBody { text?: string; source?: string; runId?: string; km?: number; elapsed?: number }
+interface SendBody {
+    text?: string; source?: string; runId?: string; km?: number; elapsed?: number;
+    clientId?: string; startedAt?: string; duration?: number;
+}
+
+/// "over and out" is the spoken send, not part of the message.
+const STOP_PHRASE = /[\s,.;:!?-]*\bover\s*(?:and|&|an|n|in)\s*out\b[\s.!?]*$/i;
 interface ReplyBody { text?: string; speak?: boolean; runId?: string; voiceId?: string }
 
 /// Home Base's voice (Kristen). Same id the phone uses for its local lines.
@@ -63,13 +71,24 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
     if (request.method === "POST" && p === "/agent/send") {
         if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
         const b = await request.json<SendBody>().catch(() => ({} as SendBody));
-        const text = (b.text ?? "").trim().slice(0, 4000);
-        if (!text) return json({ ok: false, error: "text required" }, 400);
         const source = b.source === "voice" ? "voice" : "terminal";
+        let text = (b.text ?? "").trim().slice(0, 4000);
+        if (source === "voice") text = text.replace(STOP_PHRASE, "").trim() || "[nothing audible]";
+        if (!text) return json({ ok: false, error: "text required" }, 400);
+        const cid = typeof b.clientId === "string" && CLIENT_ID_RE.test(b.clientId) ? b.clientId : null;
+        if (cid) {
+            const dup = await env.DB
+                .prepare("SELECT id FROM agent_thread WHERE role='user' AND json_extract(meta, '$.clientId') = ? LIMIT 1")
+                .bind(cid).first<{ id: number }>();
+            if (dup) return json({ ok: true, id: dup.id, duplicate: true });
+        }
         const runId = typeof b.runId === "string" && b.runId.length <= 64 ? b.runId : null;
         const meta: Record<string, unknown> = {};
         if (typeof b.km === "number" && isFinite(b.km)) meta.km = Math.round(b.km * 100) / 100;
         if (typeof b.elapsed === "number" && isFinite(b.elapsed)) meta.elapsed = Math.round(b.elapsed);
+        if (cid) { meta.clientId = cid; meta.streamed = true; meta.recorded = true; }
+        if (typeof b.startedAt === "string" && !Number.isNaN(Date.parse(b.startedAt))) meta.startedAt = new Date(b.startedAt).toISOString();
+        if (typeof b.duration === "number" && isFinite(b.duration) && b.duration > 0) meta.duration = Math.round(b.duration);
         const r = await env.DB
             .prepare("INSERT INTO agent_thread (role, text, source, run_id, meta) VALUES ('user', ?, ?, ?, ?)")
             .bind(text, source, runId, Object.keys(meta).length ? JSON.stringify(meta) : null).run();
@@ -86,14 +105,15 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
         const existing = await env.DB
             .prepare("SELECT id, text FROM agent_thread WHERE role='user' AND json_extract(meta, '$.clientId') = ? LIMIT 1")
             .bind(clientId).first<{ id: number; text: string }>();
-        if (existing) return json({ ok: true, id: existing.id, text: existing.text, duplicate: true });
-
         const audio = await request.arrayBuffer();
         if (audio.byteLength === 0) return json({ ok: false, error: "empty body" }, 400);
         if (audio.byteLength > MAX_TALKBACK_BYTES) return json({ ok: false, error: "audio too large" }, 413);
+        // Store first, even for a duplicate: a streamed line arrives as text
+        // and its audio follows here, for the video export.
         if (env.VOICES) {
             await env.VOICES.put(`talkback/${clientId}.m4a`, audio, { httpMetadata: { contentType: "audio/mp4" } });
         }
+        if (existing) return json({ ok: true, id: existing.id, text: existing.text, duplicate: true });
         const runIdRaw = url.searchParams.get("runId");
         const runId = runIdRaw && CLIENT_ID_RE.test(runIdRaw) ? runIdRaw : null;
         const km = Number(url.searchParams.get("km"));
@@ -108,16 +128,44 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
             return json({ ok: false, error: `transcription failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) }, 502);
         }
         // The stop phrase is a control, not part of the message.
-        text = text.replace(/[\s,.;:!?-]*\bover\s*(?:and|&|an|n|in)\s*out\b[\s.!?]*$/i, "").trim();
+        text = text.replace(STOP_PHRASE, "").trim();
         if (!text) text = "[nothing audible]";
         const meta: Record<string, unknown> = { clientId, recorded: true };
         if (url.searchParams.has("km") && Number.isFinite(km)) meta.km = Math.round(km * 100) / 100;
         if (url.searchParams.has("elapsed") && Number.isFinite(elapsed)) meta.elapsed = Math.round(elapsed);
         if (Number.isFinite(durationS) && durationS > 0) meta.duration = Math.round(durationS);
+        const startedAt = url.searchParams.get("startedAt");
+        if (startedAt && !Number.isNaN(Date.parse(startedAt))) meta.startedAt = new Date(startedAt).toISOString();
         const r = await env.DB
             .prepare("INSERT INTO agent_thread (role, text, source, run_id, meta) VALUES ('user', ?, 'voice', ?, ?)")
             .bind(text.slice(0, 4000), runId, JSON.stringify(meta)).run();
         return json({ ok: true, id: r.meta.last_row_id, text });
+    }
+
+    // POST /agent/heard {text, voiceId, at, runId?}: a Control Room line began
+    // playing on the phone. Timeline for the race video.
+    if (request.method === "POST" && p === "/agent/heard") {
+        if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const b = await request.json<{ text?: string; voiceId?: string; at?: string; runId?: string }>()
+            .catch(() => ({} as { text?: string; voiceId?: string; at?: string; runId?: string }));
+        const text = (b.text ?? "").trim().slice(0, 4000);
+        if (!text || !b.voiceId || !b.at || Number.isNaN(Date.parse(b.at))) return json({ ok: false, error: "text, voiceId, at required" }, 400);
+        await env.DB.prepare("INSERT INTO voice_heard (text, voice_id, heard_at, run_id) VALUES (?, ?, ?, ?)")
+            .bind(text, b.voiceId.slice(0, 64), new Date(b.at).toISOString(), b.runId?.slice(0, 64) ?? null).run();
+        return json({ ok: true });
+    }
+
+    // GET /agent/export?from=&to= (admin): both voices in a window, for the
+    // post-race edit (private/talkback-export.py).
+    if (request.method === "GET" && p === "/agent/export") {
+        if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const from = url.searchParams.get("from") ?? "1970-01-01T00:00:00Z";
+        const to = url.searchParams.get("to") ?? "2999-01-01T00:00:00Z";
+        const heard = await env.DB.prepare("SELECT text, voice_id, heard_at, run_id FROM voice_heard WHERE heard_at >= ? AND heard_at <= ? ORDER BY heard_at")
+            .bind(new Date(from).toISOString(), new Date(to).toISOString()).all();
+        const said = await env.DB.prepare("SELECT id, text, run_id, meta, created_at FROM agent_thread WHERE role='user' AND source='voice' AND created_at >= datetime(?) AND created_at <= datetime(?) ORDER BY id")
+            .bind(new Date(from).toISOString(), new Date(to).toISOString()).all();
+        return json({ ok: true, heard: heard.results ?? [], said: said.results ?? [] });
     }
 
     if (request.method === "GET" && p === "/agent/thread") {

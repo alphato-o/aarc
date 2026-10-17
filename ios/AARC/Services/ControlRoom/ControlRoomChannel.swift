@@ -39,6 +39,8 @@ final class ControlRoomChannel {
     private let defaults: UserDefaults
     private var retrying = false
     private var earTask: Task<Void, Never>?
+    /// Just after he spoke: the in-run inject poll runs fast until then.
+    private(set) var hotUntil = Date.distantPast
     /// How long to stay awake for an answer off-run. The agent answers from
     /// the ear loop (5 s poll) plus thinking time; three minutes is generous.
     static let earWindow: TimeInterval = 180
@@ -95,11 +97,13 @@ final class ControlRoomChannel {
     /// A line recorded by ControlRoomRecorder. The audio is kept until the
     /// proxy has transcribed it; a resend is idempotent on clientId.
     func sendRecording(file: URL, clientId: String, runId: String?, km: Double?,
-                       elapsed: Double?, duration: Double) async -> Outcome {
+                       elapsed: Double?, duration: Double, startedAt: Date = .now,
+                       streamedText: String? = nil) async -> Outcome {
         if runId != nil {
             RunEventLog.shared.record("talkback.recorded", String(format: "%.0fs", duration), data: ["source": "siri"])
         }
-        let item = Pending(text: "", runId: runId, km: km, elapsed: elapsed, at: .now,
+        // `at` is when he started talking: the clip's place on the video timeline.
+        let item = Pending(text: "", runId: runId, km: km, elapsed: elapsed, at: startedAt,
                            audioFile: file.lastPathComponent, clientId: clientId, duration: duration)
         // On the resend list BEFORE the upload: build 213's 111 s line was
         // cut off mid-upload by a suspension and, never having "failed", was
@@ -108,6 +112,19 @@ final class ControlRoomChannel {
         pending.append(item)
         let offRun = runId == nil
         if offRun { holdAwake() }
+        hotUntil = Date().addingTimeInterval(180)
+        // Tier 1: the streamed transcript goes as text now; the audio follows
+        // for the video and lands on the same row (idempotent on clientId).
+        if let text = streamedText,
+           let id = try? await AIClient.shared.agentSend(text, source: "voice", runId: runId, km: km,
+                                                         elapsed: elapsed, clientId: clientId,
+                                                         startedAt: startedAt, duration: duration) {
+            lastUpload = .delivered
+            if item.runId != nil { RunEventLog.shared.record("voice.said", text, data: ["source": "siri"]) }
+            if offRun { listenForAnswer(after: id) }
+            Task { await self.retryPending() }
+            return offRun ? .listening : .sent
+        }
         if let id = await send(item) {
             pending.removeAll { $0.clientId == clientId }
             if offRun { listenForAnswer(after: id); return .listening }
@@ -138,6 +155,15 @@ final class ControlRoomChannel {
         if adopted > 0 { diag("talkback: found \(adopted) unsent recording(s) on the phone, sending") }
     }
 
+    /// A Control Room line just became audible. Every Home Base line counts
+    /// (answers, km readouts): they are all Control Room in the video.
+    func heard(text: String, voiceId: String?) {
+        guard let voiceId, voiceId == RemoteTTS.homeVoiceId else { return }
+        let at = Date()
+        let runId = LiveMetricsConsumer.shared.currentRunId?.uuidString
+        Task { await AIClient.shared.agentHeard(text: text, voiceId: voiceId, at: at, runId: runId) }
+    }
+
     /// A one-line diagnostic for the agent, on the thread as a terminal row.
     /// Fire and forget; the agent reads it in the ear loop.
     func diag(_ text: String) {
@@ -160,7 +186,7 @@ final class ControlRoomChannel {
             let deadline = Date.now.addingTimeInterval(Self.earWindow)
             var answered = false
             while !Task.isCancelled, Date.now < deadline, !answered {
-                try? await Task.sleep(for: .seconds(3))
+                try? await Task.sleep(for: .seconds(1))
                 // A run that started meanwhile owns the reply via inject.
                 if LiveMetricsConsumer.shared.currentRunId != nil { break }
                 guard let rows = try? await AIClient.shared.agentThread(since: id) else { continue }
@@ -180,6 +206,7 @@ final class ControlRoomChannel {
                 }
             }
             self?.releaseAwake()
+            self?.earTask = nil
         }
     }
 
@@ -208,7 +235,8 @@ final class ControlRoomChannel {
             // A recorded line delivered late off-run still deserves a spoken
             // answer (17 Oct: the recovered 111 s line was answered in
             // silence). Only one listener at a time; the newest wins.
-            if item.audioFile != nil, item.runId == nil, id > 0, LiveMetricsConsumer.shared.currentRunId == nil {
+            if item.audioFile != nil, item.runId == nil, id > 0, earTask == nil,
+               LiveMetricsConsumer.shared.currentRunId == nil {
                 holdAwake()
                 listenForAnswer(after: id)
             }
@@ -239,7 +267,8 @@ final class ControlRoomChannel {
                 do {
                     r = try await AIClient.shared.agentVoice(file: url, clientId: clientId, runId: item.runId,
                                                              km: item.km, elapsed: item.elapsed,
-                                                             duration: item.duration ?? 0)
+                                                             duration: item.duration ?? 0,
+                                                             startedAt: item.audioFile != nil ? item.at : nil)
                 } catch {
                     lastUpload = .failed
                     diag("talkback upload failed (\(size / 1024) KB): \(error.localizedDescription); kept for retry")

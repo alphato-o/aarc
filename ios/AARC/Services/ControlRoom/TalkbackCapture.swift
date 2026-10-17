@@ -26,6 +26,8 @@ final class TalkbackCapture: @unchecked Sendable {
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private(set) var speechState = "off"
     var onStopPhrase: (@Sendable () -> Void)?
+    /// Every captured buffer, for the live stream.
+    var onBuffer: (@Sendable (AVAudioPCMBuffer) -> Void)?
 
     var seconds: Double { lock.withLock { Double(framesWritten) / sampleRate } }
     var currentLevel: Float { lock.withLock { level } }
@@ -77,6 +79,7 @@ final class TalkbackCapture: @unchecked Sendable {
         let req = request
         lock.unlock()
         req?.append(buf)
+        onBuffer?(buf)
     }
 
     // MARK: - Stop phrase

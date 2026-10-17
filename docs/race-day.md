@@ -158,13 +158,24 @@ cut him off mid-sentence (founder, 17 Oct). Instead:
    the phone's side button (any interruption sends), 30 s of silence after
    speech, and the 5 minute cap. Each uninterrupted stretch is its own
    segment file, joined at send, so nothing is ever overwritten.
-3. `ControlRoomChannel.sendRecording` uploads to `POST /agent/voice`
+3. **Tiered transcript.** While he talks, `TalkbackStream` streams the same
+   audio (16 kHz PCM) to the gateway's live ASR (`wss://gateway.aarun.club:8443/live-asr`,
+   Volcano streaming). At "over and out" the final text is ready in about
+   0.4 s (measured) and goes straight to `POST /agent/send` with the clientId,
+   start time and duration, no tidy pass. If the socket never opened, errored
+   or a send failed (no signal, dead zone, gateway down), the line falls back
+   to the file path below. Either way the audio is uploaded afterwards and
+   lands on the same row, for the video export. The watch shows a full-screen
+   SEND while the mic is open (Plan B for a missed phrase). Polling: the ear
+   loop every 2 s, the phone every 1 s off-run, and in a run every 2 s for
+   three minutes after he speaks (10 s otherwise).
+4. File path: `ControlRoomChannel.sendRecording` uploads to `POST /agent/voice`
    (clientId, runId, km, elapsed, duration). The proxy stores the audio in R2
    under `talkback/`, transcribes with the voice-note chain (Volc, Whisper,
    Scribe, then the tidy pass) and puts the transcript on `agent_thread` as a
    voice row; idempotent on clientId. No signal: the audio stays on disk and
    resends from the in-run poll tick or at launch.
-4. The agent sees it live in the Claude Code session through the ear loop
+5. The agent sees it live in the Claude Code session through the ear loop
    (`private/ear-loop.sh` as a Monitor: `EAR VOICE #id ... [run xxxx at
    12.3 km] (recorded 48s): ...`) and answers with `private/reply.sh "<text>"`.
    In a run the answer comes through the run's inject poll, which now runs for
@@ -172,6 +183,13 @@ cut him off mid-sentence (founder, 17 Oct). Instead:
    silent keepalive for three minutes and plays the answer when it lands.
    Both play in Kristen's voice. Spoken replies use pinyin plus English, never
    Chinese characters.
+6. **The race video.** Every Control Room line the phone plays is stamped
+   (`POST /agent/heard`, table `voice_heard`); every clip of his carries its
+   start time. After the race, `python3 private/talkback-export.py --from
+   <UTC> --to <UTC> --t0 <Action 6 clip start>` writes `both.srt`,
+   `alpha.srt`, `controlroom.srt`, `timeline.csv` (UTC and Beijing), a stem
+   per voice and `mix.wav`, all on that timeline. Our audio is pulled from the
+   TTS cache, so it is the exact render he heard.
 
 Verified on device 17 Oct (build 208, Siri dictation version): off-run spoken
 reply. Pending on device (build 209): the recorder, the earbud press reaching

@@ -471,6 +471,7 @@ final class VoiceFeedbackQueue {
                 preferRemoteOverride: item.preferRemoteVoiceOverride,
                 onAudioStart: {
                     LiveSubtitleStore.shared.startedPlaying(item)
+                    ControlRoomChannel.shared.heard(text: item.text, voiceId: item.voiceId)
                     // Measure the gen→audible latency for fresh coach lines
                     // so the Director can project live numbers forward.
                     if let decisionAt = item.decisionAt {

@@ -448,7 +448,7 @@ final class LiveTranscriber {
 /// thread, where main-actor isolation cannot follow. It owns everything it
 /// touches, hands out only immutable `Data`, and counts what passed through so
 /// the bench can say which stage went quiet.
-private final class PCMPump: @unchecked Sendable {
+final class PCMPump: @unchecked Sendable {
     /// Built lazily from the first buffer's ACTUAL format, so a device whose
     /// mic disagrees with what we predicted still works instead of silently
     /// converting nothing.

@@ -41,6 +41,8 @@ final class ControlRoomRecorder: NSObject {
     private(set) var isRecording = false
     private(set) var startedAt: Date?
     private var capture: TalkbackCapture?
+    /// Live transcript stream for the whole line (all segments). nil = file only.
+    private var stream: TalkbackStream?
     private var configObserver: NSObjectProtocol?
     private var notRunningSince: Date?
     private var clientId = UUID()
@@ -163,6 +165,9 @@ final class ControlRoomRecorder: NSObject {
             clientId = UUID()
             segments = []
             closedSeconds = 0
+            if let token = Bundle.main.object(forInfoDictionaryKey: "AARCLiveDeviceToken") as? String, !token.isEmpty {
+                stream = TalkbackStream(endpoint: LiveTranscriber.endpoint, token: token)
+            }
             guard openSegment() else { throw RecorderError.couldNotStart }
         } catch {
             VoiceFeedbackQueue.shared.held = false
@@ -253,6 +258,7 @@ final class ControlRoomRecorder: NSObject {
 
         let url = Self.fileURL(clientId)
         guard send, duration >= 1, spoke || !requireSpeech else {
+            stream?.cancel(); stream = nil
             segments.forEach { try? FileManager.default.removeItem(at: $0) }
             try? FileManager.default.removeItem(at: url)
             if runId != nil { RunEventLog.shared.record("talkback.dropped", String(format: "%.0fs", duration)) }
@@ -260,12 +266,17 @@ final class ControlRoomRecorder: NSObject {
             await endActivity(phase: nil)
             return
         }
+        // Tier 1: the live transcript, ready now. Tier 2 (nil): the file upload.
+        let liveStream = stream
+        stream = nil
+        let streamedText = await liveStream?.finish()
         let joined = await Self.join(segments, into: url)
-        ControlRoomChannel.shared.diag("talkback sending \(String(format: "%.0f", duration))s in \(segments.count) segment(s), join=\(joined) spoke=\(spoke) heals=\(heals)")
+        ControlRoomChannel.shared.diag("talkback sending \(String(format: "%.0f", duration))s in \(segments.count) segment(s), join=\(joined), stream=\(streamedText != nil ? "used (\(liveStream?.packets ?? 0) packets)" : "fallback \(liveStream?.state ?? "none")")")
         await updateActivity("sending")
         let outcome = await ControlRoomChannel.shared.sendRecording(
             file: url, clientId: clientId.uuidString, runId: runId, km: km,
-            elapsed: runElapsed, duration: duration)
+            elapsed: runElapsed, duration: duration, startedAt: startedAt ?? .now,
+            streamedText: streamedText)
         await endActivity(phase: outcome == .queued ? "queued" : "sent")
     }
 
@@ -326,6 +337,8 @@ final class ControlRoomRecorder: NSObject {
         let url = Self.fileURL(clientId).deletingPathExtension()
             .appendingPathExtension("seg\(segments.count).m4a")
         let c = TalkbackCapture()
+        let live = stream
+        c.onBuffer = { buf in live?.feed(buf) }
         c.onStopPhrase = {
             Task { @MainActor in
                 let me = ControlRoomRecorder.shared

@@ -464,7 +464,8 @@ actor AIClient {
     /// Send a line to the agent. Cloudflare only (D1). A voice line carries
     /// the run it was said in and the km, so the agent knows where he was.
     func agentSend(_ text: String, source: String = "terminal", runId: String? = nil,
-                   km: Double? = nil, elapsed: Double? = nil) async throws -> Int {
+                   km: Double? = nil, elapsed: Double? = nil, clientId: String? = nil,
+                   startedAt: Date? = nil, duration: Double? = nil) async throws -> Int {
         guard let token = liveDeviceToken else { throw AIError.proxy("no device token") }
         let url = await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/send")
         var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 15
@@ -474,6 +475,9 @@ actor AIClient {
         if let runId { body["runId"] = runId }
         if let km { body["km"] = km }
         if let elapsed { body["elapsed"] = elapsed }
+        if let clientId { body["clientId"] = clientId }
+        if let startedAt { body["startedAt"] = ISO8601DateFormatter.fractional.string(from: startedAt) }
+        if let duration { body["duration"] = duration }
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         let (data, resp) = try await session.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
@@ -485,7 +489,7 @@ actor AIClient {
     /// Upload a recorded talk-back line; the proxy transcribes it onto the
     /// thread and returns the row id and the transcript.
     func agentVoice(file: URL, clientId: String, runId: String?, km: Double?, elapsed: Double?,
-                    duration: Double) async throws -> (id: Int, text: String) {
+                    duration: Double, startedAt: Date? = nil) async throws -> (id: Int, text: String) {
         guard let token = liveDeviceToken else { throw AIError.proxy("no device token") }
         var comps = URLComponents(url: await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/voice"),
                                   resolvingAgainstBaseURL: false)!
@@ -494,6 +498,7 @@ actor AIClient {
         if let runId { items.append(.init(name: "runId", value: runId)) }
         if let km { items.append(.init(name: "km", value: String(format: "%.3f", km))) }
         if let elapsed { items.append(.init(name: "elapsed", value: String(Int(elapsed)))) }
+        if let startedAt { items.append(.init(name: "startedAt", value: ISO8601DateFormatter.fractional.string(from: startedAt))) }
         comps.queryItems = items
         var req = URLRequest(url: comps.url!); req.httpMethod = "POST"; req.timeoutInterval = 120
         req.setValue("audio/mp4", forHTTPHeaderField: "content-type")
@@ -504,6 +509,20 @@ actor AIClient {
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let id = obj["id"] as? Int else { throw AIError.proxy("voice send failed") }
         return (id, (obj["text"] as? String) ?? "")
+    }
+
+    /// A Control Room line started playing: its wall-clock time, for the video.
+    func agentHeard(text: String, voiceId: String, at: Date, runId: String?) async {
+        guard let token = liveDeviceToken else { return }
+        let url = await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/heard")
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 15
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        var body: [String: Any] = ["text": text, "voiceId": voiceId,
+                                   "at": ISO8601DateFormatter.fractional.string(from: at)]
+        if let runId { body["runId"] = runId }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await session.data(for: req)
     }
 
     /// Thread rows after `since` (0 = latest page).
@@ -737,4 +756,14 @@ enum AIError: Error, LocalizedError {
         case .proxy(let m): return "Proxy error: \(m)"
         }
     }
+}
+
+
+extension ISO8601DateFormatter {
+    /// Millisecond timestamps: the video timeline needs better than a second.
+    nonisolated(unsafe) static let fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 }
