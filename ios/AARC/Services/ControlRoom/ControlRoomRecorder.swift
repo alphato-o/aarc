@@ -203,6 +203,8 @@ final class ControlRoomRecorder: NSObject {
         finishing = false
         heardSpeechAt = nil
         heals = 0
+        lastPartialSent = ""
+        lastPartialAt = .distantPast
         claimRemoteCommands()
         if !exclusive { Task { await updateActivity("listening-siri") } }
         lastFinishedAt = nil
@@ -280,8 +282,23 @@ final class ControlRoomRecorder: NSObject {
         await endActivity(phase: outcome == .queued ? "queued" : "sent")
     }
 
+    private var lastPartialSent = ""
+    private var lastPartialAt = Date.distantPast
+
+    /// Forward the words so far to the agent every 1.5 s while he talks, so
+    /// the Control Room screen shows the line as it is spoken.
+    private func forwardPartial() {
+        guard let text = stream?.currentText, !text.isEmpty, text != lastPartialSent,
+              Date.now.timeIntervalSince(lastPartialAt) >= 1.5 else { return }
+        lastPartialSent = text
+        lastPartialAt = .now
+        let cid = clientId.uuidString, rid = runId
+        Task { await AIClient.shared.agentPartial(clientId: cid, text: text, runId: rid) }
+    }
+
     private func tick() {
         guard isRecording, !finishing else { return }
+        forwardPartial()
         // Siri, a call: the interruption observer sends. If the engine just
         // stops with no notice, give a route change 3 s to restart it, then
         // send what we have rather than sit on a dead mic.

@@ -20,6 +20,9 @@ final class TalkbackStream: @unchecked Sendable {
     private var closed = false
     private(set) var packets = 0
 
+    /// The running transcript so far (empty until the first words).
+    var currentText: String { lock.withLock { finalText.isEmpty ? partial : finalText } }
+
     var state: String {
         lock.withLock { failure.map { "failed: \($0)" } ?? (ready ? "live" : "connecting") }
     }

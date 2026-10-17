@@ -27,7 +27,19 @@ struct TellControlRoomIntent: AudioRecordingIntent, LiveActivityIntent {
         // start a new recording on the same breath.
         if let t = recorder.lastFinishedAt, Date.now.timeIntervalSince(t) < 10 { return .result() }
         do {
-            try recorder.start()
+            do {
+                try recorder.start()
+            } catch ControlRoomRecorder.RecorderError.noLiveActivity(let why) {
+                throw ControlRoomRecorder.RecorderError.noLiveActivity(why)
+            } catch {
+                // Our own reply still playing holds the session ('!int' at
+                // 10:26 on 17 Oct): stop it, give the session a beat, retry once.
+                Speaker.shared.stopAll()
+                BackgroundAudioKeepalive.shared.stop()
+                try? await Task.sleep(for: .milliseconds(900))
+                try recorder.start()
+                ControlRoomChannel.shared.diag("talkback start succeeded on retry after: \(error.localizedDescription)")
+            }
         } catch {
             var detail = error.localizedDescription
             if case ControlRoomRecorder.RecorderError.noLiveActivity(let why) = error { detail += " (\(why))" }

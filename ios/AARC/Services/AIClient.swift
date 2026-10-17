@@ -511,6 +511,19 @@ actor AIClient {
         return (id, (obj["text"] as? String) ?? "")
     }
 
+    /// The talk-back line so far, for the agent's live view.
+    func agentPartial(clientId: String, text: String, runId: String?) async {
+        guard let token = liveDeviceToken else { return }
+        let url = await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/partial")
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 8
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        var body: [String: Any] = ["clientId": clientId, "text": text]
+        if let runId { body["runId"] = runId }
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await session.data(for: req)
+    }
+
     /// A Control Room line started playing: its wall-clock time, for the video.
     func agentHeard(text: String, voiceId: String, at: Date, runId: String?) async {
         guard let token = liveDeviceToken else { return }

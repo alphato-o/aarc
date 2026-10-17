@@ -15,6 +15,8 @@
 ///                                                   user row), so it is heard mid-run
 ///   GET  /agent/inbox   admin                      → unseen user rows, marks them seen
 ///   POST /agent/heard   device  {text, voiceId, at} → a Control Room line started playing
+///   POST /agent/partial device  {clientId, text}    → the line so far, while he talks
+///   GET  /agent/partial admin   ?since=ISO         → partials updated since, for the ear loop
 ///   GET  /agent/export  admin   ?from=&to=         → both voices with timestamps, for the video
 ///
 /// Voice rows come from the "Tell Control Room" Siri shortcut (founder,
@@ -140,6 +142,26 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
             .prepare("INSERT INTO agent_thread (role, text, source, run_id, meta) VALUES ('user', ?, 'voice', ?, ?)")
             .bind(text.slice(0, 4000), runId, JSON.stringify(meta)).run();
         return json({ ok: true, id: r.meta.last_row_id, text });
+    }
+
+    // POST /agent/partial {clientId, text, runId?} (device): the line so far.
+    // GET  /agent/partial?since=ISO (admin): rows updated after `since`.
+    if (p === "/agent/partial") {
+        if (request.method === "POST") {
+            if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+            const b = await request.json<{ clientId?: string; text?: string; runId?: string }>()
+                .catch(() => ({} as { clientId?: string; text?: string; runId?: string }));
+            if (!b.clientId || !CLIENT_ID_RE.test(b.clientId) || !b.text) return json({ ok: false, error: "clientId, text required" }, 400);
+            await env.DB.prepare("INSERT INTO agent_partial (client_id, text, run_id, updated_at) VALUES (?, ?, ?, ?) " +
+                "ON CONFLICT(client_id) DO UPDATE SET text=excluded.text, updated_at=excluded.updated_at")
+                .bind(b.clientId, b.text.slice(0, 4000), b.runId?.slice(0, 64) ?? null, new Date().toISOString()).run();
+            return json({ ok: true });
+        }
+        if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const since = url.searchParams.get("since") ?? new Date(Date.now() - 60_000).toISOString();
+        const rows = await env.DB.prepare("SELECT client_id, text, run_id, updated_at FROM agent_partial WHERE updated_at > ? ORDER BY updated_at")
+            .bind(since).all();
+        return json({ ok: true, partials: rows.results ?? [], now: new Date().toISOString() });
     }
 
     // POST /agent/heard {text, voiceId, at, runId?}: a Control Room line began
