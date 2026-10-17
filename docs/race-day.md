@@ -183,7 +183,14 @@ cut him off mid-sentence (founder, 17 Oct). Instead:
    silent keepalive for three minutes and plays the answer when it lands.
    Both play in Kristen's voice. Spoken replies use pinyin plus English, never
    Chinese characters.
-6. **The race video.** Every Control Room line the phone plays is stamped
+6. **Watchdog.** If no answer reaches his ear within 40 s of a line (the
+   agent is busy building, or the session is down), the phone calls
+   `POST /agent/auto` with its live run context and the server answers in
+   the Home Base register from the same DATA a kilometre readout uses
+   (course, story, pace, heart rate). If the agent answered meanwhile, that
+   answer comes back instead. Race-day rule for the agent: no building
+   during the race, only watching and answering.
+7. **The race video.** Every Control Room line the phone plays is stamped
    (`POST /agent/heard`, table `voice_heard`); every clip of his carries its
    start time. After the race, `python3 private/talkback-export.py --from
    <UTC> --to <UTC> --t0 <Action 6 clip start>` writes `both.srt`,

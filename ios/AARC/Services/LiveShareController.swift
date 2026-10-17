@@ -157,6 +157,7 @@ final class LiveShareController {
         // stretch delays rather than drops it.
         Speaker.shared.speak(text, priority: .milestone, source: "home",
                              expiresAfter: 240, voiceId: voiceId)
+        ControlRoomChannel.shared.lastAnswerAt = Date()
     }
 
     @discardableResult

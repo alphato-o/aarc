@@ -511,6 +511,23 @@ actor AIClient {
         return (id, (obj["text"] as? String) ?? "")
     }
 
+    /// The watchdog: ask the server to answer his line (or return the agent's
+    /// answer if one exists). nil on any failure.
+    func agentAuto(clientId: String, runContext: DynamicLineContext?) async -> (text: String, already: Bool)? {
+        guard let token = liveDeviceToken else { return nil }
+        struct Body: Encodable { let clientId: String; let runContext: DynamicLineContext? }
+        let url = await MainActor.run { Config.cloudBaseURL }.appendingPathComponent("agent/auto")
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 25
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
+        req.httpBody = try? encoder.encode(Body(clientId: clientId, runContext: runContext))
+        guard let (data, resp) = try? await session.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = obj["text"] as? String, !text.isEmpty else { return nil }
+        return (text, (obj["already"] as? Bool) ?? false)
+    }
+
     /// The talk-back line so far, for the agent's live view.
     func agentPartial(clientId: String, text: String, runId: String?) async {
         guard let token = liveDeviceToken else { return }

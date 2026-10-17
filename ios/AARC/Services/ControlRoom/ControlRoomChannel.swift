@@ -41,6 +41,10 @@ final class ControlRoomChannel {
     private var earTask: Task<Void, Never>?
     /// Just after he spoke: the in-run inject poll runs fast until then.
     private(set) var hotUntil = Date.distantPast
+    /// The last time an answer from Control Room reached his ear.
+    var lastAnswerAt = Date.distantPast
+    /// No answer this long after a line: the server answers instead.
+    static let watchdogSeconds: TimeInterval = 40
     /// How long to stay awake for an answer off-run. The agent answers from
     /// the ear loop (5 s poll) plus thinking time; three minutes is generous.
     static let earWindow: TimeInterval = 180
@@ -122,16 +126,62 @@ final class ControlRoomChannel {
             lastUpload = .delivered
             if item.runId != nil { RunEventLog.shared.record("voice.said", text, data: ["source": "siri"]) }
             if offRun { listenForAnswer(after: id) }
+            startWatchdog(clientId: clientId)
             Task { await self.retryPending() }
             return offRun ? .listening : .sent
         }
         if let id = await send(item) {
             pending.removeAll { $0.clientId == clientId }
+            if id > 0 { startWatchdog(clientId: clientId) }
             if offRun { listenForAnswer(after: id); return .listening }
             return .sent
         }
         if offRun { releaseAwake() }
         return .queued
+    }
+
+    /// Race-day guard (founder, 2026-10-17): if the agent is busy or down and
+    /// nothing answers within 40 s, the server answers in Home Base's voice
+    /// from his live numbers. He is never left talking to nobody.
+    private func startWatchdog(clientId: String) {
+        let sentAt = Date()
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.watchdogSeconds))
+            guard let self, self.lastAnswerAt < sentAt else { return }
+            let ctx = Self.runContext()
+            guard let r = await AIClient.shared.agentAuto(clientId: clientId, runContext: ctx) else {
+                self.diag("watchdog: no answer from the agent and the server fallback failed")
+                return
+            }
+            guard self.lastAnswerAt < sentAt else { return }   // the agent got there meanwhile
+            self.lastAnswerAt = .now
+            Speaker.shared.speak(r.text, priority: .milestone, source: "home:watchdog",
+                                 expiresAfter: 120, voiceId: RemoteTTS.homeVoiceId)
+            self.diag("watchdog: \(r.already ? "replayed the agent's answer" : "server answered") after \(Int(Self.watchdogSeconds)) s")
+        }
+    }
+
+    /// The same numbers a kilometre readout gets, when a run is on.
+    private static func runContext() -> AIClient.DynamicLineContext? {
+        let consumer = LiveMetricsConsumer.shared
+        guard consumer.currentRunId != nil, let m = consumer.latest else { return nil }
+        let plan = ScriptPreviewStore.shared.currentPlan
+        return AIClient.DynamicLineContext(
+            elapsedSeconds: m.elapsed,
+            distanceMeters: m.distanceMeters,
+            currentHR: m.currentHeartRate,
+            avgHR: nil,
+            currentPaceSecPerKm: m.currentPaceSecPerKm,
+            avgPaceSecPerKm: m.avgPaceSecPerKm,
+            planKind: plan.kind.rawValue,
+            planDistanceKm: plan.distanceKm,
+            planTimeMinutes: plan.timeMinutes,
+            runType: consumer.pendingRunType.rawValue,
+            stationarySeconds: nil,
+            progressFraction: RunDirector.shared.progressFraction,
+            place: PlaceContext.shared.llmInfo,
+            ambient: PlaceContext.shared.ambientInfo
+        )
     }
 
     /// Launch sweep: a recording file on disk that is on no list was cut off
@@ -194,6 +244,7 @@ final class ControlRoomChannel {
                     Speaker.shared.speak(row.text, priority: .milestone, source: "home",
                                          expiresAfter: 120, voiceId: RemoteTTS.homeVoiceId)
                     answered = true
+                    self?.lastAnswerAt = .now
                 }
             }
             if answered {

@@ -128,6 +128,45 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
     return { text: clean(result.text), model: result.model };
 }
 
+/// The watchdog answer (founder, 2026-10-17): he talked to Control Room and
+/// the agent did not answer within 40 s (busy, or the session is down). The
+/// server answers in the Home Base register from the same DATA a readout
+/// uses, so he is never left talking to nobody.
+export async function generateAnswer(
+    said: string,
+    ctx: ReadoutInput["runContext"] | undefined,
+    recent: string[],
+    env: HomeBaseEnv,
+): Promise<{ text: string; model: string }> {
+    const lines: string[] = [];
+    lines.push(`He just said to you over the radio: "${said.slice(0, 1500)}"`);
+    lines.push("");
+    lines.push("Answer him as HOME BASE. 1 to 3 sentences, under 15 seconds spoken. Answer what he actually said: a question gets the answer, a joke gets a dry one back from the record, a complaint gets the fact. If he is running and a number or the place helps, use one from DATA. Never say you are an automated fallback.");
+    if (ctx) {
+        lines.push("");
+        lines.push("DATA (the only facts you may use):");
+        lines.push(`- run clock: ${fmtClock(ctx.elapsedSeconds)}`);
+        lines.push(`- distance: ${(ctx.distanceMeters / 1000).toFixed(2)} km, run type ${ctx.runType}`);
+        if (ctx.avgPaceSecPerKm) lines.push(`- average pace so far: ${fmtPace(ctx.avgPaceSecPerKm)} per km`);
+        if (ctx.currentPaceSecPerKm) lines.push(`- current pace: ${fmtPace(ctx.currentPaceSecPerKm)} per km`);
+        if (ctx.currentHR) lines.push(`- heart rate now: ${Math.round(ctx.currentHR)} bpm`);
+        if (ctx.planKind === "distance" && ctx.planDistanceKm) {
+            lines.push(`- plan: ${ctx.planDistanceKm} km, ${(Math.max(0, ctx.planDistanceKm * 1000 - ctx.distanceMeters) / 1000).toFixed(1)} km to go`);
+        }
+        pushCourseBlock(lines, ctx.raceMode, ctx.distanceMeters);
+    } else {
+        lines.push("");
+        lines.push(`DATA: he is not running right now. Marathon day: 25 October 2026 (${daysUntil("2026-10-25")} days from today).`);
+    }
+    if (recent.length) {
+        lines.push("");
+        lines.push("RECENT LINES you already said (do not repeat):");
+        for (const r of recent.slice(-4)) lines.push(`- "${r}"`);
+    }
+    const result = await callLLM({ purpose: "reply", systemPrompt: SYSTEM, userPrompt: lines.join("\n"), maxTokens: 200, cacheSystem: true }, env);
+    return { text: clean(result.text), model: result.model };
+}
+
 /// A one-or-two-sentence stand-in for a Ricky line: news flash, server room,
 /// data insight, or what is around him. Rotates by the minute so a run hears
 /// each kind.

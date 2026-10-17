@@ -16,6 +16,7 @@
 ///   GET  /agent/inbox   admin                      → unseen user rows, marks them seen
 ///   POST /agent/heard   device  {text, voiceId, at} → a Control Room line started playing
 ///   POST /agent/partial device  {clientId, text}    → the line so far, while he talks
+///   POST /agent/auto    device  {clientId, runContext?} → watchdog answer when the agent is silent 40 s
 ///   GET  /agent/partial admin   ?since=ISO         → partials updated since, for the ear loop
 ///   GET  /agent/export  admin   ?from=&to=         → both voices with timestamps, for the video
 ///
@@ -23,8 +24,9 @@
 /// 2026-10-17): long-press on the earbuds, dictate, done. They carry the run
 /// id and the km so the agent knows where he was when he said it.
 import { transcribe, tidy, VoiceNoteEnv } from "./voiceNote";
+import { generateAnswer, HomeBaseEnv, ReadoutInput } from "../lib/homeBase";
 
-export interface AgentEnv extends VoiceNoteEnv {
+export interface AgentEnv extends VoiceNoteEnv, Omit<HomeBaseEnv, "DB"> {
     DB: D1Database;
     LIVE_DEVICE_TOKEN?: string;
     LIVE_ADMIN_TOKEN?: string;
@@ -142,6 +144,34 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
             .prepare("INSERT INTO agent_thread (role, text, source, run_id, meta) VALUES ('user', ?, 'voice', ?, ?)")
             .bind(text.slice(0, 4000), runId, JSON.stringify(meta)).run();
         return json({ ok: true, id: r.meta.last_row_id, text });
+    }
+
+    // POST /agent/auto {clientId, runContext?} (device): the watchdog. The
+    // agent has not answered his line within 40 s; answer it here. If the
+    // agent did answer meanwhile, hand that back instead.
+    if (request.method === "POST" && p === "/agent/auto") {
+        if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
+        const b = await request.json<{ clientId?: string; runContext?: ReadoutInput["runContext"] }>()
+            .catch(() => ({} as { clientId?: string; runContext?: ReadoutInput["runContext"] }));
+        if (!b.clientId || !CLIENT_ID_RE.test(b.clientId)) return json({ ok: false, error: "clientId required" }, 400);
+        const said = await env.DB
+            .prepare("SELECT id, text, run_id FROM agent_thread WHERE role='user' AND json_extract(meta, '$.clientId') = ? LIMIT 1")
+            .bind(b.clientId).first<{ id: number; text: string; run_id: string | null }>();
+        if (!said) return json({ ok: false, error: "line not found" }, 404);
+        const answered = await env.DB
+            .prepare("SELECT text FROM agent_thread WHERE role='agent' AND id > ? AND source IN ('spoken','auto') ORDER BY id LIMIT 1")
+            .bind(said.id).first<{ text: string }>();
+        if (answered) return json({ ok: true, text: answered.text, already: true });
+        const recent = await env.DB
+            .prepare("SELECT text FROM agent_thread WHERE role='agent' ORDER BY id DESC LIMIT 4").all<{ text: string }>();
+        try {
+            const r = await generateAnswer(said.text, b.runContext, (recent.results ?? []).map((x) => x.text).reverse(), env as unknown as HomeBaseEnv);
+            await env.DB.prepare("INSERT INTO agent_thread (role, text, source, run_id, meta) VALUES ('agent', ?, 'auto', ?, ?)")
+                .bind(r.text, said.run_id, JSON.stringify({ model: r.model, for: said.id })).run();
+            return json({ ok: true, text: r.text, auto: true });
+        } catch (e) {
+            return json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+        }
     }
 
     // POST /agent/partial {clientId, text, runId?} (device): the line so far.
