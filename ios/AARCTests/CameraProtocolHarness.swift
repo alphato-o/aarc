@@ -1,3 +1,4 @@
+import AVFoundation
 import Testing
 import Foundation
 import AARCKit
@@ -228,5 +229,41 @@ struct ControlRoomChannelHarness {
         let (ch, _) = fresh()
         #expect(await ch.say("   ") == .sent)
         #expect(ch.pending.isEmpty)
+    }
+}
+
+@Suite("Talk-back segments")
+struct TalkbackSegmentHarness {
+    /// A tone of `seconds`, AAC in m4a, like the recorder writes.
+    private func segment(_ name: String, seconds: Double) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString).m4a")
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+        let file = try AVAudioFile(forWriting: url, settings: [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC), AVSampleRateKey: 16_000,
+            AVNumberOfChannelsKey: 1, AVEncoderBitRateKey: 32_000])
+        let frames = AVAudioFrameCount(16_000 * seconds)
+        let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buf.frameLength = frames
+        for i in 0..<Int(frames) { buf.floatChannelData![0][i] = Float(sin(Double(i) * 0.1) * 0.3) }
+        try file.write(from: buf)
+        return url
+    }
+
+    @Test("segments are joined end to end, nothing overwritten")
+    func joins() async throws {
+        let a = try segment("a", seconds: 3), b = try segment("b", seconds: 0.4), c = try segment("c", seconds: 2)
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("joined-\(UUID().uuidString).m4a")
+        #expect(await ControlRoomRecorder.join([a, b, c], into: out))
+        let dur = try await AVURLAsset(url: out).load(.duration).seconds
+        #expect(dur > 5.0 && dur < 5.8)
+        #expect(!FileManager.default.fileExists(atPath: a.path))
+    }
+
+    @Test("a single segment is just moved into place")
+    func single() async throws {
+        let a = try segment("solo", seconds: 1.5)
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("solo-\(UUID().uuidString).m4a")
+        #expect(await ControlRoomRecorder.join([a], into: out))
+        #expect(FileManager.default.fileExists(atPath: out.path))
     }
 }

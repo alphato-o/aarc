@@ -23,6 +23,9 @@ struct TellControlRoomIntent: AudioRecordingIntent, LiveActivityIntent {
             await recorder.finish(send: true)
             return .result()
         }
+        // The long-press that opened Siri already sent the line; don't
+        // start a new recording on the same breath.
+        if let t = recorder.lastFinishedAt, Date.now.timeIntervalSince(t) < 10 { return .result() }
         do {
             try recorder.start()
         } catch {
@@ -44,7 +47,12 @@ struct SendToControlRoomIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        guard ControlRoomRecorder.shared.isRecording else { return .result(dialog: "Nothing to send.") }
+        guard ControlRoomRecorder.shared.isRecording else {
+            if let t = ControlRoomRecorder.shared.lastFinishedAt, Date.now.timeIntervalSince(t) < 30 {
+                return .result(dialog: "Sent.")
+            }
+            return .result(dialog: "Nothing to send.")
+        }
         await ControlRoomRecorder.shared.finish(send: true)
         return .result(dialog: "Sent.")
     }

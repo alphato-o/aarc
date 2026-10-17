@@ -65,7 +65,7 @@ struct ControlRoomActivityWidget: Widget {
     private func caption(_ phase: String) -> String {
         switch phase {
         case "listening": return "Listening. Press your earbud to send."
-        case "listening-siri": return "Listening. Say \"send to Control Room\" when done."
+        case "listening-siri": return "Listening. Long-press your earbud to send."
         case "sending": return "Sending"
         case "queued": return "No signal. Sends when it's back."
         default: return "Sent"

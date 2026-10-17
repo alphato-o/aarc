@@ -139,17 +139,23 @@ cut him off mid-sentence (founder, 17 Oct). Instead:
 
 1. **"Hey Siri, tell Control Room"** (also "talk to / message Control Room",
    "Home Base listen"; `INAlternativeAppNames` in `Info.plist`) runs
-   `TellControlRoomIntent`, an iOS 18 `AudioRecordingIntent`, which is what
-   lets a background app open the mic. Siri says "Go."; a rising two-tone cue
+   `TellControlRoomIntent`, an iOS 18 `AudioRecordingIntent` (opens the mic
+   from the background) and `LiveActivityIntent` (starts the Live Activity
+   from the background). The Live Activity MUST be up before the audio
+   session: AppIntents traps the app otherwise (the 209 to 211 crashes). Siri says "Go."; a rising two-tone cue
    means the mic is open. A Live Activity ("Control Room, listening", timer)
    is required by iOS for the background recording and shows on the lock
    screen and Dynamic Island.
 2. `ControlRoomRecorder` records 16 kHz AAC on the earbud mic with a
    non-mixable session, so the music pauses and the app owns Now Playing.
-   Pauses are his: nothing ends the line except **a press on the earbud**
-   (play/pause/next all send), **"Hey Siri, send to Control Room"** (or
-   saying "tell Control Room" again), 30 s of silence after speech, or the
-   5 minute cap. "Hey Siri, cancel Control Room" scraps it; 25 s with no
+   Pauses are his: nothing ends the line except **a long-press on the
+   earbud** (Siri taking the mic is the send: the interruption closes the
+   recording and sends it; build 212 grabbed the mic back instead, stole it
+   from Siri seven times and overwrote a 150 s line), a press on the earbud
+   when the session went exclusive (rare: with Spotify playing iOS refuses
+   it from the background, `'!int'`), 30 s of silence after speech, or the
+   5 minute cap. Each uninterrupted stretch is its own segment file, joined
+   at send, so nothing is ever overwritten. "Hey Siri, cancel Control Room" scraps it; 25 s with no
    speech at all drops it. Coach lines are held while he talks
    (`VoiceFeedbackQueue.held`) and play afterwards. A falling cue means sent;
    the music resumes.

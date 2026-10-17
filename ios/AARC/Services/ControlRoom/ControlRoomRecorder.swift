@@ -57,6 +57,23 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     private(set) var exclusive = false
     private var startSteps = ""
     private var heals = 0
+    /// One file per uninterrupted stretch. A restart after an interruption
+    /// opens a NEW segment; reusing the URL overwrote 150 s of him with a
+    /// 0.2 s scrap (device, build 212). Joined into one file at send.
+    private var segments: [URL] = []
+    private var closedSeconds: TimeInterval = 0
+    /// When the last line was handed off. A Siri "send" that arrives just
+    /// after the long-press already sent it should still answer "Sent."
+    private(set) var lastFinishedAt: Date?
+    private var totalSeconds: TimeInterval { closedSeconds + (recorder?.currentTime ?? 0) }
+
+    private static let recordSettings: [String: Any] = [
+        AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+        AVSampleRateKey: 16_000,
+        AVNumberOfChannelsKey: 1,
+        AVEncoderBitRateKey: 32_000,
+        AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+    ]
 
     private static func code(_ error: Error) -> String {
         let e = error as NSError
@@ -117,18 +134,9 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
                 throw error
             }
             clientId = UUID()
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: 16_000,
-                AVNumberOfChannelsKey: 1,
-                AVEncoderBitRateKey: 32_000,
-                AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
-            ]
-            let r = try AVAudioRecorder(url: Self.fileURL(clientId), settings: settings)
-            r.delegate = self
-            r.isMeteringEnabled = true
-            guard r.record() else { throw RecorderError.couldNotStart }
-            recorder = r
+            segments = []
+            closedSeconds = 0
+            guard openSegment() else { throw RecorderError.couldNotStart }
         } catch {
             VoiceFeedbackQueue.shared.held = false
             Task { await endActivity(phase: nil) }
@@ -151,7 +159,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
                                      options: [.allowBluetoothHFP, .mixWithOthers, .duckOthers])
             try? session.setActive(true)
         }
-        if recorder?.isRecording != true { recorder?.record() }
+        if recorder?.isRecording != true { closeSegment(); _ = openSegment() }
         startSteps = steps.joined(separator: ", ")
 
         isRecording = true
@@ -160,6 +168,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         heals = 0
         claimRemoteCommands()
         if !exclusive { Task { await updateActivity("listening-siri") } }
+        lastFinishedAt = nil
         observeInterruptions()
         meterTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
@@ -177,12 +186,12 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     /// `requireSpeech`: the automatic stops only send if speech was heard;
     /// an explicit send (earbud, Siri) always sends.
     func finish(send: Bool, requireSpeech: Bool = false) async {
-        guard isRecording, !finishing, let r = recorder else { return }
+        guard isRecording, !finishing else { return }
         finishing = true
-        let duration = r.currentTime
+        lastFinishedAt = .now
+        closeSegment()
+        let duration = closedSeconds
         let spoke = heardSpeechAt != nil
-        r.stop()
-        recorder = nil
         meterTimer?.invalidate(); meterTimer = nil
         if let o = interruptionObserver { NotificationCenter.default.removeObserver(o) }
         interruptionObserver = nil
@@ -202,13 +211,15 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
         let url = Self.fileURL(clientId)
         guard send, duration >= 1, spoke || !requireSpeech else {
+            segments.forEach { try? FileManager.default.removeItem(at: $0) }
             try? FileManager.default.removeItem(at: url)
             if runId != nil { RunEventLog.shared.record("talkback.dropped", String(format: "%.0fs", duration)) }
             ControlRoomChannel.shared.diag("talkback dropped: send=\(send) \(String(format: "%.1f", duration))s spoke=\(spoke) heals=\(heals)")
             await endActivity(phase: nil)
             return
         }
-        ControlRoomChannel.shared.diag("talkback sending \(String(format: "%.0f", duration))s spoke=\(spoke) heals=\(heals)")
+        let joined = await Self.join(segments, into: url)
+        ControlRoomChannel.shared.diag("talkback sending \(String(format: "%.0f", duration))s in \(segments.count) segment(s), join=\(joined) spoke=\(spoke) heals=\(heals)")
         await updateActivity("sending")
         let outcome = await ControlRoomChannel.shared.sendRecording(
             file: url, clientId: clientId.uuidString, runId: runId, km: km,
@@ -217,22 +228,20 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     }
 
     private func tick() {
-        guard let r = recorder, isRecording else { return }
-        // Siri speaking (or anything else) pauses the recorder and may never
-        // post an interruption-ended (device, build 210: the mic sat dead
-        // while he talked). Re-arm it ourselves whenever it is not running.
-        if !r.isRecording {
-            try? AVAudioSession.sharedInstance().setActive(true)
-            if r.record() {
-                heals += 1
-                if heals == 1 { ControlRoomChannel.shared.diag("talkback recorder was paused, resumed at \(String(format: "%.1f", r.currentTime))s") }
-            }
+        guard isRecording, !finishing else { return }
+        // Anything taking the mic means he long-pressed for Siri (or a call
+        // came in): send what we have. Grabbing the mic back instead stole
+        // it from Siri seven times and overwrote his 150 s line (device,
+        // build 212, 17 Oct).
+        guard let r = recorder, r.isRecording else {
+            ControlRoomChannel.shared.diag("talkback interrupted at \(String(format: "%.1f", totalSeconds))s, sending")
+            Task { await finish(send: true) }
             return
         }
         r.updateMeters()
         let now = Date.now
         if r.averagePower(forChannel: 0) > Self.speechLevel { heardSpeechAt = now }
-        let elapsed = r.currentTime
+        let elapsed = totalSeconds
         if elapsed >= Self.maxSeconds {
             Task { await finish(send: true, requireSpeech: true) }
         } else if let heard = heardSpeechAt, now.timeIntervalSince(heard) >= Self.silenceSends {
@@ -240,6 +249,62 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         } else if heardSpeechAt == nil, elapsed >= Self.nothingSaidCancels {
             Task { await finish(send: false) }
         }
+    }
+
+    // MARK: - Segments
+
+    private func openSegment() -> Bool {
+        let url = Self.fileURL(clientId).deletingPathExtension()
+            .appendingPathExtension("seg\(segments.count).m4a")
+        guard let r = try? AVAudioRecorder(url: url, settings: Self.recordSettings) else { return false }
+        r.delegate = self
+        r.isMeteringEnabled = true
+        guard r.record() else { return false }
+        recorder = r
+        segments.append(url)
+        return true
+    }
+
+    private func closeSegment() {
+        guard let r = recorder else { return }
+        closedSeconds += r.currentTime
+        r.stop()
+        recorder = nil
+    }
+
+    /// Concatenate the segments into `out`. False keeps the longest segment
+    /// as `out` instead, so something always goes.
+    nonisolated static func join(_ parts: [URL], into out: URL) async -> Bool {
+        let fm = FileManager.default
+        let existing = parts.filter { fm.fileExists(atPath: $0.path) }
+        try? fm.removeItem(at: out)
+        guard !existing.isEmpty else { return false }
+        if existing.count == 1 {
+            try? fm.moveItem(at: existing[0], to: out)
+            return true
+        }
+        let comp = AVMutableComposition()
+        var ok = false
+        if let track = comp.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
+            var cursor = CMTime.zero
+            for u in existing {
+                let asset = AVURLAsset(url: u)
+                guard let src = try? await asset.loadTracks(withMediaType: .audio).first,
+                      let dur = try? await asset.load(.duration), dur > .zero else { continue }
+                if (try? track.insertTimeRange(CMTimeRange(start: .zero, duration: dur), of: src, at: cursor)) != nil {
+                    cursor = cursor + dur
+                }
+            }
+            if cursor > .zero, let export = AVAssetExportSession(asset: comp, presetName: AVAssetExportPresetAppleM4A) {
+                ok = (try? await export.export(to: out, as: .m4a)) != nil
+            }
+        }
+        if !ok {
+            let sized = existing.map { ($0, (try? fm.attributesOfItem(atPath: $0.path)[.size] as? Int) ?? 0) }
+            if let biggest = sized.max(by: { $0.1 < $1.1 })?.0 { try? fm.copyItem(at: biggest, to: out) }
+        }
+        existing.forEach { try? fm.removeItem(at: $0) }
+        return ok
     }
 
     // MARK: - Earbud press
@@ -278,17 +343,19 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
     /// Siri asking a follow-up, a call, an alarm: the recorder pauses on its
     /// own; carry on recording when the interruption is over.
+    /// Siri (the earbud long-press), a call, an alarm: the interruption is
+    /// the send button.
     private func observeInterruptions() {
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { note in
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             Task { @MainActor in
                 let me = ControlRoomRecorder.shared
-                guard me.isRecording, let r = me.recorder else { return }
-                try? AVAudioSession.sharedInstance().setActive(true)
-                r.record()
+                guard me.isRecording, !me.finishing else { return }
+                ControlRoomChannel.shared.diag("talkback interruption began at \(String(format: "%.1f", me.totalSeconds))s, sending")
+                await me.finish(send: true)
             }
         }
     }
