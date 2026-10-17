@@ -32,6 +32,8 @@
 
 | ✅ 3.1.12 | Race-day live uplink (GPS, battery, resend) in Actual race mode, append-only race feed, Control Room page my.aarun.club/race driven in Phi Browser for the video B-roll | iOS build 205, proxy `live_event` + `routes/racePage.ts` | Replay script shows the runner moving on the course; real-run check on the next training race |
 
+| ✅ 3.1.13 | Story pack: Tianjin city and 32 course-pinned stories fed to Ricky, Jess and Home Base (race pack one-shots, live STORY HERE + tour-guide directive, story points never withheld); Chinese names always followed by English; Home Base readout shape varies | proxy `data/courses/tianjin-2026-stories.json`, `lib/course.ts`, `lib/homeBase.ts` | Production samples 17 Oct: Liddell at km 3.4, the Astor at 5, the Drum Tower at 29 |
+
 ### 3.2 — Branched script generation
 
 | # | Task | Deliverable | Acceptance |

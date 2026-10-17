@@ -67,8 +67,9 @@ actor AIClient {
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         // Sonnet 4.5 via OpenRouter routinely takes 40-50s for the
         // current output shape (10+ messages with variant pools and
-        // expressive tags). 30s was triggering false timeouts.
-        request.timeoutInterval = 90
+        // expressive tags). 30s was triggering false timeouts. The race
+        // pack (40 story lines) took 200 s against production on 17 Oct.
+        request.timeoutInterval = plan.raceMode == "actual" ? 420 : 90
         request.httpBody = try encoder.encode(plan)
 
         let net = await NetworkActivityMonitor.shared.begin(service: "LLM", label: "generate-script")

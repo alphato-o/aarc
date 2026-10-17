@@ -53,6 +53,32 @@ Jessica is broadcast-safe in both race modes: hints and swearing stay,
 nothing explicit, no moaning or screaming. The race recording goes on
 YouTube; bleeps in post are a feature.
 
+## The story pack: every voice is a tour guide
+
+`proxy/src/data/courses/tianjin-2026-stories.json` carries the city and 32
+stories pinned to metres on the course: the Emperor's Ford, the nine
+concessions, Eric Liddell's stadium at km 3.3, the last emperor's 静园 at km
+4.1, the Astor at 5, the Dagu forts, the first railway at 15, the Century
+Clock and the Bridge of All Nations at 23, 金汤桥 and 15 January 1949 at 25,
+the Tianjin Eye at 27.5, the Mazu temple and the Drum Tower at 28 and 29,
+Nankai and 北洋 at 37, Zhou Enlai at 38, the Water Drop at 41. Every fact
+was checked; the jokes are the voices' own.
+
+How it is dispensed in Actual race mode:
+- The race pack script gets one Ricky line per story (38 to 48 messages),
+  nudged off round kilometres so it never stacks on the kilometre call.
+- Live, the course block in every voice carries STORY HERE for the current
+  point; Ricky's and Jessica's prompts close with a tour-guide directive, and a
+  line at a story point is never withheld by the race-mode rate limiter.
+- Home Base tells the story in its own register and must change the shape of
+  the readout every kilometre; stock closers are banned.
+- Names: every Chinese place name spoken gets its English meaning right after
+  it, first time, same breath (the recording has an English audience and the
+  voices read Chinese aloud in Mandarin).
+
+Another race: a new stories file next to the course JSON, attached in
+`lib/course.ts`.
+
 ## The race pack: the first half hour has no signal
 
 The crowd at the start kills the phone's data for about thirty minutes. The
