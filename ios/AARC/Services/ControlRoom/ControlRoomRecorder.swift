@@ -35,7 +35,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     static let nothingSaidCancels: TimeInterval = 25
     static let maxSeconds: TimeInterval = 300
     /// averagePower above this counts as speech (earbud mic, dBFS).
-    static let speechLevel: Float = -38
+    static let speechLevel: Float = -48
 
     private(set) var isRecording = false
     private(set) var startedAt: Date?
@@ -55,6 +55,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     /// True when the session went non-mixable: the earbud press reaches us.
     private(set) var exclusive = false
     private var startSteps = ""
+    private var heals = 0
 
     private static func code(_ error: Error) -> String {
         let e = error as NSError
@@ -148,6 +149,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         finishing = false
         startedAt = .now
         heardSpeechAt = nil
+        heals = 0
         claimRemoteCommands()
         startActivity()
         observeInterruptions()
@@ -155,6 +157,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
             Task { @MainActor in self?.tick() }
         }
         if runId != nil { RunEventLog.shared.record("talkback.listening", "") }
+        ControlRoomChannel.shared.diag("talkback listening: \(startSteps); activity=\(activityId != nil); fg=\(Self.foreground)")
         // After Siri has finished talking, so the cue is not lost under it.
         Task {
             try? await Task.sleep(for: .milliseconds(900))
@@ -163,7 +166,9 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     }
 
     /// End the recording; `send: false` throws it away.
-    func finish(send: Bool) async {
+    /// `requireSpeech`: the automatic stops only send if speech was heard;
+    /// an explicit send (earbud, Siri) always sends.
+    func finish(send: Bool, requireSpeech: Bool = false) async {
         guard isRecording, !finishing, let r = recorder else { return }
         finishing = true
         let duration = r.currentTime
@@ -188,13 +193,14 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         VoiceFeedbackQueue.shared.held = false
 
         let url = Self.fileURL(clientId)
-        guard send, duration >= 1, spoke else {
+        guard send, duration >= 1, spoke || !requireSpeech else {
             try? FileManager.default.removeItem(at: url)
             if runId != nil { RunEventLog.shared.record("talkback.dropped", String(format: "%.0fs", duration)) }
+            ControlRoomChannel.shared.diag("talkback dropped: send=\(send) \(String(format: "%.1f", duration))s spoke=\(spoke) heals=\(heals)")
             await endActivity(phase: nil)
             return
         }
-        ControlRoomChannel.shared.diag("talkback \(String(format: "%.0f", duration))s: \(startSteps)")
+        ControlRoomChannel.shared.diag("talkback sending \(String(format: "%.0f", duration))s spoke=\(spoke) heals=\(heals)")
         await updateActivity("sending")
         let outcome = await ControlRoomChannel.shared.sendRecording(
             file: url, clientId: clientId.uuidString, runId: runId, km: km,
@@ -204,14 +210,25 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
     private func tick() {
         guard let r = recorder, isRecording else { return }
+        // Siri speaking (or anything else) pauses the recorder and may never
+        // post an interruption-ended (device, build 210: the mic sat dead
+        // while he talked). Re-arm it ourselves whenever it is not running.
+        if !r.isRecording {
+            try? AVAudioSession.sharedInstance().setActive(true)
+            if r.record() {
+                heals += 1
+                if heals == 1 { ControlRoomChannel.shared.diag("talkback recorder was paused, resumed at \(String(format: "%.1f", r.currentTime))s") }
+            }
+            return
+        }
         r.updateMeters()
         let now = Date.now
         if r.averagePower(forChannel: 0) > Self.speechLevel { heardSpeechAt = now }
         let elapsed = r.currentTime
         if elapsed >= Self.maxSeconds {
-            Task { await finish(send: true) }
+            Task { await finish(send: true, requireSpeech: true) }
         } else if let heard = heardSpeechAt, now.timeIntervalSince(heard) >= Self.silenceSends {
-            Task { await finish(send: true) }
+            Task { await finish(send: true, requireSpeech: true) }
         } else if heardSpeechAt == nil, elapsed >= Self.nothingSaidCancels {
             Task { await finish(send: false) }
         }

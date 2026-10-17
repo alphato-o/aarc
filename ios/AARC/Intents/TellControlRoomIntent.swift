@@ -12,20 +12,22 @@ struct TellControlRoomIntent: AudioRecordingIntent {
         "Record a message for Control Room. Press your earbud, or say \"send to Control Room\", when you're done.")
     static let openAppWhenRun = false
 
+    /// No spoken reply once the mic is open: Siri talking takes the audio
+    /// and paused the recorder (device, build 210). The rising tone is the cue.
     @MainActor
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         let recorder = ControlRoomRecorder.shared
         if recorder.isRecording {
             await recorder.finish(send: true)
-            return .result(dialog: "Sent.")
+            return .result()
         }
         do {
             try recorder.start()
         } catch {
-            return .result(dialog: IntentDialog(stringLiteral: error.localizedDescription))
+            ControlRoomChannel.shared.diag("talkback intent failed: \(error.localizedDescription)")
+            throw error
         }
-        // Not exclusive: the earbud press still belongs to the music app.
-        return .result(dialog: recorder.exclusive ? "Go." : "Go. Say send to Control Room when you're done.")
+        return .result()
     }
 }
 
@@ -78,6 +80,10 @@ struct AARCShortcuts: AppShortcutsProvider {
                 "Send to \(.applicationName)",
                 "\(.applicationName) send",
                 "Send it to \(.applicationName)",
+                "\(.applicationName) done",
+                "Done \(.applicationName)",
+                "I'm done \(.applicationName)",
+                "\(.applicationName) over",
             ],
             shortTitle: "Send to Control Room",
             systemImageName: "paperplane.fill"
