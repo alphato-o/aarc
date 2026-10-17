@@ -31,6 +31,10 @@ final class ControlRoomChannel {
         var duration: Double? = nil
     }
 
+    enum UploadState: Equatable { case idle, uploading, delivered, failed }
+    /// The latest recorded line's upload, so Siri can say the truth.
+    private(set) var lastUpload: UploadState = .idle
+
     private static let pendingKey = "aarc.controlRoom.pending"
     private let defaults: UserDefaults
     private var retrying = false
@@ -97,15 +101,41 @@ final class ControlRoomChannel {
         }
         let item = Pending(text: "", runId: runId, km: km, elapsed: elapsed, at: .now,
                            audioFile: file.lastPathComponent, clientId: clientId, duration: duration)
+        // On the resend list BEFORE the upload: build 213's 111 s line was
+        // cut off mid-upload by a suspension and, never having "failed", was
+        // never queued. The proxy is idempotent on clientId, so a double
+        // send is harmless.
+        pending.append(item)
         let offRun = runId == nil
         if offRun { holdAwake() }
         if let id = await send(item) {
+            pending.removeAll { $0.clientId == clientId }
             if offRun { listenForAnswer(after: id); return .listening }
             return .sent
         }
         if offRun { releaseAwake() }
-        pending.append(item)
         return .queued
+    }
+
+    /// Launch sweep: a recording file on disk that is on no list was cut off
+    /// before it could be queued. Queue it now, so nothing he said is lost.
+    func adoptOrphanRecordings() {
+        let dir = ControlRoomRecorder.fileURL(UUID()).deletingLastPathComponent()
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
+        let known = Set(pending.compactMap(\.audioFile))
+        var adopted = 0
+        for name in names where name.hasSuffix(".m4a") && !name.contains(".seg") && !known.contains(name) {
+            let url = dir.appendingPathComponent(name)
+            let id = String(name.dropLast(4))
+            guard UUID(uuidString: id) != nil, !ControlRoomRecorder.shared.isRecording,
+                  let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                  let modified = attrs[.modificationDate] as? Date,
+                  Date.now.timeIntervalSince(modified) > 120 else { continue }
+            pending.append(Pending(text: "", runId: nil, km: nil, elapsed: nil, at: modified,
+                                   audioFile: name, clientId: id, duration: nil))
+            adopted += 1
+        }
+        if adopted > 0 { diag("talkback: found \(adopted) unsent recording(s) on the phone, sending") }
     }
 
     /// A one-line diagnostic for the agent, on the thread as a terminal row.
@@ -174,7 +204,7 @@ final class ControlRoomChannel {
         defer { retrying = false }
         while let item = pending.first {
             guard await send(item) != nil else { return }
-            pending.removeFirst()
+            pending.removeAll { $0 == item }
         }
     }
 
@@ -185,11 +215,23 @@ final class ControlRoomChannel {
             if let name = item.audioFile, let clientId = item.clientId {
                 let url = ControlRoomRecorder.fileURL(UUID(uuidString: clientId) ?? UUID())
                 guard url.lastPathComponent == name, FileManager.default.fileExists(atPath: url.path) else {
+                    await diagNow("talkback upload: audio file missing for \(clientId.prefix(8))")
+                    lastUpload = .failed
                     return -1   // audio gone: nothing left to send, let the queue move on
                 }
-                let r = try await AIClient.shared.agentVoice(file: url, clientId: clientId, runId: item.runId,
+                lastUpload = .uploading
+                let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+                let r: (id: Int, text: String)
+                do {
+                    r = try await AIClient.shared.agentVoice(file: url, clientId: clientId, runId: item.runId,
                                                              km: item.km, elapsed: item.elapsed,
                                                              duration: item.duration ?? 0)
+                } catch {
+                    lastUpload = .failed
+                    diag("talkback upload failed (\(size / 1024) KB): \(error.localizedDescription); kept for retry")
+                    throw error
+                }
+                lastUpload = .delivered
                 id = r.id
                 if item.runId != nil { RunEventLog.shared.record("voice.said", r.text, data: ["source": "siri"]) }
                 try? FileManager.default.removeItem(at: url)

@@ -267,3 +267,21 @@ struct TalkbackSegmentHarness {
         #expect(FileManager.default.fileExists(atPath: out.path))
     }
 }
+
+@Suite("Talk-back stop phrase")
+struct TalkbackStopPhraseHarness {
+    @Test("\"over and out\" at the end sends, in the spellings the recogniser uses")
+    func matches() {
+        for t in ["Tell Ricky he is slow. Over and out", "over and out.", "Over & out", "ok over n out",
+                  "pace is fine over an out"] {
+            #expect(TalkbackCapture.endsWithStopPhrase(t), "\(t)")
+        }
+    }
+
+    @Test("the phrase mid-sentence, or something close, does not send")
+    func rejects() {
+        for t in ["over and out is what pilots say", "it is over", "and out", "", "hangover and outrage"] {
+            #expect(!TalkbackCapture.endsWithStopPhrase(t), "\(t)")
+        }
+    }
+}

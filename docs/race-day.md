@@ -148,17 +148,16 @@ cut him off mid-sentence (founder, 17 Oct). Instead:
    screen and Dynamic Island.
 2. `ControlRoomRecorder` records 16 kHz AAC on the earbud mic with a
    non-mixable session, so the music pauses and the app owns Now Playing.
-   Pauses are his: nothing ends the line except **a long-press on the
-   earbud** (Siri taking the mic is the send: the interruption closes the
-   recording and sends it; build 212 grabbed the mic back instead, stole it
-   from Siri seven times and overwrote a 150 s line), a press on the earbud
-   when the session went exclusive (rare: with Spotify playing iOS refuses
-   it from the background, `'!int'`), 30 s of silence after speech, or the
-   5 minute cap. Each uninterrupted stretch is its own segment file, joined
-   at send, so nothing is ever overwritten. "Hey Siri, cancel Control Room" scraps it; 25 s with no
-   speech at all drops it. Coach lines are held while he talks
-   (`VoiceFeedbackQueue.held`) and play afterwards. A falling cue means sent;
-   the music resumes.
+   Mic: the **Powerbeats mic** (Bluetooth HFP) by default, the only one close
+   enough to his mouth in a race. HFP puts the earbuds in call mode, where
+   the long-press no longer reaches Siri, so the send is spoken: **"over
+   and out"** at the end of a line, caught by on-device speech recognition
+   (`TalkbackCapture`, AVAudioEngine tap feeding both the m4a file and an
+   `SFSpeechAudioBufferRecognitionRequest`, offline). The proxy strips the
+   phrase from the transcript. Pauses are his; the backstops are Siri from
+   the phone's side button (any interruption sends), 30 s of silence after
+   speech, and the 5 minute cap. Each uninterrupted stretch is its own
+   segment file, joined at send, so nothing is ever overwritten.
 3. `ControlRoomChannel.sendRecording` uploads to `POST /agent/voice`
    (clientId, runId, km, elapsed, duration). The proxy stores the audio in R2
    under `talkback/`, transcribes with the voice-note chain (Volc, Whisper,

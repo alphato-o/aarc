@@ -16,7 +16,7 @@ import AARCKit
 /// and resumes when the line is sent.
 @Observable
 @MainActor
-final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
+final class ControlRoomRecorder: NSObject {
     static let shared = ControlRoomRecorder()
 
     enum RecorderError: LocalizedError {
@@ -40,7 +40,9 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
     private(set) var isRecording = false
     private(set) var startedAt: Date?
-    private var recorder: AVAudioRecorder?
+    private var capture: TalkbackCapture?
+    private var configObserver: NSObjectProtocol?
+    private var notRunningSince: Date?
     private var clientId = UUID()
     private var meterTimer: Timer?
     private var heardSpeechAt: Date?
@@ -56,6 +58,31 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     /// True when the session went non-mixable: the earbud press reaches us.
     private(set) var exclusive = false
     private var startSteps = ""
+    private var inputRoute = ""
+    private var speechState = ""
+    /// Music was playing when he started: resume it after the send.
+    private var otherAudioAtStart = false
+
+    /// Record on the earbuds' mic (HFP). The long-press cannot send then
+    /// (call mode), so the stop phrase is the send.
+    static let earbudMicKey = "aarc.controlRoom.earbudMic"
+    /// Default ON (founder: "in race, iphone mic is too far away from my
+    /// voice, won't work. the mic needs to be the powerbeats mic").
+    static var useEarbudMic: Bool { UserDefaults.standard.object(forKey: earbudMicKey) as? Bool ?? true }
+
+    private static func recordOptions(mixable: Bool) -> AVAudioSession.CategoryOptions {
+        var o: AVAudioSession.CategoryOptions = [.allowBluetoothA2DP]
+        if useEarbudMic { o.insert(.allowBluetoothHFP) }
+        if mixable { o.formUnion([.mixWithOthers, .duckOthers]) }
+        return o
+    }
+
+    private static func preferMic(_ session: AVAudioSession) {
+        let want: AVAudioSession.Port = useEarbudMic ? .bluetoothHFP : .builtInMic
+        if let port = session.availableInputs?.first(where: { $0.portType == want }) {
+            try? session.setPreferredInput(port)
+        }
+    }
     private var heals = 0
     /// One file per uninterrupted stretch. A restart after an interruption
     /// opens a NEW segment; reusing the URL overwrote 150 s of him with a
@@ -65,7 +92,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     /// When the last line was handed off. A Siri "send" that arrives just
     /// after the long-press already sent it should still answer "Sent."
     private(set) var lastFinishedAt: Date?
-    private var totalSeconds: TimeInterval { closedSeconds + (recorder?.currentTime ?? 0) }
+    private var totalSeconds: TimeInterval { closedSeconds + (capture?.seconds ?? 0) }
 
     private static let recordSettings: [String: Any] = [
         AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -121,11 +148,11 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
             // failed"). So open the mic mixable first, recording, and only
             // then try to go exclusive (below), which pauses the music and
             // makes the earbud press ours.
-            try session.setCategory(.playAndRecord, mode: .default,
-                                    options: [.allowBluetoothHFP, .mixWithOthers, .duckOthers])
-            if let bt = session.availableInputs?.first(where: { $0.portType == .bluetoothHFP }) {
-                try? session.setPreferredInput(bt)
-            }
+            // Earbud mic (HFP) by default: the only mic near his mouth in a
+            // race. It puts the Powerbeats in call mode, where the long-press
+            // no longer reaches Siri, so "over and out" is the send.
+            try session.setCategory(.playAndRecord, mode: .default, options: Self.recordOptions(mixable: true))
+            Self.preferMic(session)
             do {
                 try session.setActive(true)
                 steps.append("mixable ok")
@@ -148,18 +175,23 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         // Now that we are recording (so, playing audio in the background),
         // try exclusive: music pauses, Now Playing and the earbud press are ours.
         do {
-            try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP])
+            try session.setCategory(.playAndRecord, mode: .default, options: Self.recordOptions(mixable: false))
             try session.setActive(true)
             exclusive = true
             steps.append("exclusive ok")
         } catch {
             exclusive = false
             steps.append("exclusive refused \(Self.code(error))")
-            try? session.setCategory(.playAndRecord, mode: .default,
-                                     options: [.allowBluetoothHFP, .mixWithOthers, .duckOthers])
+            try? session.setCategory(.playAndRecord, mode: .default, options: Self.recordOptions(mixable: true))
             try? session.setActive(true)
         }
-        if recorder?.isRecording != true { closeSegment(); _ = openSegment() }
+        Self.preferMic(session)
+        inputRoute = session.currentRoute.inputs.first.map { "\($0.portName) (\($0.portType.rawValue))" } ?? "none"
+        steps.append("in=\(inputRoute)")
+        otherAudioAtStart = session.isOtherAudioPlaying || session.secondaryAudioShouldBeSilencedHint
+        // The category switch above reconfigures the input; start a fresh
+        // segment on the settled route (the first one is a few ms long).
+        closeSegment(); _ = openSegment()
         startSteps = steps.joined(separator: ", ")
 
         isRecording = true
@@ -174,7 +206,7 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
             Task { @MainActor in self?.tick() }
         }
         if runId != nil { RunEventLog.shared.record("talkback.listening", "") }
-        ControlRoomChannel.shared.diag("talkback listening: \(startSteps); activity=\(activityId != nil); fg=\(Self.foreground)")
+        ControlRoomChannel.shared.diag("talkback listening: \(startSteps); speech=\(speechState); activity=\(activityId != nil); fg=\(Self.foreground)")
         // After Siri has finished talking, so the cue is not lost under it.
         Task {
             try? await Task.sleep(for: .milliseconds(900))
@@ -188,6 +220,12 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
     func finish(send: Bool, requireSpeech: Bool = false) async {
         guard isRecording, !finishing else { return }
         finishing = true
+        // Keep the process alive through join + upload: once the mic closes
+        // nothing else holds the app awake (build 213: the 111 s line never
+        // arrived; the app was suspended before the upload).
+        let bg = UIApplication.shared.beginBackgroundTask(withName: "talkback-send")
+        defer { if bg != .invalid { UIApplication.shared.endBackgroundTask(bg) } }
+        if otherAudioAtStart { resumeMusicSoon() }
         lastFinishedAt = .now
         closeSegment()
         let duration = closedSeconds
@@ -229,18 +267,20 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
 
     private func tick() {
         guard isRecording, !finishing else { return }
-        // Anything taking the mic means he long-pressed for Siri (or a call
-        // came in): send what we have. Grabbing the mic back instead stole
-        // it from Siri seven times and overwrote his 150 s line (device,
-        // build 212, 17 Oct).
-        guard let r = recorder, r.isRecording else {
-            ControlRoomChannel.shared.diag("talkback interrupted at \(String(format: "%.1f", totalSeconds))s, sending")
-            Task { await finish(send: true) }
+        // Siri, a call: the interruption observer sends. If the engine just
+        // stops with no notice, give a route change 3 s to restart it, then
+        // send what we have rather than sit on a dead mic.
+        guard let c = capture, c.isRunning else {
+            if notRunningSince == nil { notRunningSince = .now }
+            if let t = notRunningSince, Date.now.timeIntervalSince(t) > 3 {
+                ControlRoomChannel.shared.diag("talkback mic stopped at \(String(format: "%.1f", totalSeconds))s, sending")
+                Task { await finish(send: true) }
+            }
             return
         }
-        r.updateMeters()
+        notRunningSince = nil
         let now = Date.now
-        if r.averagePower(forChannel: 0) > Self.speechLevel { heardSpeechAt = now }
+        if c.currentLevel > Self.speechLevel { heardSpeechAt = now }
         let elapsed = totalSeconds
         if elapsed >= Self.maxSeconds {
             Task { await finish(send: true, requireSpeech: true) }
@@ -251,25 +291,72 @@ final class ControlRoomRecorder: NSObject, AVAudioRecorderDelegate {
         }
     }
 
+    /// Siri (the long-press) pauses the music app and does not always give
+    /// it back. If it is still quiet after Siri has had its moment, ask
+    /// Spotify to resume through the connected account.
+    private func resumeMusicSoon() {
+        Task {
+            for delay in [5.0, 12.0] {
+                try? await Task.sleep(for: .seconds(delay))
+                let session = AVAudioSession.sharedInstance()
+                if session.isOtherAudioPlaying { return }
+                guard SpotifyAuth.shared.isConnected else {
+                    ControlRoomChannel.shared.diag("talkback: music still paused, Spotify not connected")
+                    return
+                }
+                do {
+                    try await SpotifyClient.shared.resume()
+                    ControlRoomChannel.shared.diag("talkback: resumed Spotify after \(Int(delay))s")
+                    return
+                } catch {
+                    ControlRoomChannel.shared.diag("talkback: Spotify resume failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     // MARK: - Segments
 
     private func openSegment() -> Bool {
         let url = Self.fileURL(clientId).deletingPathExtension()
             .appendingPathExtension("seg\(segments.count).m4a")
-        guard let r = try? AVAudioRecorder(url: url, settings: Self.recordSettings) else { return false }
-        r.delegate = self
-        r.isMeteringEnabled = true
-        guard r.record() else { return false }
-        recorder = r
+        let c = TalkbackCapture()
+        c.onStopPhrase = {
+            Task { @MainActor in
+                let me = ControlRoomRecorder.shared
+                guard me.isRecording, !me.finishing else { return }
+                ControlRoomChannel.shared.diag("talkback: heard \"over and out\" at \(String(format: "%.1f", me.totalSeconds))s, sending")
+                await me.finish(send: true)
+            }
+        }
+        do { try c.start(writingTo: url) } catch {
+            ControlRoomChannel.shared.diag("talkback segment failed: \(error.localizedDescription)")
+            return false
+        }
+        capture = c
         segments.append(url)
+        speechState = c.speechState
+        // A route change stops the engine; carry on in a new segment.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: c.engine, queue: .main
+        ) { _ in
+            Task { @MainActor in
+                let me = ControlRoomRecorder.shared
+                guard me.isRecording, !me.finishing else { return }
+                me.closeSegment()
+                _ = me.openSegment()
+            }
+        }
         return true
     }
 
     private func closeSegment() {
-        guard let r = recorder else { return }
-        closedSeconds += r.currentTime
-        r.stop()
-        recorder = nil
+        if let o = configObserver { NotificationCenter.default.removeObserver(o) }
+        configObserver = nil
+        guard let c = capture else { return }
+        closedSeconds += c.seconds
+        c.stop()
+        capture = nil
     }
 
     /// Concatenate the segments into `out`. False keeps the longest segment

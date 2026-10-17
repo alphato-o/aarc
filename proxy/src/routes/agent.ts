@@ -107,6 +107,8 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
             // 502 so the phone keeps the audio and retries.
             return json({ ok: false, error: `transcription failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) }, 502);
         }
+        // The stop phrase is a control, not part of the message.
+        text = text.replace(/[\s,.;:!?-]*\bover\s*(?:and|&|an|n|in)\s*out\b[\s.!?]*$/i, "").trim();
         if (!text) text = "[nothing audible]";
         const meta: Record<string, unknown> = { clientId, recorded: true };
         if (url.searchParams.has("km") && Number.isFinite(km)) meta.km = Math.round(km * 100) / 100;

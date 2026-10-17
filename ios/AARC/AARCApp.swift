@@ -105,7 +105,11 @@ struct AARCApp: App {
                     await VoiceNoteRecorder.shared.retryPending(
                         context: PersistenceStore.shared.container.mainContext)
                     // A line said to Control Room in a dead spot goes now.
+                    ControlRoomChannel.shared.adoptOrphanRecordings()
                     await ControlRoomChannel.shared.retryPending()
+                    // "over and out" detection needs speech permission, and a
+                    // background start cannot ask for it.
+                    TalkbackCapture.requestSpeechAuthorizationIfNeeded()
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()

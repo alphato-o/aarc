@@ -49,7 +49,13 @@ struct SendToControlRoomIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         guard ControlRoomRecorder.shared.isRecording else {
             if let t = ControlRoomRecorder.shared.lastFinishedAt, Date.now.timeIntervalSince(t) < 30 {
-                return .result(dialog: "Sent.")
+                // Truthful: the upload may still be going (build 213 said
+                // "Sent." over a line that never arrived).
+                switch ControlRoomChannel.shared.lastUpload {
+                case .delivered: return .result(dialog: "Sent. Control Room has it.")
+                case .failed: return .result(dialog: "Not through yet. It's saved and will retry.")
+                default: return .result(dialog: "Still sending. Keep AARC open a moment.")
+                }
             }
             return .result(dialog: "Nothing to send.")
         }
