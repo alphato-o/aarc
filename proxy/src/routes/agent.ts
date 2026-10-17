@@ -33,13 +33,15 @@ interface ReplyBody { text?: string; speak?: boolean; runId?: string; voiceId?: 
 /// Home Base's voice (Kristen). Same id the phone uses for its local lines.
 const HOME_VOICE_ID = "Awx8TeMHHpDzbm42nIB6";
 
-/// The run he last spoke from, if it was recent enough to still be going.
-/// A quiet run (sharing off) has no live_run row, so the thread is the only
-/// place the phone tells us which run it is polling for.
+/// The run his LATEST line was said in, if it was recent enough to still be
+/// going. A quiet run (sharing off) has no live_run row, so the thread is the
+/// only place the phone tells us which run it is polling for. The latest row
+/// decides: a line sent with no run means he is not running, and an older
+/// run id must not catch the answer (a test run did, 17 Oct).
 async function latestRunId(env: AgentEnv): Promise<string | null> {
     const row = await env.DB
-        .prepare("SELECT run_id FROM agent_thread WHERE role='user' AND run_id IS NOT NULL AND created_at > datetime('now', '-7 hours') ORDER BY id DESC LIMIT 1")
-        .first<{ run_id: string }>();
+        .prepare("SELECT run_id FROM agent_thread WHERE role='user' AND created_at > datetime('now', '-7 hours') ORDER BY id DESC LIMIT 1")
+        .first<{ run_id: string | null }>();
     return row?.run_id ?? null;
 }
 
