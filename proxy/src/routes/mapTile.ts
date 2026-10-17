@@ -20,6 +20,10 @@ export async function mapTileHandler(request: Request): Promise<Response> {
         return new Response("bad tile coords", { status: 400 });
     }
 
+    // nolabels=1: AutoNavi's ltype=3 layer, roads/water/parks with no text at
+    // all. The race page uses it: a map full of Chinese labels is wrong for
+    // an English-audience video (founder, 2026-10-17).
+    const noLabels = url.searchParams.get("nolabels") === "1";
     const first = (Math.abs(Number(x) + Number(y)) % 4) + 1;
     // AutoNavi's tile hosts answer 5xx now and then; the race page draws
     // hundreds of tiles, so try the other three hosts before giving up.
@@ -27,7 +31,7 @@ export async function mapTileHandler(request: Request): Promise<Response> {
     for (let i = 0; i < 4 && !(resp && resp.ok); i++) {
         const s = ((first - 1 + i) % 4) + 1;
         const upstream =
-            `https://wprd0${s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scl=1&style=7&x=${x}&y=${y}&z=${z}`;
+            `https://wprd0${s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scl=1&style=7${noLabels ? "&ltype=3" : ""}&x=${x}&y=${y}&z=${z}`;
         try {
             resp = await fetch(upstream, {
                 headers: {

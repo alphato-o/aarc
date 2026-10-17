@@ -92,6 +92,9 @@ aside{display:flex;flex-direction:column;gap:10px;overflow:hidden}
 <script>
 (() => {
 const COURSE_ID = 'tianjin2026';
+// Broadcast mode (default): label-free muted map, no Chinese on screen except
+// the spoken lines. ?labels=1 shows the full Control Room detail instead.
+const BROADCAST = new URLSearchParams(location.search).get('labels') !== '1';
 const $ = (id) => document.getElementById(id);
 let courseErr = ''; const err = (m) => { const e = $('err'); const t = [courseErr, m].filter(Boolean).join(' · '); e.textContent = t; e.style.display = t ? 'block' : 'none'; };
 
@@ -104,7 +107,7 @@ function wgs2gcj(lon, lat){ let dLat = tLat(lon-105, lat-35), dLon = tLon(lon-10
 // --- Web Mercator helpers (tile space at zoom z)
 function proj(lon, lat, z){ const n = Math.pow(2, z); return [(lon+180)/360*n, (1 - Math.log(Math.tan(lat*PI/180) + 1/Math.cos(lat*PI/180))/PI)/2*n]; }
 const tiles = new Map();
-function tile(x, y, z, onload){ const k = z+'/'+x+'/'+y; let t = tiles.get(k); if (t) return t; t = new Image(); t.onload = onload; t.tries = (tiles.get(k + '#n') || 0) + 1; t.onerror = () => { t.failed = true; if (t.tries < 7) setTimeout(() => { tiles.delete(k); tiles.set(k + '#n', t.tries); requestRedraw(); }, 1500 * t.tries); }; t.src = '/maptile?x='+x+'&y='+y+'&z='+z; tiles.set(k, t); return t; }
+function tile(x, y, z, onload){ const k = z+'/'+x+'/'+y; let t = tiles.get(k); if (t) return t; t = new Image(); t.onload = onload; t.tries = (tiles.get(k + '#n') || 0) + 1; t.onerror = () => { t.failed = true; if (t.tries < 7) setTimeout(() => { tiles.delete(k); tiles.set(k + '#n', t.tries); requestRedraw(); }, 1500 * t.tries); }; t.src = '/maptile?x='+x+'&y='+y+'&z='+z+(BROADCAST ? '&nolabels=1' : ''); tiles.set(k, t); return t; }
 
 const state = { course: null, events: [], next: 0, run: null, fixes: [], last: {}, lines: [], gateT: null, serverSkew: 0, lastOK: 0, fails: 0 };
 
@@ -114,14 +117,16 @@ function drawMap(cv, centerLonLat, z, opts){
   const c = proj(centerLonLat[0], centerLonLat[1], z);
   const ox = c[0]*256 - W/2, oy = c[1]*256 - H/2;
   const x0 = Math.floor(ox/256), x1 = Math.floor((ox+W)/256), y0 = Math.floor(oy/256), y1 = Math.floor((oy+H)/256);
+  if (BROADCAST) ctx.filter = 'grayscale(0.85) brightness(0.72) contrast(1.2)';
   for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) { const t = tile(x, y, z, () => requestRedraw()); if (t.complete && t.naturalWidth) ctx.drawImage(t, x*256-ox, y*256-oy); }
+  ctx.filter = 'none';
   if (opts.dim) { ctx.fillStyle = 'rgba(11,15,20,0.35)'; ctx.fillRect(0, 0, W, H); }
   const P = (lon, lat) => { const p = proj(lon, lat, z); return [p[0]*256-ox, p[1]*256-oy]; };
   // course
   if (state.course) {
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
     ctx.beginPath(); state.course.polyline.forEach((p, i) => { const q = P(p[0], p[1]); i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
-    ctx.strokeStyle = 'rgba(255,59,92,0.95)'; ctx.lineWidth = opts.courseWidth; ctx.stroke();
+    ctx.strokeStyle = BROADCAST ? 'rgba(255,80,110,0.9)' : 'rgba(255,59,92,0.95)'; ctx.lineWidth = opts.courseWidth; ctx.stroke();
     // km markers
     const every = opts.kmEvery;
     for (const k of state.course.kmPoints) { if (k.km % every) continue; const q = P(k.lon, k.lat); ctx.beginPath(); ctx.arc(q[0], q[1], opts.kmR, 0, 2*PI); ctx.fillStyle = '#111'; ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); if (opts.kmLabel) { ctx.fillStyle = '#fff'; ctx.font = 'bold ' + opts.kmFont + 'px -apple-system,Helvetica'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(k.km), q[0], q[1]+0.5); } }
@@ -156,7 +161,7 @@ async function loadCourse(){
   let zoom = 13; for (let z = 15; z >= 10; z--) { const a = proj(minLon, maxLat, z), b = proj(maxLon, minLat, z); if ((b[0]-a[0])*256 < 560 && (b[1]-a[1])*256 < 520) { zoom = z; break; } }
   const kmPoints = []; for (let k = 0; k <= 42; k++) { let best = pl[0]; for (const p of pl) if (Math.abs(p[2]-k*1000) < Math.abs(best[2]-k*1000)) best = p; kmPoints[k] = { km: k, lon: best[0], lat: best[1] }; }
   state.course = { polyline: pl, km: c.km, kmPoints, center, zoom, totalM: c.totalM || 42195, name: c.name };
-  $('race').textContent = c.name + ' · ' + c.date;
+  $('race').textContent = (BROADCAST ? 'Tianjin Marathon' : c.name) + ' · ' + c.date;
 }
 function courseMetres(g){ const pl = state.course.polyline; let best = null, bd = 1e12; for (const p of pl) { const dx = (p[0]-g[0])*Math.cos(g[1]*PI/180)*111320, dy = (p[1]-g[1])*110540; const d = dx*dx+dy*dy; if (d < bd) { bd = d; best = p; } } return { m: best[2], off: Math.sqrt(bd) }; }
 
@@ -214,7 +219,9 @@ function render(){
     if (state.course) { const next = state.course.km.find(k => k.km*1000 > m.d && k.stations && k.stations.length); $('station').textContent = next ? ('km ' + next.km + ' · ' + ((next.km*1000 - m.d)/1000).toFixed(1) + ' km') : '--'; }
   }
   const f = state.fixes[state.fixes.length-1];
-  if (f && state.course) { const cm = courseMetres(f.g); const k = state.course.km[Math.min(42, Math.floor(cm.m/1000))]; $('ckm').textContent = 'km ' + (cm.m/1000).toFixed(1) + (cm.off > 80 ? ' (off course ' + Math.round(cm.off) + ' m)' : ''); $('where').innerHTML = '<b>' + (k.street || '') + '</b> ' + (k.district || '') + (k.landmarks && k.landmarks.length ? ' · ' + k.landmarks.slice(0,2).join(', ') : '') + '<br><span style="color:#8b98a8">' + (f.kmh ? f.kmh.toFixed(1) + ' km/h' : '') + (f.hr ? ' · ' + f.hr + ' bpm' : '') + ' · fix at ' + fmtT(f.t) + '</span>'; }
+  if (f && state.course) { const cm = courseMetres(f.g); const k = state.course.km[Math.min(42, Math.floor(cm.m/1000))]; $('ckm').textContent = 'km ' + (cm.m/1000).toFixed(1) + (cm.off > 80 ? ' (off course ' + Math.round(cm.off) + ' m)' : ''); const tail = '<span style="color:#8b98a8">' + (f.kmh ? f.kmh.toFixed(1) + ' km/h' : '') + (f.hr ? ' · ' + f.hr + ' bpm' : '') + ' · fix at ' + fmtT(f.t) + '</span>';
+    $('where').innerHTML = BROADCAST ? ('<b>km ' + (cm.m/1000).toFixed(1) + '</b> of 42.2 on the course<br>' + tail)
+      : ('<b>' + (k.street || '') + '</b> ' + (k.district || '') + (k.landmarks && k.landmarks.length ? ' · ' + k.landmarks.slice(0,2).join(', ') : '') + '<br>' + tail); }
   const b = state.last.battery || {}; const cls = (v) => v === '' || v === undefined ? '' : (parseInt(v) <= 15 ? 'bad' : parseInt(v) <= 30 ? 'warn' : 'ok');
   $('bwatch').textContent = b.watch ? b.watch + '%' : '--'; $('bwatch').className = 'bat ' + cls(b.watch);
   $('bphone').textContent = b.phone ? b.phone + '%' : '--'; $('bphone').className = 'bat ' + cls(b.phone);
