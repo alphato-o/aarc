@@ -54,6 +54,7 @@ struct ControlRoomActivityWidget: Widget {
         case "listening", "listening-siri": return "mic.fill"
         case "sending": return "arrow.up.circle"
         case "queued": return "clock"
+        case "ready": return "antenna.radiowaves.left.and.right"
         default: return "checkmark.circle"
         }
     }
@@ -67,6 +68,7 @@ struct ControlRoomActivityWidget: Widget {
         case "listening", "listening-siri": return "Listening. Say \"over and out\" to send."
         case "sending": return "Sending"
         case "queued": return "No signal. Sends when it's back."
+        case "ready": return "Say \"Hey Siri, tell Control Room\""
         default: return "Sent"
         }
     }

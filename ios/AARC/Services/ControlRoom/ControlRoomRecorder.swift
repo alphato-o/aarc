@@ -49,6 +49,11 @@ final class ControlRoomRecorder: NSObject {
     private var meterTimer: Timer?
     private var heardSpeechAt: Date?
     private var activityId: String?
+    /// The standing banner for the whole run, started while AARC is on screen.
+    /// iOS refuses a new Live Activity from the background once a run is going
+    /// ("Target is not foreground", device, 18 Oct), so talk-back reuses this.
+    private var armedId: String?
+    private var foregroundObserver: NSObjectProtocol?
     private var commandTargets: [(MPRemoteCommand, Any)] = []
     private var keepaliveWasRunning = false
     private var runId: String?
@@ -488,14 +493,63 @@ final class ControlRoomRecorder: NSObject {
     private func startActivity() -> String? {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return "Live Activities are off for AARC" }
         let state = ControlRoomActivityAttributes.ContentState(phase: "listening", startedAt: startedAt ?? .now)
+        if let id = armedId, Self.exists(id) {
+            activityId = id
+            Task { await Self.push(id, .init(state: state, staleDate: nil)) }
+            return nil
+        }
+        armedId = nil
         do {
             activityId = try Activity.request(attributes: ControlRoomActivityAttributes(),
                                               content: .init(state: state, staleDate: nil)).id
             return nil
         } catch {
             activityId = nil
+            // The run's own banner is a Live Activity of this app too.
+            if !Activity<LiveActivityAttributes>.activities.isEmpty {
+                ControlRoomChannel.shared.diag("talkback: own banner refused (\(Self.code(error))), riding the run banner")
+                return nil
+            }
             return "\(error.localizedDescription) [\(Self.code(error))]"
         }
+    }
+
+    // MARK: - Standing banner for a run
+
+    /// Called when a run starts (AARC is on screen then) and whenever AARC
+    /// comes to the foreground during a run.
+    func armForRun() {
+        if foregroundObserver == nil {
+            foregroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
+                Task { @MainActor in
+                    let me = ControlRoomRecorder.shared
+                    if LiveMetricsConsumer.shared.currentRunId != nil { me.armForRun() }
+                }
+            }
+        }
+        if let id = armedId, Self.exists(id) { return }
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let state = ControlRoomActivityAttributes.ContentState(phase: "ready", startedAt: .now)
+        do {
+            armedId = try Activity.request(attributes: ControlRoomActivityAttributes(),
+                                           content: .init(state: state, staleDate: nil)).id
+        } catch {
+            armedId = nil
+            ControlRoomChannel.shared.diag("talkback: could not arm the run banner: \(Self.code(error)); fg=\(Self.foreground)")
+        }
+    }
+
+    func disarm() {
+        guard let id = armedId else { return }
+        armedId = nil
+        if isRecording { return }  // finish() ends it as an ordinary banner
+        let c = ActivityContent(state: ControlRoomActivityAttributes.ContentState(phase: "sent", startedAt: .now), staleDate: nil)
+        Task { await Self.close(id, c, dismissNow: true) }
+    }
+
+    private nonisolated static func exists(_ id: String) -> Bool {
+        Activity<ControlRoomActivityAttributes>.activities.contains { $0.id == id && $0.activityState == .active }
     }
 
     private func updateActivity(_ phase: String) async {
@@ -508,6 +562,17 @@ final class ControlRoomRecorder: NSObject {
     private func endActivity(phase: String?) async {
         guard let id = activityId else { return }
         activityId = nil
+        if id == armedId {
+            // Keep the standing banner: show the outcome, then back to ready.
+            if let phase { await Self.push(id, .init(state: .init(phase: phase, startedAt: .now), staleDate: nil)) }
+            Task {
+                try? await Task.sleep(for: .seconds(phase == nil ? 0 : 6))
+                let me = ControlRoomRecorder.shared
+                guard me.armedId == id, !me.isRecording else { return }
+                await Self.push(id, .init(state: .init(phase: "ready", startedAt: .now), staleDate: nil))
+            }
+            return
+        }
         let content = ActivityContent(state: ControlRoomActivityAttributes.ContentState(
             phase: phase ?? "sent", startedAt: startedAt ?? .now), staleDate: nil)
         await Self.close(id, content, dismissNow: phase == nil)
