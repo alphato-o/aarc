@@ -152,7 +152,8 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
                 }
             }
         }
-        const q = await env.DB.prepare(
+        // The US gateway has no D1; this unguarded read 500'd every live line there (18 Oct).
+        const q = !env.DB ? null : await env.DB.prepare(
             "SELECT COUNT(*) AS c FROM home_briefing WHERE kind='quiet' AND (expires_at IS NULL OR expires_at > datetime('now'))"
         ).first<{ c: number }>().catch(() => null);
         if (q && q.c > 0 && Math.random() < 0.5) {

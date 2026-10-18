@@ -98,7 +98,7 @@ final class RaceCameraDirector {
             connected: link.state == .connected,
             recording: s?.isRecording ?? false,
             batteryPercent: s?.batteryPercent,
-            remainMinutes: s?.remainTimeSec.map { $0 / 60 },
+            remainMinutes: s?.remainTimeSec.flatMap { $0 > 0 ? $0 / 60 : nil },
             tempOver: s?.tempOver ?? 0)
     }
 
@@ -206,7 +206,10 @@ final class RaceCameraDirector {
     }
 
     private func checkCard(_ snap: OsmoCameraLink.Snapshot) {
-        guard let remain = snap.remainTimeSec else { return }
+        // The Osmo reports 0 before it has read the card (224 desk test: "0 minutes
+        // left" at the start). A truly full card cannot record, which the
+        // not-recording alarm covers.
+        guard snap.isRecording, let remain = snap.remainTimeSec, remain > 0 else { return }
         let minutes = remain / 60
         if minutes <= 15, minutes < cardWarnedMinutes - 4 {
             cardWarnedMinutes = minutes
