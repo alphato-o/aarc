@@ -18,6 +18,13 @@ import AARCKit
 ///   finish          → "Run complete."
 ///   time intro      → nil (use the script's own line)
 enum MilestoneAnnouncement {
+    /// Actual race: the finish is the arch, not a number (founder, 2026-10-18:
+    /// "stick with the route book"). The watch's GPS reads long on a race,
+    /// so no line may call the finish, or "past your goal", on distance.
+    static let raceFinishText = "That's forty-two on the watch. The finish is the arch at the Olympic Centre stadium. Run to it."
+    static let raceNearText = "Nearly there. The stadium is ahead."
+    private static var isRace: Bool { RunOrchestrator.raceModeRawForRequests == "actual" }
+
     /// Produce the announcement string for a triggered message, or nil if
     /// no separate announcement is warranted (intro lines, custom triggers).
     static func text(
@@ -36,7 +43,7 @@ enum MilestoneAnnouncement {
                 // Past the goal on a distance plan: every extra km is "bonus"
                 // — the run keeps going until the runner taps stop. Suffix is
                 // deterministic per N so the cache stays warm.
-                if let total = plan.totalMeters, crossedMeters > total + 1 {
+                if let total = plan.totalMeters, crossedMeters > total + 1, !isRace {
                     let past = crossedMeters - total
                     return "\(distanceText(meters: crossedMeters)). That's \(distanceText(meters: past)) past your goal."
                 }
@@ -70,6 +77,7 @@ enum MilestoneAnnouncement {
             return "Halfway."
 
         case .nearFinish:
+            if isRace { return raceNearText }
             if let m = trigger.remainingMeters, m > 0 {
                 return "\(distanceText(meters: m)) to go."
             }
@@ -79,6 +87,7 @@ enum MilestoneAnnouncement {
             return "Nearly there."
 
         case .finish:
+            if isRace { return raceFinishText }
             // Goal reached — but the run does NOT stop here. Frame the goal
             // as a checkpoint, not an end; everything past it is bonus.
             if let total = plan.totalMeters {
@@ -147,7 +156,10 @@ enum MilestoneAnnouncement {
         // plans (most outdoor runs are under 10k; if the founder goes
         // longer, the late kms pay the network cost once and then cache).
         let maxKm: Int
-        if let km = plan.distanceKm {
+        if isRace {
+            texts += [raceFinishText, raceNearText]
+            maxKm = 46   // the watch reads long on a race; every km it may say is ready offline
+        } else if let km = plan.distanceKm {
             maxKm = max(1, Int(ceil(km)))
         } else {
             maxKm = 10

@@ -38,7 +38,7 @@ final class SpotifyAuth: NSObject {
     /// will get 403 on writes until the user reconnects.
     /// `user-read-recently-played` (18 Oct): the race soundtrack backfill
     /// for stretches the phone was offline. Needs one reconnect.
-    private let scope = "user-read-currently-playing user-read-playback-state user-modify-playback-state user-read-recently-played"
+    private let scope = "user-read-currently-playing user-read-playback-state user-modify-playback-state user-read-recently-played playlist-read-private"
     private let tokenEndpoint = URL(string: "https://accounts.spotify.com/api/token")!
     private let authEndpoint = URL(string: "https://accounts.spotify.com/authorize")!
 

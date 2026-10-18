@@ -96,3 +96,24 @@ struct FlyingDarkHarness {
         q.stopAll()
     }
 }
+
+/// Actual race: one race, and the arch is the finish (18 Oct).
+@MainActor
+@Suite("Race day plan", .serialized)
+struct RaceDayPlanHarness {
+    @Test func actualRaceLocksTheMarathonAndNeverCallsTheFinishOnDistance() {
+        let o = RunOrchestrator.shared
+        let before = o.raceMode
+        defer { o.raceMode = before }
+        o.raceMode = .actual
+        let plan = ScriptPreviewStore.shared.currentPlan
+        #expect(plan.kind == .distance && plan.distanceKm == RunOrchestrator.marathonKm)
+        let finish = ScriptMessage(id: "f", triggerSpec: TriggerSpec(type: .finish), text: "x", textVariants: nil, priority: 1, playOnce: true)
+        #expect(MilestoneAnnouncement.text(for: finish, plan: plan, distanceMeters: 42_300, elapsedSeconds: 14_000) == MilestoneAnnouncement.raceFinishText)
+        let km = ScriptMessage(id: "k", triggerSpec: TriggerSpec(type: .distance, everyMeters: 1000), text: "x", textVariants: nil, priority: 1, playOnce: false)
+        let late = MilestoneAnnouncement.text(for: km, plan: plan, distanceMeters: 43_050, elapsedSeconds: 14_300) ?? ""
+        #expect(!late.contains("past your goal"))
+        let pack = Set(MilestoneAnnouncement.prefetchTexts(for: plan))
+        #expect(pack.contains(MilestoneAnnouncement.raceFinishText) && pack.contains(late))
+    }
+}

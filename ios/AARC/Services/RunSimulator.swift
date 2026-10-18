@@ -180,6 +180,10 @@ final class RunSimulator {
     // MARK: - Lifecycle
 
     func start(runType: RunType, runId: UUID, personalityId: String, plan: RunPlan) {
+        // No watch session holds a simulated run awake: without this a desk
+        // test was suspended whenever nothing was playing.
+        BackgroundAudioKeepalive.shared.wanted = true
+        BackgroundAudioKeepalive.shared.start()
         simElapsed = 0
         simDistance = 0
         smoothedHR = 110
@@ -236,6 +240,8 @@ final class RunSimulator {
     }
 
     func end() {
+        BackgroundAudioKeepalive.shared.wanted = false
+        BackgroundAudioKeepalive.shared.stop()
         guard isActive else { return }
         isActive = false
         ticker?.invalidate(); ticker = nil

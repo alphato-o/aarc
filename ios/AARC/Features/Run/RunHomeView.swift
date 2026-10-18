@@ -77,13 +77,19 @@ struct RunHomeView: View {
         // plan section — matching the runner's mental priority (set
         // distance once, hit Start often).
         VStack(spacing: 14) {
-            planSection(planStore: planStore)
-                .frame(maxHeight: .infinity)
-                .layoutPriority(1)
-            trackingSourcePicker
+            if orchestrator.raceMode == .actual {
+                raceCard
+                    .frame(maxHeight: .infinity)
+                    .layoutPriority(1)
+            } else {
+                planSection(planStore: planStore)
+                    .frame(maxHeight: .infinity)
+                    .layoutPriority(1)
+                trackingSourcePicker
+            }
             testRunToggle
             raceModeToggle
-            liveShareToggle
+            if orchestrator.raceMode != .actual { liveShareToggle }
             watchUnreachableBanner
             startButtons
                 .frame(maxHeight: .infinity)
@@ -116,6 +122,23 @@ struct RunHomeView: View {
         .padding(.vertical, 8)
         .background(liveShare ? Color.teal.opacity(0.12) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Actual race: nothing to choose. The race is the plan.
+    private var raceCard: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "flag.checkered").font(.title2).foregroundStyle(.purple)
+            Text("Tianjin Marathon").font(.title2.bold())
+            Text("25 October · 42.2 km · outdoor").font(.subheadline).foregroundStyle(.secondary)
+            Text("Watch tracks · live feed on · camera rolls from the corral")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+        .onAppear {
+            RunOrchestrator.lockMarathonPlan()
+            trackingSourceRaw = TrackingSource.watch.rawValue   // the watch is the race tracker
+        }
     }
 
     /// Race mode: the rehearsal switch for the marathon. Turning it on also
@@ -568,6 +591,12 @@ struct RunHomeView: View {
         } else {
             // Slide-to-start (not tap) so a stray touch can't begin a run.
             VStack(spacing: 14) {
+              if orchestrator.raceMode == .actual {
+                SlideToStart(label: "Start the race", icon: "flag.checkered", tint: .purple) {
+                    Task { await startTapped(.outdoor) }
+                }
+                .accessibilityIdentifier("startOutdoor")
+              } else {
                 SlideToStart(label: "Treadmill", icon: "figure.run.treadmill", tint: .green) {
                     // Venue first, run second: the picker settles where he is
                     // before the countdown so the coaches never guess the gym.
@@ -578,6 +607,7 @@ struct RunHomeView: View {
                     Task { await startTapped(.outdoor) }
                 }
                 .accessibilityIdentifier("startOutdoor")
+              }
 
                 // UI-TEST ONLY: plain buttons that invoke the SAME start path,
                 // so the XCUITest journey can start a run deterministically

@@ -72,7 +72,19 @@ final class RunOrchestrator {
     nonisolated private static let kRaceMode = "aarc.run.raceMode"
     var raceMode: RaceMode =
         RaceMode(rawValue: UserDefaults.standard.string(forKey: kRaceMode) ?? "") ?? .off {
-        didSet { UserDefaults.standard.set(raceMode.rawValue, forKey: Self.kRaceMode) }
+        didSet {
+            UserDefaults.standard.set(raceMode.rawValue, forKey: Self.kRaceMode)
+            if raceMode == .actual { Self.lockMarathonPlan() }
+        }
+    }
+
+    /// Actual race is one race (founder, 2026-10-18: "you know what race I am
+    /// actually running"): the Tianjin full marathon, outdoor, no plan choice.
+    static let marathonKm = 42.2
+    static func lockMarathonPlan() {
+        let store = ScriptPreviewStore.shared
+        if store.planKind != .distance { store.planKind = .distance }
+        if store.distanceKm != marathonKm { store.distanceKm = marathonKm }
     }
     /// Read without touching the main actor: request encoders stamp this on
     /// every line call so the proxy knows the run's mode.

@@ -158,6 +158,7 @@ final class PhoneWorkoutSession: NSObject {
             // audible output, and without permanently ducking music
             // (no .duckOthers on the keepalive's output).
             AudioPlaybackManager.shared.beginSustained()
+            BackgroundAudioKeepalive.shared.wanted = true
             BackgroundAudioKeepalive.shared.start()
         } else {
             log.info("[start] entering outdoor branch — GPS location updates")
@@ -218,6 +219,7 @@ final class PhoneWorkoutSession: NSObject {
         // Release the sustained audio session + silent keepalive if
         // they were on (treadmill). No-ops for outdoor runs that
         // never entered sustained mode.
+        BackgroundAudioKeepalive.shared.wanted = false
         BackgroundAudioKeepalive.shared.stop()
         AudioPlaybackManager.shared.endSustained()
 

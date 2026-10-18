@@ -12,13 +12,18 @@ final class MusicTimeline {
     struct Play: Codable, Equatable {
         let runId: String
         let source: String      // "live" | "history"
-        let at: Date            // live: track start; history: Spotify's played_at
+        let at: Date            // live: when the app saw it; history: Spotify's played_at (track end)
         let event: String       // "track" | "pause" | "resume" | "played"
         let trackId: String?
         let title: String
         let artist: String
         let album: String?
         let durationMs: Int?
+        /// Live only: how far into the track it was at `at`, so the video can
+        /// line the song up to the second even after a skip into its middle.
+        var offsetMs: Int? = nil
+        var playlist: String? = nil
+        var playlistURI: String? = nil
     }
 
     /// A finished run whose history still needs pulling (Spotify only syncs
@@ -31,6 +36,7 @@ final class MusicTimeline {
     private var runStart: Date?
     private var lastTrackKey: String?
     private var lastTitle = ""
+    private var playlistNames: [String: String] = [:]
     private var lastPlaying: Bool?
     private var pollTask: Task<Void, Never>?
     private var sending = false
@@ -111,9 +117,14 @@ final class MusicTimeline {
                 lastTrackKey = key
                 lastTitle = t.title
                 lastPlaying = t.isPlaying
-                let started = Date().addingTimeInterval(-Double(t.progressMs ?? 0) / 1000)
-                append(Play(runId: rid, source: "live", at: started, event: "track", trackId: t.id,
-                            title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs))
+                var name: String?
+                if let uri = t.contextURI {
+                    if let known = playlistNames[uri] { name = known }
+                    else if let fetched = await SpotifyClient.shared.playlistName(uri: uri) { playlistNames[uri] = fetched; name = fetched }
+                }
+                append(Play(runId: rid, source: "live", at: .now, event: "track", trackId: t.id,
+                            title: t.title, artist: t.artist, album: t.album, durationMs: t.durationMs,
+                            offsetMs: t.progressMs, playlist: name, playlistURI: t.contextURI))
                 RunEventLog.shared.record("music.track", "\(t.title) · \(t.artist)",
                                           data: ["trackId": t.id ?? "", "startedAgoMs": String(t.progressMs ?? 0)])
             } else if t.isPlaying != lastPlaying {
@@ -178,6 +189,9 @@ final class MusicTimeline {
                 if let v = p.trackId { d["trackId"] = v }
                 if let v = p.album { d["album"] = v }
                 if let v = p.durationMs { d["durationMs"] = v }
+                if let v = p.offsetMs { d["offsetMs"] = v }
+                if let v = p.playlist { d["playlist"] = v }
+                if let v = p.playlistURI { d["playlistUri"] = v }
                 return d
             }]
             var req = URLRequest(url: Config.cloudBaseURL.appendingPathComponent("live/music"))

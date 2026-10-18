@@ -93,7 +93,11 @@ export function courseBlock(course: Course, distanceMeters: number): string[] {
     if (after && after.note) out.push(`- then: ${after.note}`);
     const station = course.km.find((k) => k.km * 1000 > d && k.stations && k.stations.length);
     if (station) out.push(`- next aid station: km ${station.km}, ${Math.round((station.km * 1000 - d) / 100) * 100} m ahead (${station.stations!.join(", ")})`);
-    out.push(`- remaining: ${fmtKm(course.totalM - d)} km to the finish at 天津奥林匹克中心 (the Water Drop stadium)`);
+    // The watch reads long on a race, so near the end the book, not the
+    // number, says where the finish is (founder, 2026-10-18).
+    out.push(course.totalM - d > 400
+        ? `- remaining: about ${fmtKm(course.totalM - d)} km to the finish at 天津奥林匹克中心 (the Water Drop stadium); his watch may read a little long`
+        : `- remaining: the finish arch at 天津奥林匹克中心 (the Water Drop stadium) is close. Never say the race is over or give a remaining number: his watch reads long, the arch is the finish`);
     out.push("Use these as the REAL surroundings when the live GPS block is thin or absent; name the places as given, in Chinese where they are Chinese. The course is flat; the only climbs are the bridges. Do not recite the list; pick the one thing that sharpens the line.");
     out.push(NAMES_RULE);
     const st = storyAt(course, d);

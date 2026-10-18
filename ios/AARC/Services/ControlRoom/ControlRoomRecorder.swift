@@ -266,7 +266,7 @@ final class ControlRoomRecorder: NSObject {
         // The earbuds take a moment to leave call mode; a line started before
         // that lands on the dying route and stalls (the 18 Oct silent replies).
         let settled = await Self.waitForMediaRoute(timeout: 2.5)
-        if keepaliveWasRunning {
+        if keepaliveWasRunning || BackgroundAudioKeepalive.shared.wanted {
             BackgroundAudioKeepalive.shared.stop()
             BackgroundAudioKeepalive.shared.start()
         }

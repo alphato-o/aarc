@@ -24,6 +24,8 @@ struct SpotifyClient {
         /// the line of synced lyrics being sung right now.
         let progressMs: Int?
         let durationMs: Int?
+        /// The playlist (or album) it is playing from, e.g. "spotify:playlist:…".
+        var contextURI: String? = nil
     }
 
     enum Result: Sendable {
@@ -84,7 +86,8 @@ struct SpotifyClient {
                 albumImageURL: imageURL,
                 isPlaying: wire.is_playing ?? true,
                 progressMs: wire.progress_ms,
-                durationMs: item.duration_ms
+                durationMs: item.duration_ms,
+                contextURI: wire.context?.uri
             ))
         } catch {
             log.error("Spotify currentlyPlaying error: \(error.localizedDescription, privacy: .public)")
@@ -140,6 +143,22 @@ struct SpotifyClient {
     private struct HistoryWire: Decodable {
         struct It: Decodable { let played_at: String; let track: Item }
         let items: [It]
+    }
+
+    /// A playlist's name, for the soundtrack log. nil if it cannot be read
+    /// (private playlists need playlist-read-private).
+    func playlistName(uri: String) async -> String? {
+        guard uri.hasPrefix("spotify:playlist:"), let token = await SpotifyAuth.shared.validAccessToken() else { return nil }
+        let id = String(uri.dropFirst("spotify:playlist:".count))
+        var comps = URLComponents(url: base.appendingPathComponent("playlists/\(id)"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "fields", value: "name")]
+        var req = URLRequest(url: comps.url!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 10
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj["name"] as? String
     }
 
     func audioFeatures(trackId: String) async -> AudioFeatures? {
@@ -213,7 +232,10 @@ struct SpotifyClient {
         let is_playing: Bool?
         let progress_ms: Int?
         let item: Item?
+        let context: Context?
     }
+
+    private struct Context: Decodable { let uri: String? }
 
     private struct Item: Decodable {
         let id: String?

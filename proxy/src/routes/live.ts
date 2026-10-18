@@ -54,12 +54,13 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         const b = await request.json<{ runId?: string; plays?: Array<Record<string, unknown>> }>();
         if (!b.runId || !Array.isArray(b.plays)) return json({ ok: false, error: "runId + plays required" }, 400);
         const str = (v: unknown, n: number) => (typeof v === "string" && v ? v.slice(0, n) : null);
-        const ins = env.DB.prepare("INSERT OR REPLACE INTO music_play (run_id, source, at, event, track_id, title, artist, album, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        const ins = env.DB.prepare("INSERT OR REPLACE INTO music_play (run_id, source, at, event, track_id, title, artist, album, duration_ms, offset_ms, playlist, playlist_uri) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
         const stmts = b.plays.slice(0, 500).flatMap((x) => {
             const at = str(x.at, 40), title = str(x.title, 300), source = str(x.source, 16), event = str(x.event, 16);
             if (!at || !title || !source || !event) return [];
             return [ins.bind(b.runId!.slice(0, 64), source, at, event, str(x.trackId, 64), title, str(x.artist, 300), str(x.album, 300),
-                typeof x.durationMs === "number" ? Math.round(x.durationMs) : null)];
+                typeof x.durationMs === "number" ? Math.round(x.durationMs) : null,
+                typeof x.offsetMs === "number" ? Math.round(x.offsetMs) : null, str(x.playlist, 300), str(x.playlistUri, 120))];
         });
         if (stmts.length) await env.DB.batch(stmts);
         return json({ ok: true, stored: stmts.length });
@@ -69,7 +70,7 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
     if (request.method === "GET" && p === "/live/music") {
         if (!isAdmin(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
         const runId = url.searchParams.get("runId") ?? "";
-        const rows = await env.DB.prepare("SELECT source, at, event, track_id, title, artist, album, duration_ms FROM music_play WHERE run_id = ? ORDER BY at ASC").bind(runId).all();
+        const rows = await env.DB.prepare("SELECT source, at, event, track_id, title, artist, album, duration_ms, offset_ms, playlist, playlist_uri FROM music_play WHERE run_id = ? ORDER BY at ASC").bind(runId).all();
         return json({ ok: true, plays: rows.results ?? [] });
     }
 

@@ -29,6 +29,11 @@ final class BackgroundAudioKeepalive {
     private let playerNode = AVAudioPlayerNode()
     private var configured = false
     private(set) var isRunning = false
+    /// The run needs the keepalive (phone-only or simulated: no watch session
+    /// holds the app awake). Survives a talk-back's stop, so it is restarted
+    /// after (18 Oct: a '!int' retry stopped it for good and iOS suspended
+    /// the run for 98 s).
+    var wanted = false
     private let log = Logger(subsystem: "club.aarun.AARC", category: "BackgroundAudioKeepalive")
 
     private init() {}
