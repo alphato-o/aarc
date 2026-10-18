@@ -142,7 +142,7 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
             // Jessica is no longer withheld; race mode only makes her less explicit.
             if (url.pathname === "/music-comment") {
                 if (r < 0.5) return new Response(JSON.stringify(withheld), { status: 200, headers: { "content-type": "application/json" } });
-            } else {
+            } else if (url.pathname === "/dynamic-line") {
                 if (r < 0.33) return new Response(JSON.stringify(withheld), { status: 200, headers: { "content-type": "application/json" } });
                 if (r < 0.55 && peek?.trigger !== "opener") {
                     const flash = await generateFlash(peek.runContext, env).catch(() => null);
