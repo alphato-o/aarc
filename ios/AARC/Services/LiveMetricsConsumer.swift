@@ -319,7 +319,9 @@ final class LiveMetricsConsumer {
         RunEventLog.shared.record(
             resuming ? "run.resume" : "run.start",
             "runType=\(pendingRunType.rawValue);isTest=\(RunOrchestrator.shared.isTestRun ? 1 : 0)"
-                + (resuming ? ";from=marker" : ""),
+                + (resuming ? ";from=marker" : "")
+                // So the desk knows which build is on the road (18 Oct: I told him to install the one he had).
+                + ";build=\(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?")",
             data: ["name": runTitle, "tz": TimeZone.current.identifier])
 
         // Real-world surroundings for the coaches — outdoor runs only.

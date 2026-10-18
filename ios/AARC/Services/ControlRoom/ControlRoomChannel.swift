@@ -44,7 +44,9 @@ final class ControlRoomChannel {
     /// The last time an answer from Control Room reached his ear.
     var lastAnswerAt = Date.distantPast
     /// No answer this long after a line: the server answers instead.
-    static let watchdogSeconds: TimeInterval = 40
+    /// 55, not 40: the desk's own answer often lands at 40 to 50 s, and the
+    /// backup speaking first gave him two answers (18 Oct).
+    static let watchdogSeconds: TimeInterval = 55
     /// How long to stay awake for an answer off-run. The agent answers from
     /// the ear loop (5 s poll) plus thinking time; three minutes is generous.
     static let earWindow: TimeInterval = 180
@@ -141,7 +143,7 @@ final class ControlRoomChannel {
     }
 
     /// Race-day guard (founder, 2026-10-17): if the agent is busy or down and
-    /// nothing answers within 40 s, the server answers in Home Base's voice
+    /// nothing answers within 55 s, the server answers in Home Base's voice
     /// from his live numbers. He is never left talking to nobody.
     private func startWatchdog(clientId: String) {
         let sentAt = Date()

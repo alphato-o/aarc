@@ -40,6 +40,9 @@ final class EndpointManager {
         /// by 10 minutes without a new strike.
         var realFailures: Int = 0
         var lastRealFailureAt: Date?
+        /// Hysteresis (18 Oct: four CF/US flips in the first 11 s of a run).
+        var failingSince: Date?
+        var consecutiveOK = 0
         var healthy: Bool { consecutiveFailures == 0 && lastLatencyMs != nil }
     }
 
@@ -205,8 +208,12 @@ final class EndpointManager {
             if let ms {
                 endpoints[idx].lastLatencyMs = ms
                 endpoints[idx].consecutiveFailures = 0
+                endpoints[idx].failingSince = nil
+                endpoints[idx].consecutiveOK += 1
             } else {
                 endpoints[idx].consecutiveFailures += 1
+                endpoints[idx].consecutiveOK = 0
+                if endpoints[idx].failingSince == nil { endpoints[idx].failingSince = Date() }
             }
         }
     }
@@ -233,11 +240,15 @@ final class EndpointManager {
             // actual transfers are still starving).
             let cf = endpoints.first { $0.id == "cf" }!
             let us = endpoints.first { $0.id == "us" }!
-            let cfBad = cf.consecutiveFailures >= 2 || cf.realFailures >= 2
+            // Leave the Worker only after it has been failing for 20 s, and
+            // come back only after two clean probes in a row: a blip no
+            // longer flips every request between the two.
+            let failingLong = cf.failingSince.map { Date().timeIntervalSince($0) >= 20 } ?? false
+            let cfBad = (cf.consecutiveFailures >= 2 && failingLong) || cf.realFailures >= 2
             let usOk = us.healthy && us.realFailures < 2
             if cfBad, usOk {
                 currentId = "us"
-            } else if cf.consecutiveFailures == 0, cf.realFailures == 0 {
+            } else if cf.consecutiveFailures == 0, cf.realFailures == 0, cf.consecutiveOK >= 2 || currentId == "cf" {
                 currentId = "cf"
             }
         }
