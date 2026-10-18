@@ -24,16 +24,33 @@ enum OpenerStash {
         return text
     }
 
+    static func discard(_ text: String) {
+        var all = load()
+        all.removeAll { $0.text == text }
+        save(all)
+    }
+
+    /// Fixed opener audio rendered and pinned ahead, so even a dark start with
+    /// an empty stash opens in Ricky's voice.
+    static func warmFixedLine(plan: RunPlan) {
+        let text = fixedLine(plan: plan)
+        Task {
+            if await RemoteTTS.shared.prefetch(text, within: 60) {
+                await AudioCache.shared.pin(key: AudioCache.key(voiceId: RemoteTTS.voiceId, text: text))
+            }
+        }
+    }
+
     static func fixedLine(plan: RunPlan) -> String {
         switch plan.kind {
         case .distance:
             let km = plan.distanceKm.map { $0 == $0.rounded() ? String(Int($0)) : String(format: "%.1f", $0) } ?? "some"
-            return "Right, Alpha. \(km) kilometres. The network's having a lie-down, so it's you, me and the watch for now. Off you go."
+            return "Right, Alpha. \(km) kilometres. Off you go. I'll catch you up."
         case .time:
             let m = plan.timeMinutes.map { String(Int($0)) } ?? "some"
-            return "Right, Alpha. \(m) minutes. The network's having a lie-down, so it's you, me and the watch for now. Off you go."
+            return "Right, Alpha. \(m) minutes. Off you go. I'll catch you up."
         case .open:
-            return "Right, Alpha. The network's having a lie-down, so it's you, me and the watch for now. Off you go."
+            return "Right, Alpha. Off you go. I'll catch you up."
         }
     }
 

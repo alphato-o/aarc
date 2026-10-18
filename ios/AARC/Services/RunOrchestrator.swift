@@ -465,6 +465,7 @@ final class RunOrchestrator {
 
         // Stock Ricky's offline shelf while we are at home on a good network.
         RoastPool.shared.topUp(runType: .outdoor, personalityId: personalityId)
+        OpenerStash.warmFixedLine(plan: plan)
 
         // Fresh bullet rotation for this pre-gen cycle; same seed will
         // then be reused by the runtime calls (dynamic-line, etc.) so
@@ -536,7 +537,8 @@ final class RunOrchestrator {
     /// The opener never gates the start (founder, 18 Oct: a dozen starts died
     /// on a bad network). Live line if it lands in time, else one generated
     /// earlier for this plan, else a fixed line. Ricky's later lines catch up.
-    private static let openerBudget: TimeInterval = 5
+    /// Online, a live opener usually lands in 3 to 8 s; dark, nothing will.
+    private static let openerBudget: TimeInterval = 9
 
     private func resolveOpener(
         plan: RunPlan,
@@ -544,16 +546,23 @@ final class RunOrchestrator {
         personalityId: String
     ) async throws -> String {
         let key = makeKey(plan: plan, personalityId: personalityId)
-        let deadline = Date.now.addingTimeInterval(Self.openerBudget)
-        if preGenKey == key, let task = preGenOpenerTasks[runType] {
+        let deadline = Date.now.addingTimeInterval(EndpointManager.shared.isDark ? 0 : Self.openerBudget)
+        // One request, not two: keep waiting on the pre-generated opener if it
+        // is still coming rather than racing it with a second one.
+        let task: Task<String, Error>
+        if preGenKey == key, let pre = preGenOpenerTasks[runType] {
             preGenOpenerTasks[runType] = nil
-            if let text = await Self.value(of: task, within: deadline.timeIntervalSinceNow) { return text }
+            task = pre
+        } else {
+            task = Task { @MainActor [weak self] () throws -> String in
+                guard let self else { throw CancellationError() }
+                return try await self.generateOpener(plan: plan, runType: runType, personalityId: personalityId)
+            }
         }
-        let fresh = Task { @MainActor [weak self] () throws -> String in
-            guard let self else { throw CancellationError() }
-            return try await self.generateOpener(plan: plan, runType: runType, personalityId: personalityId)
+        if let text = await Self.value(of: task, within: deadline.timeIntervalSinceNow) {
+            OpenerStash.discard(text)   // spoken now, so never again from the stash
+            return text
         }
-        if let text = await Self.value(of: fresh, within: max(1.5, deadline.timeIntervalSinceNow)) { return text }
         if let stashed = OpenerStash.take(key: key, runType: runType) {
             RunEventLog.shared.record("opener.offline", "stashed opener (network slow or down)")
             return stashed

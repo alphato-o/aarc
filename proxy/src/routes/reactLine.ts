@@ -72,6 +72,8 @@ export async function reactLineHandler(
     // Race mode = recorded for a public video: Jessica keeps the character,
     // drops the pornography (founder, 2026-10-16).
     const broadcast = req.personalityId === "jessica" && !!req.runContext.raceMode && req.runContext.raceMode !== "off";
+    // Race mode no longer withholds her (founder, 2026-10-18): same Jessica,
+    // same length and energy, only less explicit (the note in the user prompt).
     const systemPrompt = broadcast
         ? jessicaBroadcastPrompt(lengthMode)
         : systemPromptFor(req.personalityId, reactModeFor(lengthMode));
@@ -294,6 +296,10 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
         lines.push(deckBlock(lengthMode as DeckMode, req.runSeed ?? 0, req.deckOrdinal ?? 0));
     }
 
+    if (req.personalityId === "jessica" && c.raceMode && c.raceMode !== "off") {
+        lines.push("");
+        lines.push("RACE DAY: you are exactly the same Jessica, same character, same energy, same appetite. Only less explicit: hint, don't spell it out. Innuendo, double meaning, a knowing pause; let him fill in the rest. Nothing a broadcast would have to bleep.");
+    }
     lines.push("");
     lines.push(CHAR_BUDGET_BY_LENGTH[lengthMode]);
     lines.push(isMilestone

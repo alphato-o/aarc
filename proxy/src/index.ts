@@ -125,8 +125,8 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
     // line, nothing spoken, no fallback. Scripted/per-km lines are
     // pre-rendered on the phone and untouched.
     // Race mode (founder, 2026-10-15): the app stamps runContext.raceMode on
-    // every live line call. Jessica and the music lines are withheld one in
-    // two; Ricky's dynamic lines one in three, and one in three of the rest
+    // every live line call. Music lines are withheld one in two (Jessica is
+    // kept, only less explicit, 18 Oct); Ricky's dynamic lines one in three, and one in three of the rest
     // comes back as a Home Base flash in Kristen's voice. Per-km lines are
     // Home Base's outright (see /home-base/readout).
     if (request.method === "POST" && ["/dynamic-line", "/react-line", "/music-comment"].includes(url.pathname)) {
@@ -139,7 +139,8 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         if ((mode === "training" || mode === "actual") && !story) {
             const withheld = { ok: false, error: "race mode: line withheld" };
             const r = Math.random();
-            if (url.pathname !== "/dynamic-line") {
+            // Jessica is no longer withheld; race mode only makes her less explicit.
+            if (url.pathname === "/music-comment") {
                 if (r < 0.5) return new Response(JSON.stringify(withheld), { status: 200, headers: { "content-type": "application/json" } });
             } else {
                 if (r < 0.33) return new Response(JSON.stringify(withheld), { status: 200, headers: { "content-type": "application/json" } });
