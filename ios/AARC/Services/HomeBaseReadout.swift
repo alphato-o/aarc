@@ -31,10 +31,12 @@ final class HomeBaseReadout {
         guard km > lastKm else { return }
         lastKm = km
         task?.cancel()
-        // Dark: no request at all, the kilometre is Ricky's from the pack now.
+        // Dark: no request at all. Home Base briefs the ground from the pack,
+        // and Ricky's pack line still carries the kilometre.
         if EndpointManager.shared.isDark, let fallback {
             RunEventLog.shared.record("milestone.owner", "ricky:dark", data: ["km": String(km)])
             fallback()
+            speakPackLine(km: km)
             return
         }
         isProducing = true
@@ -77,6 +79,7 @@ final class HomeBaseReadout {
                 gate.settled = true
                 RunEventLog.shared.record("milestone.owner", "ricky:slow", data: ["km": String(km)])
                 fallback()
+                self.speakPackLine(km: km)
             }
         }
         task = Task { @MainActor [weak self] in
@@ -101,8 +104,16 @@ final class HomeBaseReadout {
                 gate.settled = true
                 RunEventLog.shared.record("milestone.owner", "ricky:offline", data: ["km": String(km)])
                 fallback()
+                self.speakPackLine(km: km)
             }
         }
+    }
+
+    private func speakPackLine(km: Int) {
+        guard let text = RacePackStore.shared.homeLine(km: km) else { return }
+        RunEventLog.shared.record("home.pack", String(text.prefix(80)), data: ["km": String(km)])
+        Speaker.shared.speak(text, priority: .milestone, source: "home:pack:km\(km)",
+                             expiresAfter: 240, voiceId: RemoteTTS.homeVoiceId)
     }
 }
 

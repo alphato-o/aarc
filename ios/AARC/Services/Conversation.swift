@@ -151,7 +151,6 @@ final class Conversation {
         // to riff on (or we're past the opener), and there's clear air
         // before the next must-play split so she can't be guillotined.
         guard !isProducing,
-              !EndpointManager.shared.isDark,   // her lines are live-only
               !VoiceFeedbackQueue.shared.hasPending(sourcePrefix: "jessica"),
               // Cadence from the LAST production, or from t=0 for the first —
               // so her opening entrance also waits out the long early cooldown
@@ -161,7 +160,22 @@ final class Conversation {
               RunDirector.shared.hasRoomForExchange
         else { return }
 
+        // Dark: her live lines cannot be made; the race pack has hers.
+        if EndpointManager.shared.isDark {
+            lastProducedElapsed = elapsed
+            speakPackLine(metrics)
+            return
+        }
         startProducing(metrics)
+    }
+
+    private func speakPackLine(_ metrics: LiveMetrics, milestoneKm: Int? = nil) {
+        guard let text = RacePackStore.shared.jessicaLine(km: Int(metrics.distanceMeters / 1000)) else { return }
+        rememberJessica(text)
+        RunEventLog.shared.record("jessica.pack", String(text.prefix(70)))
+        Speaker.shared.speak(text, priority: milestoneKm == nil ? .coaching : .milestone,
+                             source: milestoneKm.map { "jessica:milestone:\($0)" } ?? "jessica:pack",
+                             expiresAfter: 90, voiceId: RemoteTTS.jessicaVoiceId)
     }
 
     /// Jessica TAKES a per-km milestone (intertwined with Ricky, her share
@@ -171,6 +185,10 @@ final class Conversation {
         guard enabled, RunDirector.shared.isActive else { return }
         // One of hers at a time; don't stack on a pending line.
         guard !isProducing, !VoiceFeedbackQueue.shared.hasPending(sourcePrefix: "jessica") else { return }
+        if EndpointManager.shared.isDark {
+            speakPackLine(metrics, milestoneKm: km)
+            return
+        }
         startProducing(metrics, milestoneKm: km)
     }
 

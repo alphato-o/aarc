@@ -294,6 +294,31 @@ actor AIClient {
         return DynamicLineResult(text: text, model: envelope.model ?? "home", voiceId: envelope.voiceId)
     }
 
+    struct PackVoiceLine: Codable, Sendable, Equatable { let km: Int; let text: String }
+    struct PackVoices: Decodable, Sendable { let jessica: [PackVoiceLine]; let home: [PackVoiceLine] }
+
+    /// Race pack: Jessica's and Home Base's lines for the no-signal stretch,
+    /// each tied to a kilometre of the course.
+    func racePackVoices(courseId: String, personalNotes: [String]) async throws -> PackVoices {
+        struct Body: Encodable { let courseId: String; let personalNotes: [String]? }
+        struct Envelope: Decodable { let ok: Bool; let error: String?; let detail: String?; let jessica: [PackVoiceLine]?; let home: [PackVoiceLine]? }
+        let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("race-pack-voices")
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
+        // Two long generations in parallel on the proxy: about a minute.
+        urlRequest.timeoutInterval = 300
+        urlRequest.httpBody = try encoder.encode(Body(courseId: courseId, personalNotes: personalNotes.isEmpty ? nil : personalNotes))
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else { throw AIError.transport("non-HTTP response") }
+        let envelope = try? decoder.decode(Envelope.self, from: data)
+        guard (200...299).contains(http.statusCode), let envelope, envelope.ok,
+              let jessica = envelope.jessica, let home = envelope.home else {
+            throw AIError.httpStatus(http.statusCode, body: envelope?.detail ?? envelope?.error ?? String(decoding: data.prefix(300), as: UTF8.self))
+        }
+        return PackVoices(jessica: jessica, home: home)
+    }
+
     /// Generate the fast-start opener line so the runner can start
     /// moving immediately. Uses /dynamic-line with the `opener` trigger
     /// — same proxy path as ContextualCoach, but framed for "first line

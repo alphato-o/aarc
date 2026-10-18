@@ -778,6 +778,7 @@ final class RunOrchestrator {
             return nil
         }
         RacePackStore.shared.verifyAudio(plan: plan)
+        RacePackStore.shared.resetPlayback()
         RunEventLog.shared.record("race.pack", "using pack", data: [
             "built": ISO8601DateFormatter().string(from: pack.builtAt),
             "lines": String(pack.lineCount),

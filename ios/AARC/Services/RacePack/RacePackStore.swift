@@ -16,6 +16,10 @@ struct RacePack: Codable, Sendable {
     /// Every line that was rendered to audio when the pack was built.
     var warmedLines: Int
     var totalLines: Int
+    /// Jessica's and Home Base's offline lines, one kilometre each. Optional
+    /// so a pack built before they existed still loads.
+    var jessicaLines: [AIClient.PackVoiceLine]?
+    var homeLines: [AIClient.PackVoiceLine]?
 
     var lineCount: Int { script.messages.reduce(0) { $0 + $1.rotationPool.count } }
 
@@ -47,8 +51,12 @@ final class RacePackStore {
     }
 
     private(set) var phase: Phase = .idle
+    /// Why the last build has no Jessica / Home Base lines, for the screen.
+    private(set) var voicesError: String?
     private(set) var pack: RacePack?
     private var buildTask: Task<Void, Never>?
+    /// Offline lines already spoken this run, so none repeats.
+    private var spoken: Set<String> = []
 
     var isBuilding: Bool {
         switch phase {
@@ -74,10 +82,32 @@ final class RacePackStore {
     func verifyAudio(plan: RunPlan) {
         guard let pack, buildTask == nil else { return }
         Task { @MainActor in
-            let r = await self.render(script: pack.script, plan: plan)
+            let r = await self.render(pack: pack, plan: plan)
             RunEventLog.shared.record("race.pack.audio", "\(r.done)/\(r.total) lines on the phone")
             self.phase = .idle
         }
+    }
+
+    func resetPlayback() { spoken = [] }
+
+    /// Home Base's pack line for this kilometre, once, in Actual race mode.
+    func homeLine(km: Int) -> String? {
+        guard RunOrchestrator.shared.raceMode == .actual,
+              let line = pack?.homeLines?.first(where: { $0.km == km }),
+              !spoken.contains(line.text) else { return nil }
+        spoken.insert(line.text)
+        return line.text
+    }
+
+    /// Jessica's next pack line: the one for this kilometre or the one
+    /// before, so a line whose km went by while she was waiting still plays.
+    func jessicaLine(km: Int) -> String? {
+        guard RunOrchestrator.shared.raceMode == .actual,
+              let line = pack?.jessicaLines?
+                .filter({ $0.km <= km && $0.km >= km - 1 && !spoken.contains($0.text) })
+                .max(by: { $0.km < $1.km }) else { return nil }
+        spoken.insert(line.text)
+        return line.text
     }
 
     /// True when the pack on disk no longer matches the current plan.
@@ -88,6 +118,7 @@ final class RacePackStore {
     func build(plan: RunPlan, runType: RunType, personalityId: String) {
         guard !isBuilding else { return }
         buildTask?.cancel()
+        voicesError = nil
         phase = .generating
         buildTask = Task { @MainActor [weak self] in
             guard let self else { return }
@@ -104,11 +135,24 @@ final class RacePackStore {
                     script: script,
                     warmedLines: 0,
                     totalLines: 0)
+                // A pack without the other two voices is still a pack: Ricky
+                // covers the dark kilometres alone, and the screen says so.
+                do {
+                    let voices = try await AIClient.shared.racePackVoices(
+                        courseId: Self.courseId, personalNotes: PersonalContextStore.shared.bullets)
+                    built.jessicaLines = voices.jessica
+                    built.homeLines = voices.home
+                    RunEventLog.shared.record("race.pack.voices", "jessica \(voices.jessica.count), home \(voices.home.count)")
+                } catch {
+                    self.log.error("race pack voices failed: \(error.localizedDescription, privacy: .public)")
+                    self.voicesError = error.localizedDescription
+                }
+                guard !Task.isCancelled else { return }
                 self.pack = built
                 try Self.save(built)
                 RunEventLog.shared.record("race.pack.built", "\(built.lineCount) lines",
                                           data: ["scriptId": script.scriptId, "model": script.model])
-                let warmed = await self.render(script: script, plan: plan)
+                let warmed = await self.render(pack: built, plan: plan)
                 guard !Task.isCancelled else { return }
                 built.warmedLines = warmed.done
                 built.totalLines = warmed.total
@@ -125,14 +169,16 @@ final class RacePackStore {
     /// Render every line the pack can speak into the audio cache: the script
     /// in Ricky's voice, the factual kilometre announcements, and Home Base's
     /// local lines. Best effort per line; the count says how complete it is.
-    private func render(script: GeneratedScript, plan: RunPlan) async -> (done: Int, total: Int) {
+    private func render(pack: RacePack, plan: RunPlan) async -> (done: Int, total: Int) {
         var jobs: [(text: String, voiceId: String)] = []
-        for message in script.messages {
+        for message in pack.script.messages {
             for variant in message.rotationPool { jobs.append((variant, RemoteTTS.voiceId)) }
         }
         for text in MilestoneAnnouncement.prefetchTexts(for: plan) { jobs.append((text, RemoteTTS.voiceId)) }
         for text in RacePackLocalLines.all { jobs.append((text, RemoteTTS.homeVoiceId)) }
         for text in RaceCameraDirector.packLines { jobs.append((text, RemoteTTS.homeVoiceId)) }
+        for line in pack.jessicaLines ?? [] { jobs.append((line.text, RemoteTTS.jessicaVoiceId)) }
+        for line in pack.homeLines ?? [] { jobs.append((line.text, RemoteTTS.homeVoiceId)) }
         var done = 0
         phase = .rendering(done: 0, total: jobs.count)
         for job in jobs {

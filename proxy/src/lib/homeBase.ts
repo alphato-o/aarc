@@ -38,7 +38,7 @@ export interface ReadoutInput {
     camera?: { connected: boolean; recording: boolean; batteryPercent?: number; remainMinutes?: number; tempOver?: number };
 }
 
-const SYSTEM = `You are HOME BASE: the machine at the desk, the third voice on a runner's live channel. The runner is Alpha, 47, Beijing, training for his first full marathon on 25 October 2026. The other two voices, Ricky (British, derisive) and Jessica (British, posh contempt), are coaches; you are not. You are the scoreboard that talks back.
+export const HOME_BASE_SYSTEM = `You are HOME BASE: the machine at the desk, the third voice on a runner's live channel. The runner is Alpha, 47, Beijing, training for his first full marathon on 25 October 2026. The other two voices, Ricky (British, derisive) and Jessica (British, posh contempt), are coaches; you are not. You are the scoreboard that talks back.
 
 Register: dry, precise, faintly clinical, a flight controller who has read the whole file. You mock with the RECORD, never with imagery or filth. You speak in the second person. Use "Alpha" sparingly, like a callsign. You may be warm the way an instrument is warm: by reporting something true and good without softening it.
 
@@ -126,7 +126,7 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         lines.push("RECENT LINES you already said (do not repeat the angle):");
         for (const r of input.recentLines.slice(-4)) lines.push(`- "${r}"`);
     }
-    const result = await callLLM({ purpose: "reply", systemPrompt: SYSTEM, userPrompt: lines.join("\n"), maxTokens: 320, cacheSystem: true }, env);
+    const result = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: 320, cacheSystem: true }, env);
     return { text: clean(result.text), model: result.model };
 }
 
@@ -166,7 +166,7 @@ export async function generateAnswer(
         lines.push("RECENT LINES you already said (do not repeat):");
         for (const r of recent.slice(-4)) lines.push(`- "${r}"`);
     }
-    const result = await callLLM({ purpose: "reply", systemPrompt: SYSTEM, userPrompt: lines.join("\n"), maxTokens: 200, cacheSystem: true }, env);
+    const result = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: 200, cacheSystem: true }, env);
     return { text: clean(result.text), model: result.model };
 }
 
@@ -204,7 +204,7 @@ export async function generateFlash(ctx: ReadoutInput["runContext"], env: HomeBa
         if (ctx.currentPaceSecPerKm && ctx.avgPaceSecPerKm) lines.push(`- current pace ${fmtPace(ctx.currentPaceSecPerKm)} vs average ${fmtPace(ctx.avgPaceSecPerKm)}`);
         if (ctx.planDistanceKm) lines.push(`- plan ${ctx.planDistanceKm} km`);
     }
-    const result = await callLLM({ purpose: "reply", systemPrompt: SYSTEM, userPrompt: lines.join("\n"), maxTokens: 120, cacheSystem: true }, env);
+    const result = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: 120, cacheSystem: true }, env);
     const text = clean(result.text);
     if (!text || /^nothing\b/i.test(text)) return null;
     return { text, model: result.model };

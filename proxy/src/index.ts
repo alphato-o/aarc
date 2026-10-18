@@ -5,6 +5,7 @@ import { dynamicLineHandler } from "./routes/dynamicLine";
 import { reactLineHandler } from "./routes/reactLine";
 import { musicCommentHandler } from "./routes/musicComment";
 import { roastPoolHandler } from "./routes/roastPool";
+import { racePackVoicesHandler } from "./routes/racePackVoices";
 import { rankVenuesHandler } from "./routes/rankVenues";
 import { voiceNoteHandler } from "./routes/voiceNote";
 import { ttsHandler } from "./routes/tts";
@@ -174,6 +175,9 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         return reactLineHandler(request, env);
     }
 
+    if (request.method === "POST" && url.pathname === "/race-pack-voices") {
+        return racePackVoicesHandler(request, env);
+    }
     if (request.method === "POST" && url.pathname === "/roast-pool") {
         return roastPoolHandler(request, env);
     }

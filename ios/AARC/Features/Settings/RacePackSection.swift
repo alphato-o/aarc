@@ -20,6 +20,12 @@ struct RacePackSection: View {
             if let pack = store.pack {
                 LabeledContent("Built", value: pack.builtAt.formatted(date: .abbreviated, time: .shortened))
                 LabeledContent("Lines", value: "\(pack.lineCount) scripted, \(pack.warmedLines) of \(pack.totalLines) rendered")
+                LabeledContent("Jessica", value: "\(pack.jessicaLines?.count ?? 0) lines")
+                LabeledContent("Home Base", value: "\(pack.homeLines?.count ?? 0) lines")
+                if let err = store.voicesError {
+                    Text("Jessica and Home Base lines failed: \(err). Rebuild to retry.")
+                        .font(.caption2).foregroundStyle(.red)
+                }
                 if store.isStale(plan: plan, runType: runType, personalityId: personalityId) {
                     Text("Built for a different plan or coach. Rebuild before race day.")
                         .font(.caption2).foregroundStyle(.orange)
