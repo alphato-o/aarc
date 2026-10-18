@@ -149,14 +149,16 @@ final class EndpointManager {
     /// Start the background probe loop. Idempotent; call at app launch.
     func startProbing() {
         guard probeTask == nil else { return }
-        pathMonitor.pathUpdateHandler = { [weak self] path in
+        // Sendable and nonisolated: it runs on the monitor's queue, not main.
+        let onPath: @Sendable (NWPath) -> Void = { path in
             let up = path.status == .satisfied
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.pathUp = up
-                if !up { self.setDark(true, why: "no network path") } else { self.kick() }
+            Task { @MainActor in
+                let m = EndpointManager.shared
+                m.pathUp = up
+                if !up { m.setDark(true, why: "no network path") } else { m.kick() }
             }
         }
+        pathMonitor.pathUpdateHandler = onPath
         pathMonitor.start(queue: DispatchQueue(label: "aarc.netpath"))
         probeTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
