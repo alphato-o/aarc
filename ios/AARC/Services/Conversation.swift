@@ -151,6 +151,7 @@ final class Conversation {
         // to riff on (or we're past the opener), and there's clear air
         // before the next must-play split so she can't be guillotined.
         guard !isProducing,
+              !EndpointManager.shared.isDark,   // her lines are live-only
               !VoiceFeedbackQueue.shared.hasPending(sourcePrefix: "jessica"),
               // Cadence from the LAST production, or from t=0 for the first —
               // so her opening entrance also waits out the long early cooldown

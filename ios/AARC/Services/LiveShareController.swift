@@ -53,12 +53,12 @@ final class LiveShareController {
             .flatMap { $0.isEmpty ? nil : $0 }
     }
 
-    /// Begin the channel for a REAL run. No-op for test/sim runs. The uplink
+    /// Begin the channel for a run, test runs included. The uplink
     /// (events going home) needs sharing on or actual race mode; the downlink
     /// (lines coming back) is always on.
     func startIfEnabled(runId: UUID, isTest: Bool, startedAt: Date) {
         let race = RunOrchestrator.shared.raceMode == .actual
-        guard !isTest, Self.token() != nil else { return }
+        guard Self.token() != nil else { return }
         self.runId = runId.uuidString
         uplink = Self.enabled || race
         raceUplink = race
@@ -67,11 +67,21 @@ final class LiveShareController {
         flushTask?.cancel(); pollTask?.cancel(); flushTask = nil
         if uplink {
             let iso = ISO8601DateFormatter().string(from: startedAt)
-            var start: [String: Any] = ["runId": runId.uuidString, "isTest": false, "startedAt": iso]
+            var start: [String: Any] = ["runId": runId.uuidString, "isTest": isTest, "startedAt": iso]
             if race { start["race"] = true; start["course"] = RacePackStore.courseId }
-            Task { _ = await self.send("live/start", start) }
+            // Retried until it lands: a dark start used to leave the run
+            // unknown to the desk for its whole length.
             flushTask = Task { [weak self] in
-                while !Task.isCancelled { try? await Task.sleep(for: .seconds(12)); await self?.flush() }
+                var started = false
+                while !Task.isCancelled {
+                    guard let self else { return }
+                    if !started, !EndpointManager.shared.isDark {
+                        started = await self.send("live/start", start)
+                        if started, self.runId == runId.uuidString { RunEventLog.shared.record("live.started", "") }
+                    }
+                    try? await Task.sleep(for: .seconds(started ? 12 : 5))
+                    if started { await self.flush() }
+                }
             }
         }
         pollTask = Task { [weak self] in
@@ -80,8 +90,10 @@ final class LiveShareController {
                 // answer is not waiting on a 10 s poll; 10 s otherwise.
                 let hot = Date() < ControlRoomChannel.shared.hotUntil
                 try? await Task.sleep(for: .seconds(hot ? 2 : 10))
+                if EndpointManager.shared.isDark { continue }
                 await self?.pollInject()
-                await ControlRoomChannel.shared.retryPending()
+                // Detached: a 120 s talk-back upload must not stall the replies.
+                Task { await ControlRoomChannel.shared.retryPending() }
             }
         }
         NSLog("[live] channel up for real run \(runId.uuidString.prefix(8)) uplink=\(uplink) race=\(race)")

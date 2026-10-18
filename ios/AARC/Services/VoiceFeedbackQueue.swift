@@ -320,7 +320,7 @@ final class VoiceFeedbackQueue {
     /// Pre-render an item's audio in the background. Idempotent — a cache
     /// hit is an instant no-op, so calling it for already-warm lines is free.
     private func prewarm(_ item: VoiceItem) {
-        guard !AudioPlaybackManager.shared.isMuted else { return }
+        guard !AudioPlaybackManager.shared.isMuted, !EndpointManager.shared.isDark else { return }
         guard item.voiceId != nil || Speaker.shared.preferRemoteVoice else { return }
         let voice = item.voiceId ?? RemoteTTS.voiceId
         let text = item.text
@@ -472,8 +472,10 @@ final class VoiceFeedbackQueue {
             // while ElevenLabs synthesised (every `tts.play` was cached:false).
             // Warming first means playSync below is a cache HIT, so the duck
             // and the first syllable are back-to-back — no dead air.
+            // Bounded: one line whose audio cannot be fetched must not hold the
+            // slot (and every cached line behind it) on a bad network.
             if item.voiceId != nil || Speaker.shared.preferRemoteVoice {
-                await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId)
+                await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId, within: 10)
             }
             if Task.isCancelled { return }
 

@@ -8,11 +8,34 @@ actor AudioCache {
     static let shared = AudioCache()
 
     private let directory: URL
+    /// Lines the run cannot do without offline (race pack, roast pool):
+    /// Application Support, which iOS never reclaims, unlike Caches.
+    private let pinned: URL
 
     init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
         self.directory = caches.appendingPathComponent("AARC/tts", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        var pinnedDir = support.appendingPathComponent("AARC/tts-pinned", isDirectory: true)
+        try? FileManager.default.createDirectory(at: pinnedDir, withIntermediateDirectories: true)
+        var noBackup = URLResourceValues(); noBackup.isExcludedFromBackup = true
+        try? pinnedDir.setResourceValues(noBackup)
+        self.pinned = pinnedDir
+    }
+
+    /// Keep this entry where iOS cannot purge it. True if it is now pinned.
+    @discardableResult
+    func pin(key: String) -> Bool {
+        let dst = pinned.appendingPathComponent("\(key).mp3")
+        if FileManager.default.fileExists(atPath: dst.path) { return true }
+        let src = path(forKey: key)
+        guard FileManager.default.fileExists(atPath: src.path) else { return false }
+        return (try? FileManager.default.copyItem(at: src, to: dst)) != nil
+    }
+
+    func unpin(key: String) {
+        try? FileManager.default.removeItem(at: pinned.appendingPathComponent("\(key).mp3"))
     }
 
     /// Stable hash key. Uses SHA-256 over `voiceId\u{1}text` so that
@@ -26,7 +49,9 @@ actor AudioCache {
     /// File URL for a cached entry, or nil if not on disk.
     func url(forKey key: String) -> URL? {
         let url = path(forKey: key)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        if FileManager.default.fileExists(atPath: url.path) { return url }
+        let kept = pinned.appendingPathComponent("\(key).mp3")
+        return FileManager.default.fileExists(atPath: kept.path) ? kept : nil
     }
 
     /// Persist bytes for a key. Atomic write (tmp + rename) so we never

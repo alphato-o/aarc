@@ -111,7 +111,7 @@ final class RaceCameraDirector {
             if s == .connected {
                 if wasConnected == false, reportedOffline {
                     // Back after a swap or a dropout: say so with the number.
-                    let b = link.snapshot?.batteryPercent.map { " at \($0) percent" } ?? ""
+                    let b = link.snapshot?.batteryPercent.map { " at \(Self.spoken($0)) percent" } ?? ""
                     say("Camera back online\(b). Starting the recording.", key: "back")
                     announcedRecording = false
                 }
@@ -130,7 +130,7 @@ final class RaceCameraDirector {
             logBattery(snap)
             if snap.isRecording, !announcedRecording {
                 announcedRecording = true
-                let battery = snap.batteryPercent.map { ", battery \($0) percent" } ?? ""
+                let battery = snap.batteryPercent.map { ", battery \(Self.spoken($0)) percent" } ?? ""
                 say("Camera recording\(battery).", key: "rec")
             }
             if lastKnownRecording, !snap.isRecording, wantRecording, stopSentAt == nil {
@@ -215,6 +215,34 @@ final class RaceCameraDirector {
             cardWarnedMinutes = minutes
             say("Camera card has \(minutes) minutes left.", key: "card\(minutes)")
         }
+    }
+
+    /// Spoken battery to the nearest 5, so every camera line the race can
+    /// produce is a fixed sentence the race pack pre-renders (they play in the
+    /// dark first half hour). The status line keeps the exact number.
+    static func spoken(_ b: Int) -> Int { min(100, max(0, Int((Double(b) / 5).rounded()) * 5)) }
+
+    static var packLines: [String] {
+        var out = [
+            "Camera recording.",
+            "Camera back online. Starting the recording.",
+            "Camera is asking for the pairing. Allow it on the camera screen.",
+            "Camera rejected the pairing. Reset the wireless connection in the camera settings.",
+            "Camera refused the record command.",
+            "Camera offline. If that is a battery swap, carry on; I restart the recording when it is back.",
+            "Camera overheating. It will shut itself down.",
+            "Camera too hot to record. Get it out of the sun.",
+            "Camera battery thirty percent. About forty minutes of recording left; plan the swap.",
+            "Camera at twenty percent. Swap the battery at the next water station. The recording restarts by itself.",
+            "Camera at ten percent. Swap it now.",
+            "Camera at five percent. It will die in minutes.",
+        ]
+        for b in stride(from: 0, through: 100, by: 5) {
+            out.append("Camera recording, battery \(b) percent.")
+            out.append("Camera back online at \(b) percent. Starting the recording.")
+        }
+        for m in 1...15 { out.append("Camera card has \(m) minutes left.") }
+        return out
     }
 
     private func say(_ text: String, key: String) {

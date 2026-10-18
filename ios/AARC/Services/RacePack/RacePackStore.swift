@@ -69,6 +69,17 @@ final class RacePackStore {
         return pack
     }
 
+    /// Start of a pack run: count the pack's audio on disk and, if any is
+    /// missing and the network is up, render and pin the gaps in the background.
+    func verifyAudio(plan: RunPlan) {
+        guard let pack, buildTask == nil else { return }
+        Task { @MainActor in
+            let r = await self.render(script: pack.script, plan: plan)
+            RunEventLog.shared.record("race.pack.audio", "\(r.done)/\(r.total) lines on the phone")
+            self.phase = .idle
+        }
+    }
+
     /// True when the pack on disk no longer matches the current plan.
     func isStale(plan: RunPlan, runType: RunType, personalityId: String) -> Bool {
         pack != nil && usablePack(plan: plan, runType: runType, personalityId: personalityId) == nil
@@ -121,13 +132,14 @@ final class RacePackStore {
         }
         for text in MilestoneAnnouncement.prefetchTexts(for: plan) { jobs.append((text, RemoteTTS.voiceId)) }
         for text in RacePackLocalLines.all { jobs.append((text, RemoteTTS.homeVoiceId)) }
+        for text in RaceCameraDirector.packLines { jobs.append((text, RemoteTTS.homeVoiceId)) }
         var done = 0
         phase = .rendering(done: 0, total: jobs.count)
         for job in jobs {
             if Task.isCancelled { break }
             await RemoteTTS.shared.prefetch(job.text, voiceId: job.voiceId)
             let key = AudioCache.key(voiceId: job.voiceId, text: job.text)
-            if await AudioCache.shared.url(forKey: key) != nil { done += 1 }
+            if await AudioCache.shared.url(forKey: key) != nil, await AudioCache.shared.pin(key: key) { done += 1 }
             phase = .rendering(done: done, total: jobs.count)
         }
         return (done, jobs.count)

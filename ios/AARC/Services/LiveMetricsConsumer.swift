@@ -295,7 +295,7 @@ final class LiveMetricsConsumer {
                                 personalityId: pendingPersonalityId,
                                 isTest: RunOrchestrator.shared.isTestRun)
 
-        // Live "share back home" — REAL runs only (guarded inside).
+        // Live "share back home", test runs included so desk tests are watched.
         LiveShareController.shared.startIfEnabled(
             runId: runId, isTest: RunOrchestrator.shared.isTestRun, startedAt: startedAt)
 

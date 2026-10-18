@@ -47,3 +47,52 @@ struct FieldFixesHarness {
         hung.cancel()
     }
 }
+
+/// Flying dark (race day: assume the first half hour has no network).
+@MainActor
+@Suite("Flying dark", .serialized)
+struct FlyingDarkHarness {
+
+    @Test func darkSynthGivesUpAtOnce() async {
+        EndpointManager.shared.setDark(true, why: "test")
+        defer { EndpointManager.shared.setDark(false, why: "test") }
+        let t0 = Date.now
+        let ok = await RemoteTTS.shared.prefetch("dark test line \(UUID())", within: 30)
+        #expect(!ok)
+        #expect(Date.now.timeIntervalSince(t0) < 1)
+    }
+
+    @Test func darkKilometreGoesToRickyAtOnce() {
+        EndpointManager.shared.setDark(true, why: "test")
+        defer { EndpointManager.shared.setDark(false, why: "test") }
+        HomeBaseReadout.shared.reset()
+        var fell = false
+        let m = LiveMetrics(elapsed: 330, distanceMeters: 1000, currentPaceSecPerKm: 330, avgPaceSecPerKm: 330,
+                            currentHeartRate: 150, energyKcal: 60, cadenceStepsPerMinute: 170, lastSplit: nil, state: .running)
+        HomeBaseReadout.shared.deliver(km: 1, metrics: m) { fell = true }
+        #expect(fell)
+    }
+
+    @Test func everyCameraBatteryLineIsPreRendered() {
+        #expect(RaceCameraDirector.spoken(87) == 85)
+        #expect(RaceCameraDirector.spoken(3) == 5)
+        let lines = Set(RaceCameraDirector.packLines)
+        for b in 0...100 {
+            #expect(lines.contains("Camera recording, battery \(RaceCameraDirector.spoken(b)) percent."))
+        }
+    }
+
+    @Test func darkLineNeverHoldsTheQueue() async {
+        EndpointManager.shared.setDark(true, why: "test")
+        defer { EndpointManager.shared.setDark(false, why: "test") }
+        let q = VoiceFeedbackQueue.shared
+        q.stopAll()
+        Speaker.shared.speak("Dark.", priority: .milestone, source: "script:km")
+        let t0 = Date.now
+        while Date.now.timeIntervalSince(t0) < 15, q.currentlyPlaying != nil || !q.pending.isEmpty {
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        #expect(q.currentlyPlaying == nil && q.pending.isEmpty, "an uncached line held the slot while dark")
+        q.stopAll()
+    }
+}

@@ -243,8 +243,10 @@ final class RemoteTTS: NSObject {
             activity = .synthesizing(chars: text.count)
             synthStartedAt = Date()
             let started = Date()
-            // Coalesced synth — shares any in-flight prewarm for this line.
-            await ensureCached(text: text, voiceId: voiceId, key: key)
+            // Coalesced synth, shares any in-flight prewarm for this line. The
+            // slot waits a few seconds at most: past that the on-phone voice
+            // speaks and the synth finishes into the cache for next time.
+            _ = await prefetch(text, voiceId: voiceId, within: Self.slotSynthBudget)
             // CRITICAL: if the run was stopped mid-fetch, bail before
             // playing — never speak via Apple AFTER the pipeline was killed
             // (the treadmill End-tap bug).
@@ -255,14 +257,15 @@ final class RemoteTTS: NSObject {
                 lastWasCacheHit = false
                 lastError = nil
             } else {
-                // Synth failed (e.g. an ElevenLabs v3 long-line timeout).
-                // Fall back to Apple so the runner is never silent, unless
-                // the synth was cancelled, in which case silence is correct.
-                if Task.isCancelled || (lastError ?? "").hasPrefix("synth cancelled") { return }
+                // No audio in time (dark, slow, or failed): the on-phone voice
+                // speaks so the runner is never silent. Only this line's own
+                // cancellation means silence; lastError may be another line's.
+                if Task.isCancelled { return }
                 lastBackend = "Apple (fallback)"
                 activity = .playing(remote: false)
+                let reason = EndpointManager.shared.isDark ? "dark" : (lastError ?? "synth slower than \(Int(Self.slotSynthBudget)) s")
                 RunEventLog.shared.record("tts.fallback", String(text.prefix(80)),
-                                          data: ["reason": lastError ?? "synth failed", "backend": "local"])
+                                          data: ["reason": reason, "backend": "local"])
                 // The timeline export reads "speech" rows; a local-voice line
                 // is still a line the runner heard.
                 RunEventLog.shared.recordSpeech(text: text, voiceId: "local", source: "fallback", cacheKey: "")
@@ -420,6 +423,9 @@ final class RemoteTTS: NSObject {
         if RunPreview.shared.active { return }
         if AppEnv.uiTest { return }   // UI-test journeys are muted (no EL cost)
         if await AudioCache.shared.url(forKey: key) != nil { return }
+        // Dark: nothing can arrive, so nothing waits. The caller plays the
+        // on-phone voice now; the line is synthesised next time it is needed.
+        if EndpointManager.shared.isDark { return }
         if let existing = inFlightSynths[key] {
             await existing.value
             return
@@ -458,6 +464,26 @@ final class RemoteTTS: NSObject {
         guard !text.isEmpty else { return }
         let key = AudioCache.key(voiceId: voiceId, text: text)
         await ensureCached(text: text, voiceId: voiceId, key: key)
+    }
+
+    /// How long a line holding the queue's slot may wait for its audio.
+    static let slotSynthBudget: TimeInterval = 4
+
+    /// `prefetch` with a deadline: true once cached, false if the deadline
+    /// passed first (the synth keeps going and lands in the cache).
+    @discardableResult
+    func prefetch(_ text: String, voiceId: String = RemoteTTS.voiceId, within seconds: TimeInterval) async -> Bool {
+        guard !text.isEmpty else { return true }
+        let key = AudioCache.key(voiceId: voiceId, text: text)
+        if await AudioCache.shared.url(forKey: key) != nil { return true }
+        let synth = Task { @MainActor in await self.ensureCached(text: text, voiceId: voiceId, key: key) }
+        let finished = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let once = OnceFlag(cont)
+            Task { await synth.value; once.resume(true) }
+            Task { try? await Task.sleep(for: .seconds(seconds)); once.resume(false) }
+        }
+        guard finished else { return false }
+        return await AudioCache.shared.url(forKey: key) != nil
     }
 
     /// Like `prefetch`, but returns the measured latency and whether the
@@ -680,5 +706,15 @@ enum RemoteTTSError: Error, LocalizedError {
         case .transport(let m): return "Network error: \(m)"
         case .httpStatus(let code, let body): return "HTTP \(code): \(body)"
         }
+    }
+}
+
+private final class OnceFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<Bool, Never>?
+    init(_ cont: CheckedContinuation<Bool, Never>) { self.cont = cont }
+    func resume(_ value: Bool) {
+        lock.lock(); let c = cont; cont = nil; lock.unlock()
+        c?.resume(returning: value)
     }
 }

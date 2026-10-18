@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import OSLog
+import Network
 
 /// Multi-endpoint transport with automatic failover. Born from the
 /// 2026-06-11 treadmill run where the China-carrier → Cloudflare path
@@ -85,7 +86,9 @@ final class EndpointManager {
         if ok {
             endpoints[idx].realFailures = 0
             endpoints[idx].lastRealFailureAt = nil
+            if pathUp { setDark(false, why: "\(endpointId) delivered") }
         } else {
+            kick()
             endpoints[idx].realFailures += 1
             endpoints[idx].lastRealFailureAt = Date()
             log.error("[endpoint] real-traffic strike \(self.endpoints[idx].realFailures, privacy: .public) on \(endpointId, privacy: .public): \(reason, privacy: .public)")
@@ -104,35 +107,103 @@ final class EndpointManager {
     private var probeTask: Task<Void, Never>?
     private let log = Logger(subsystem: "club.aarun.AARC", category: "Endpoint")
 
+    // MARK: - Flying dark
+
+    /// No endpoint answers: no network, or a network that black-holes ours
+    /// (race day, founder 2026-10-18: "assume the first 30 mins will be
+    /// offline"). While dark the run speaks only from what is on the phone,
+    /// nothing waits on a request, and the probes keep trying every 10 s.
+    private(set) var isDark = false
+    private(set) var darkSince: Date?
+    private var pathUp = true
+    private let pathMonitor = NWPathMonitor()
+    private var wake: CheckedContinuation<Void, Never>?
+    private var lastKick = Date.distantPast
+    /// Called on the main actor when the network comes back, so queued work
+    /// (talk-backs, the live feed, the roast pool) goes out at once.
+    private var onlineHandlers: [@MainActor () -> Void] = []
+
+    func whenOnline(_ handler: @escaping @MainActor () -> Void) { onlineHandlers.append(handler) }
+
+    /// A real request just failed: probe now rather than at the next tick.
+    func kick() {
+        guard Date().timeIntervalSince(lastKick) > 5 else { return }
+        lastKick = Date()
+        wake?.resume(); wake = nil
+    }
+
+    func setDark(_ dark: Bool, why: String) {
+        guard dark != isDark else { return }
+        isDark = dark
+        if dark {
+            darkSince = Date()
+            RunEventLog.shared.record("net.dark", why)
+        } else {
+            let secs = darkSince.map { Int(Date().timeIntervalSince($0)) } ?? 0
+            darkSince = nil
+            RunEventLog.shared.record("net.online", "after \(secs) s dark; \(why)")
+            onlineHandlers.forEach { $0() }
+        }
+    }
+
     /// Start the background probe loop. Idempotent; call at app launch.
     func startProbing() {
         guard probeTask == nil else { return }
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let up = path.status == .satisfied
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.pathUp = up
+                if !up { self.setDark(true, why: "no network path") } else { self.kick() }
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "aarc.netpath"))
         probeTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 await self.probeAll()
                 self.applySelection()
+                let anyUp = self.endpoints.contains { $0.consecutiveFailures == 0 && $0.lastLatencyMs != nil }
+                if anyUp && self.pathUp { self.setDark(false, why: "probe answered") }
+                else if !anyUp { self.setDark(true, why: self.pathUp ? "no endpoint answers" : "no network path") }
                 let degraded = self.endpoints.contains { $0.consecutiveFailures > 0 }
-                try? await Task.sleep(for: .seconds(degraded ? 15 : 60))
+                let pause: Double = self.isDark ? 10 : (degraded ? 15 : 60)
+                await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                    self.wake = c
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(for: .seconds(pause))
+                        self?.wake?.resume(); self?.wake = nil
+                    }
+                }
             }
         }
     }
 
+    /// Both endpoints at once, 6 s each: a dark start is known within seconds.
     private func probeAll() async {
-        for idx in endpoints.indices {
-            let url = endpoints[idx].url.appendingPathComponent("ping")
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 8
-            let started = Date()
-            do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
-                    endpoints[idx].lastLatencyMs = Int(Date().timeIntervalSince(started) * 1000)
-                    endpoints[idx].consecutiveFailures = 0
-                } else {
-                    endpoints[idx].consecutiveFailures += 1
+        let targets = endpoints.map { ($0.id, $0.url.appendingPathComponent("ping")) }
+        let results = await withTaskGroup(of: (String, Int?).self) { group in
+            for (id, url) in targets {
+                group.addTask {
+                    var request = URLRequest(url: url)
+                    request.timeoutInterval = 6
+                    let started = Date()
+                    guard let (_, response) = try? await URLSession.shared.data(for: request),
+                          let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode)
+                    else { return (id, nil) }
+                    return (id, Int(Date().timeIntervalSince(started) * 1000))
                 }
-            } catch {
+            }
+            var out: [(String, Int?)] = []
+            for await r in group { out.append(r) }
+            return out
+        }
+        for (id, ms) in results {
+            guard let idx = endpoints.firstIndex(where: { $0.id == id }) else { continue }
+            if let ms {
+                endpoints[idx].lastLatencyMs = ms
+                endpoints[idx].consecutiveFailures = 0
+            } else {
                 endpoints[idx].consecutiveFailures += 1
             }
         }

@@ -463,6 +463,9 @@ final class RunOrchestrator {
         preGenKey = key
         isPreGenerating = true
 
+        // Stock Ricky's offline shelf while we are at home on a good network.
+        RoastPool.shared.topUp(runType: .outdoor, personalityId: personalityId)
+
         // Fresh bullet rotation for this pre-gen cycle; same seed will
         // then be reused by the runtime calls (dynamic-line, etc.) so
         // they all hit the prompt cache together.
@@ -617,6 +620,15 @@ final class RunOrchestrator {
     /// runner already passed is spoken again. Quiet on failure, like the
     /// normal swap: the live layers carry the run meanwhile.
     func resumeScriptAfterRelaunch(runType: RunType, personalityId: String) {
+        // Race day: the pack is on the phone, so a relaunch in the dark first
+        // half hour still has every scripted line (pre-marked to now).
+        let plan = ScriptPreviewStore.shared.currentPlan
+        if let pack = racePackForStart(plan: plan, runType: runType, personalityId: personalityId) {
+            ScriptEngine.shared.replaceScript(pack.script, currentMetrics: LiveMetricsConsumer.shared.latest ?? .zero)
+            ScriptPreviewStore.shared.latest = pack.script
+            RunEventLog.shared.record("run.resume", "race pack restored, no network needed")
+            return
+        }
         scheduleFullScriptSwap(plan: ScriptPreviewStore.shared.currentPlan,
                                runType: runType, personalityId: personalityId)
     }
@@ -744,6 +756,7 @@ final class RunOrchestrator {
             RunEventLog.shared.record("race.pack", "no pack for this plan; generating live")
             return nil
         }
+        RacePackStore.shared.verifyAudio(plan: plan)
         RunEventLog.shared.record("race.pack", "using pack", data: [
             "built": ISO8601DateFormatter().string(from: pack.builtAt),
             "lines": String(pack.lineCount),

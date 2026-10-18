@@ -344,8 +344,12 @@ final class ContextualCoach {
         // Use ScriptEngine.lastDispatchAt as the source of truth — if a
         // scripted per-km roast just fired, "quiet" isn't quiet.
         let last = ScriptEngine.shared.lastDispatchAt ?? lastFiredAt
-        if let last, now.timeIntervalSince(last) >= quietStretchSilenceSeconds,
-           cooldownOk(.quietStretch, now: now) {
+        // Dark, the pool is the only voice Ricky has: let it speak more often.
+        let silence = EndpointManager.shared.isDark ? 90 : quietStretchSilenceSeconds
+        let quietOk = EndpointManager.shared.isDark
+            ? (lastFireByTrigger[.quietStretch].map { now.timeIntervalSince($0) >= 90 } ?? true)
+            : cooldownOk(.quietStretch, now: now)
+        if let last, now.timeIntervalSince(last) >= silence, quietOk {
             return .quietStretch
         }
         // If nothing has fired yet at all (i.e., past warmup but no
@@ -387,28 +391,10 @@ final class ContextualCoach {
         // enforced at generation time. Data-reactive triggers (HR, pace,
         // stationary) still generate live — their numbers ARE the joke.
         // Pool exhausted or not yet fetched → fall through to the live path.
-        if trigger == .quietStretch, let pooled = RoastPool.shared.draw() {
-            defer { inFlight = false }
-            RunEventLog.shared.record("coach.trigger", "quiet_stretch (pool, \(RoastPool.shared.remaining) left)")
-            let segment = UUID()
-            ScriptEngine.shared.tryInject(
-                text: pooled,
-                source: "pool:quiet_stretch",
-                priority: .coaching,
-                expiresAfter: 120,
-                segmentId: segment,
-                decisionAt: AppClock.now
-            )
-            Conversation.shared.rickySpoke(
-                text: pooled,
-                source: "pool:quiet_stretch",
-                priority: .coaching,
-                segmentId: segment,
-                metrics: metrics
-            )
-            lastFiredTrigger = "quiet_stretch(pool)"
-            lastFiredAt = AppClock.now
-            return
+        // Dark: every trigger draws from the pool; nothing goes to the network.
+        if trigger == .quietStretch || EndpointManager.shared.isDark {
+            let spoke = speakPooled(trigger: trigger, metrics: metrics, why: EndpointManager.shared.isDark ? "dark" : "pool")
+            if spoke || EndpointManager.shared.isDark { inFlight = false; return }
         }
         let plan = ScriptPreviewStore.shared.currentPlan
         let avgHR = rollingAverage(hrSamples)
@@ -505,6 +491,8 @@ final class ContextualCoach {
                 if Task.isCancelled { return }
                 self.lastError = error.localizedDescription
                 self.log.error("ContextualCoach error: \(error.localizedDescription, privacy: .public)")
+                // A live line that cannot come still gets said, from the pool.
+                if self.isRunning, self.speakPooled(trigger: trigger, metrics: metrics, why: "live line failed") { return }
                 // Back off so a transient failure doesn't lock the
                 // trigger for its full cooldown.
                 self.lastFireByTrigger[trigger] = AppClock.now.addingTimeInterval(-((self.cooldownByTrigger[trigger] ?? 240) - 30))
@@ -512,9 +500,25 @@ final class ContextualCoach {
         }
     }
 
+    /// One line off the roast pool in Ricky's voice; false when the pool is empty.
+    private func speakPooled(trigger: AIClient.DynamicLineTrigger, metrics: LiveMetrics, why: String) -> Bool {
+        guard let pooled = RoastPool.shared.draw() else { return false }
+        RunEventLog.shared.record("coach.trigger", "\(trigger.rawValue) (pool, \(why), \(RoastPool.shared.remaining) left)")
+        let source = "pool:\(trigger.rawValue)"
+        let segment = UUID()
+        ScriptEngine.shared.tryInject(text: pooled, source: source, priority: .coaching,
+                                      expiresAfter: 120, segmentId: segment, decisionAt: AppClock.now)
+        Conversation.shared.rickySpoke(text: pooled, source: source, priority: .coaching,
+                                       segmentId: segment, metrics: metrics)
+        lastFiredTrigger = "\(trigger.rawValue)(pool)"
+        lastFiredAt = AppClock.now
+        return true
+    }
+
     // MARK: - Music riff
 
     private func shouldCheckMusicRiff(now: Date) -> Bool {
+        if EndpointManager.shared.isDark { return false }
         if let last = lastMusicRiffAt,
            now.timeIntervalSince(last) < musicRiffCooldown {
             return false

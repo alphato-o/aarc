@@ -31,6 +31,12 @@ final class HomeBaseReadout {
         guard km > lastKm else { return }
         lastKm = km
         task?.cancel()
+        // Dark: no request at all, the kilometre is Ricky's from the pack now.
+        if EndpointManager.shared.isDark, let fallback {
+            RunEventLog.shared.record("milestone.owner", "ricky:dark", data: ["km": String(km)])
+            fallback()
+            return
+        }
         isProducing = true
         let projected = RunDirector.shared.projected(distance: metrics.distanceMeters, elapsed: metrics.elapsed)
         let plan = ScriptPreviewStore.shared.currentPlan
@@ -61,12 +67,25 @@ final class HomeBaseReadout {
         )
         RunEventLog.shared.record("home.readout.request", "km \(km)")
         let decisionAt = AppClock.now
+        // A slow network must not leave the marker unspoken: 15 s, then Ricky's
+        // pack line, and a late readout is dropped.
+        let gate = Gate()
+        if let fallback {
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(15))
+                guard !gate.settled, self.lastKm == km, LiveMetricsConsumer.shared.isRunActive else { return }
+                gate.settled = true
+                RunEventLog.shared.record("milestone.owner", "ricky:slow", data: ["km": String(km)])
+                fallback()
+            }
+        }
         task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.isProducing = false; self.task = nil }
             do {
                 let result = try await AIClient.shared.homeBaseReadout(request)
-                guard !Task.isCancelled, LiveMetricsConsumer.shared.isRunActive else { return }
+                guard !Task.isCancelled, LiveMetricsConsumer.shared.isRunActive, !gate.settled else { return }
+                gate.settled = true
                 self.recentLines.append(result.text)
                 if self.recentLines.count > 6 { self.recentLines.removeFirst() }
                 RunEventLog.shared.record("home.readout", String(result.text.prefix(80)), data: ["km": String(km)])
@@ -78,10 +97,14 @@ final class HomeBaseReadout {
             } catch {
                 self.log.error("readout km \(km) failed: \(error.localizedDescription, privacy: .public)")
                 RunEventLog.shared.record("home.readout.failed", error.localizedDescription, data: ["km": String(km)])
-                guard !Task.isCancelled, LiveMetricsConsumer.shared.isRunActive, let fallback else { return }
+                guard !Task.isCancelled, LiveMetricsConsumer.shared.isRunActive, !gate.settled, let fallback else { return }
+                gate.settled = true
                 RunEventLog.shared.record("milestone.owner", "ricky:offline", data: ["km": String(km)])
                 fallback()
             }
         }
     }
 }
+
+/// Whichever of the readout and the deadline lands first speaks the kilometre.
+@MainActor private final class Gate { var settled = false }

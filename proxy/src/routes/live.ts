@@ -52,7 +52,8 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
         const b = await request.json<{ runId?: string; isTest?: boolean; startedAt?: string; race?: boolean; course?: string }>();
         if (!b.runId) return json({ ok: false, error: "runId required" }, 400);
-        if (b.isTest) return json({ ok: true, ignored: "test run" }); // REAL runs only
+        // Test runs open the channel too (18 Oct: the test toggle left Control
+        // Room blind on a desk test). The run's own upload still marks it test.
         // New live run supersedes any prior one.
         await env.DB.batch([
             env.DB.prepare("UPDATE live_run SET ended_at = ? WHERE ended_at IS NULL").bind(now),
