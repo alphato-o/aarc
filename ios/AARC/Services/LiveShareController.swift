@@ -26,6 +26,14 @@ final class LiveShareController {
     static var enabled: Bool { UserDefaults.standard.bool(forKey: flagKey) }
 
     private var runId: String?
+    /// Last time the inject poll got an answer from home. A suspended or
+    /// restarted app stops polling with the run still on (device, 18 Oct:
+    /// three replies never fetched), so talk-back checks this.
+    private(set) var lastPollAt: Date?
+    var downlinkAlive: Bool {
+        guard runId != nil, let t = lastPollAt else { return false }
+        return Date().timeIntervalSince(t) < 30
+    }
     /// True when events go up (sharing on, or actual race). False = downlink only.
     private(set) var uplink = false
     /// True for an actual-race uplink: every event carries its data map.
@@ -139,12 +147,14 @@ final class LiveShareController {
         req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
         req.timeoutInterval = 8
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (resp as? HTTPURLResponse)?.statusCode == 200 else { return }
+        lastPollAt = Date()
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let line = obj["line"] as? [String: Any],
               let text = line["text"] as? String,
               let voiceId = line["voiceId"] as? String, !text.isEmpty
         else { return }
+        if ControlRoomChannel.shared.alreadyPlayed(text) { return }
         NSLog("[live] playing line from home (\(voiceId.prefix(8)))")
         // .milestone priority — founder directive (2026-07-21, after his 5K
         // report got preempted by the 7K split, "oops"-resumed, and cut again

@@ -87,7 +87,7 @@ final class ControlRoomChannel {
         // hear your response"): start the silent keepalive BEFORE the network
         // call, while Siri still has the app executing, so iOS keeps it awake
         // in the background until the answer is spoken.
-        let offRun = runId == nil
+        let offRun = !LiveShareController.shared.downlinkAlive
         if offRun { holdAwake() }
         if let id = await send(item) {
             if offRun { listenForAnswer(after: id); return .listening }
@@ -114,7 +114,7 @@ final class ControlRoomChannel {
         // never queued. The proxy is idempotent on clientId, so a double
         // send is harmless.
         pending.append(item)
-        let offRun = runId == nil
+        let offRun = !LiveShareController.shared.downlinkAlive
         if offRun { holdAwake() }
         hotUntil = Date().addingTimeInterval(180)
         // Tier 1: the streamed transcript goes as text now; the audio follows
@@ -229,6 +229,11 @@ final class ControlRoomChannel {
 
     /// In a run the answer comes through the run's inject poll; off-run there
     /// is no poll, so wait on the thread for the agent's spoken row.
+    /// Lines the thread listener already spoke, so the inject poll (if it
+    /// comes back) does not say them twice.
+    private var played: [String] = []
+    func alreadyPlayed(_ text: String) -> Bool { played.contains(text) }
+
     private func listenForAnswer(after id: Int) {
         guard id > 0 else { releaseAwake(); return }
         earTask?.cancel()
@@ -237,10 +242,11 @@ final class ControlRoomChannel {
             var answered = false
             while !Task.isCancelled, Date.now < deadline, !answered {
                 try? await Task.sleep(for: .seconds(1))
-                // A run that started meanwhile owns the reply via inject.
-                if LiveMetricsConsumer.shared.currentRunId != nil { break }
+                // A live inject poll owns the reply.
+                if LiveShareController.shared.downlinkAlive { break }
                 guard let rows = try? await AIClient.shared.agentThread(since: id) else { continue }
                 for row in rows where row.role == "agent" && row.source == "spoken" {
+                    self?.played.append(row.text)
                     Speaker.shared.speak(row.text, priority: .milestone, source: "home",
                                          expiresAfter: 120, voiceId: RemoteTTS.homeVoiceId)
                     answered = true
@@ -262,14 +268,14 @@ final class ControlRoomChannel {
     }
 
     private func holdAwake() {
-        guard LiveMetricsConsumer.shared.currentRunId == nil else { return }
+        guard !LiveShareController.shared.downlinkAlive else { return }
         AudioPlaybackManager.shared.beginSustained()
         BackgroundAudioKeepalive.shared.start()
     }
 
     private func releaseAwake() {
-        // Never pull the audio out from under a run that started meanwhile.
-        guard LiveMetricsConsumer.shared.currentRunId == nil else { return }
+        // Never pull the audio out from under a live run.
+        guard !LiveShareController.shared.downlinkAlive, !LiveMetricsConsumer.shared.isRunActive else { return }
         BackgroundAudioKeepalive.shared.stop()
         AudioPlaybackManager.shared.endSustained()
     }
@@ -286,8 +292,8 @@ final class ControlRoomChannel {
             // A recorded line delivered late off-run still deserves a spoken
             // answer (17 Oct: the recovered 111 s line was answered in
             // silence). Only one listener at a time; the newest wins.
-            if item.audioFile != nil, item.runId == nil, id > 0, earTask == nil,
-               LiveMetricsConsumer.shared.currentRunId == nil {
+            if item.audioFile != nil, id > 0, earTask == nil,
+               !LiveShareController.shared.downlinkAlive {
                 holdAwake()
                 listenForAnswer(after: id)
             }
