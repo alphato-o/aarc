@@ -7,10 +7,11 @@ import AARCKit
 struct RacePackSection: View {
     @State private var store = RacePackStore.shared
     @State private var orchestrator = RunOrchestrator.shared
-    @State private var plans = ScriptPreviewStore.shared
 
-    private var plan: RunPlan { plans.currentPlan }
-    private var runType: RunType { LiveMetricsConsumer.shared.pendingRunType }
+    // Always the marathon, whatever the home screen is set to: Actual race
+    // mode locks the start to this plan, so any other pack would never load.
+    private var plan: RunPlan { .distance(km: RunOrchestrator.marathonKm) }
+    private var runType: RunType { .outdoor }
     private var personalityId: String { LiveMetricsConsumer.shared.pendingPersonalityId }
 
     var body: some View {
@@ -55,7 +56,7 @@ struct RacePackSection: View {
         } header: {
             Text("Race pack (offline)")
         } footer: {
-            Text("Used only in Actual race mode, for exactly the plan it was built for. Set the race plan (42.2 km, outdoor) first, then build on Wi‑Fi: it writes Ricky's course script and downloads every line. At the start the pack is the script; Home Base and Jessica still join when there is signal, and Ricky's scripted line covers any kilometre they cannot reach.")
+            Text("Used only in Actual race mode, for exactly the plan it was built for. Always built for the marathon (42.2 km, outdoor), whatever plan is on the home screen. Build on Wi‑Fi with the app open: it writes Ricky's course script and downloads every line. At the start the pack is the script; Home Base and Jessica still join when there is signal, and Ricky's scripted line covers any kilometre they cannot reach.")
         }
     }
 
