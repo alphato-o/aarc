@@ -121,6 +121,7 @@ struct AARCApp: App {
                     RunHistoryBackfill.backfillAll()
                     // Endpoint failover probe loop (CF Worker ↔ US gateway).
                     EndpointManager.shared.startProbing()
+                    Task { await MusicTimeline.shared.catchUp() }
                     // Pull the dashboard-edited personal-troll facts.
                     PersonalContextStore.shared.refreshFromServer()
                 }

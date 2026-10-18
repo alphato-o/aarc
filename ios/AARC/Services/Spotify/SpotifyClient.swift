@@ -96,6 +96,52 @@ struct SpotifyClient {
     /// to modulate the bar animation with the music's BPM. Returns nil
     /// on any failure (including the rare case where Spotify hasn't
     /// computed features for a freshly-released track).
+    struct Played: Sendable {
+        let playedAt: Date
+        let id: String?
+        let title: String
+        let artist: String
+        let album: String?
+        let durationMs: Int?
+    }
+
+    enum History: Sendable {
+        case plays([Played])
+        case noPermission
+        case unavailable
+    }
+
+    /// Spotify's own play history since `after` (it keeps about the last 50).
+    /// Plays made offline appear once the Spotify app syncs.
+    func recentlyPlayed(after: Date) async -> History {
+        guard let token = await SpotifyAuth.shared.validAccessToken() else { return .unavailable }
+        var comps = URLComponents(url: base.appendingPathComponent("me/player/recently-played"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "limit", value: "50"),
+                            URLQueryItem(name: "after", value: String(Int64(after.timeIntervalSince1970 * 1000)))]
+        var req = URLRequest(url: comps.url!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.timeoutInterval = 12
+        guard let (data, response) = try? await URLSession.shared.data(for: req),
+              let http = response as? HTTPURLResponse else { return .unavailable }
+        if http.statusCode == 401 || http.statusCode == 403 { return .noPermission }
+        guard (200...299).contains(http.statusCode),
+              let wire = try? JSONDecoder().decode(HistoryWire.self, from: data) else { return .unavailable }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+        return .plays(wire.items.compactMap { it in
+            guard let at = iso.date(from: it.played_at) ?? plain.date(from: it.played_at) else { return nil }
+            let artist = it.track.artists.compactMap(\.name).joined(separator: ", ")
+            return Played(playedAt: at, id: it.track.id, title: it.track.name, artist: artist,
+                          album: it.track.album?.name, durationMs: it.track.duration_ms)
+        })
+    }
+
+    private struct HistoryWire: Decodable {
+        struct It: Decodable { let played_at: String; let track: Item }
+        let items: [It]
+    }
+
     func audioFeatures(trackId: String) async -> AudioFeatures? {
         guard let token = await SpotifyAuth.shared.validAccessToken() else { return nil }
         let url = base.appendingPathComponent("audio-features/\(trackId)")

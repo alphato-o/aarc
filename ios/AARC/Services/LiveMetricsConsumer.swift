@@ -299,6 +299,9 @@ final class LiveMetricsConsumer {
         LiveShareController.shared.startIfEnabled(
             runId: runId, isTest: RunOrchestrator.shared.isTestRun, startedAt: startedAt)
 
+        // The soundtrack log for the race video.
+        MusicTimeline.shared.start(runId: runId, startedAt: startedAt)
+
         // In-run roast library: one batched call, cached for quiet-stretch
         // dispatch (intra-batch variety + no per-line LLM round-trip).
         RoastPool.shared.fetchIfNeeded(runType: pendingRunType)
@@ -551,6 +554,7 @@ final class LiveMetricsConsumer {
         PlaceContext.shared.stop()
         VenueConfirm.shared.reset()
         RoastPool.shared.reset()
+        MusicTimeline.shared.end()
         LiveActivityController.shared.end()
         LiveShareController.shared.end()
 
