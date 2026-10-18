@@ -141,7 +141,7 @@ final class LiveShareController {
     /// Poll for a line the agent pushed; play it in the agent's chosen voice.
     private func pollInject() async {
         guard let rid = runId, let token = Self.token(),
-              let url = URL(string: Config.apiBaseURL.appendingPathComponent("live/inject").absoluteString + "?runId=\(rid)")
+              let url = URL(string: Config.cloudBaseURL.appendingPathComponent("live/inject").absoluteString + "?runId=\(rid)")
         else { return }
         var req = URLRequest(url: url)
         req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
@@ -173,7 +173,8 @@ final class LiveShareController {
     @discardableResult
     private func send(_ path: String, _ body: [String: Any]) async -> Bool {
         guard let token = Self.token() else { return false }
-        var req = URLRequest(url: Config.apiBaseURL.appendingPathComponent(path))
+        // live/* needs D1, which only the Worker has: never follow the US failover.
+        var req = URLRequest(url: Config.cloudBaseURL.appendingPathComponent(path))
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "content-type")
         req.setValue(token, forHTTPHeaderField: "X-AARC-Device")

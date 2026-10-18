@@ -87,7 +87,9 @@ function stubBinding(name, kind) {
 // handlers expect for keys/models/base URLs); bindings are stubbed on top.
 const env = {
     ...process.env,
-    DB: stubBinding("DB", "D1"),
+    // No D1 here: undefined, so every `if (!env.DB)` guard degrades cleanly.
+    // A throwing stub is truthy and slipped past them (Jessica 500, 18 Oct).
+    DB: undefined,
     VOICES: stubBinding("VOICES", "R2"),
     // This box has no R2, so route /tts through the CF worker's single R2 cache
     // (one generation per line, shared with direct-CF hits → no hedge
