@@ -110,6 +110,8 @@ struct AARCApp: App {
                     // "over and out" detection needs speech permission, and a
                     // background start cannot ask for it.
                     TalkbackCapture.requestSpeechAuthorizationIfNeeded()
+                    // Siri can only open the mic in the background if this banner is up.
+                    ControlRoomRecorder.shared.arm()
                     // Retry any run-diagnostics uploads that didn't make
                     // it out last session (e.g. ended the run in a tunnel).
                     RunEventLog.shared.uploadPendingRuns()

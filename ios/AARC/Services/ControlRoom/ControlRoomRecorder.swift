@@ -49,9 +49,10 @@ final class ControlRoomRecorder: NSObject {
     private var meterTimer: Timer?
     private var heardSpeechAt: Date?
     private var activityId: String?
-    /// The standing banner for the whole run, started while AARC is on screen.
-    /// iOS refuses a new Live Activity from the background once a run is going
-    /// ("Target is not foreground", device, 18 Oct), so talk-back reuses this.
+    /// The standing banner, started whenever AARC is on screen. iOS refuses a
+    /// new Live Activity while the app is already running in the background
+    /// ("Target is not foreground", in and after runs, device, 18 Oct), so
+    /// talk-back reuses this one.
     private var armedId: String?
     private var foregroundObserver: NSObjectProtocol?
     private var commandTargets: [(MPRemoteCommand, Any)] = []
@@ -514,18 +515,14 @@ final class ControlRoomRecorder: NSObject {
         }
     }
 
-    // MARK: - Standing banner for a run
+    // MARK: - Standing banner
 
-    /// Called when a run starts (AARC is on screen then) and whenever AARC
-    /// comes to the foreground during a run.
-    func armForRun() {
+    /// Called at launch, at run start, and whenever AARC comes to the screen.
+    func arm() {
         if foregroundObserver == nil {
             foregroundObserver = NotificationCenter.default.addObserver(
                 forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-                Task { @MainActor in
-                    let me = ControlRoomRecorder.shared
-                    if LiveMetricsConsumer.shared.currentRunId != nil { me.armForRun() }
-                }
+                Task { @MainActor in ControlRoomRecorder.shared.arm() }
             }
         }
         if let id = armedId, Self.exists(id) { return }
@@ -536,16 +533,10 @@ final class ControlRoomRecorder: NSObject {
                                            content: .init(state: state, staleDate: nil)).id
         } catch {
             armedId = nil
-            ControlRoomChannel.shared.diag("talkback: could not arm the run banner: \(Self.code(error)); fg=\(Self.foreground)")
+            if Self.foreground {
+                ControlRoomChannel.shared.diag("talkback: could not arm the banner: \(Self.code(error))")
+            }
         }
-    }
-
-    func disarm() {
-        guard let id = armedId else { return }
-        armedId = nil
-        if isRecording { return }  // finish() ends it as an ordinary banner
-        let c = ActivityContent(state: ControlRoomActivityAttributes.ContentState(phase: "sent", startedAt: .now), staleDate: nil)
-        Task { await Self.close(id, c, dismissNow: true) }
     }
 
     private nonisolated static func exists(_ id: String) -> Bool {

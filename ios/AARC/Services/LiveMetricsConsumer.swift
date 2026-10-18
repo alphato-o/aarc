@@ -393,7 +393,7 @@ final class LiveMetricsConsumer {
         ContextualCoach.shared.start(runType: pendingRunType)
         RunDirector.shared.start(plan: ScriptPreviewStore.shared.currentPlan)
         AmbientProbe.shared.start()   // fetch + surface the real-time ambient context
-        ControlRoomRecorder.shared.armForRun()
+        ControlRoomRecorder.shared.arm()
         LiveActivityController.shared.start(
             runId: runId,
             personalityId: pendingPersonalityId,
@@ -553,7 +553,6 @@ final class LiveMetricsConsumer {
         RoastPool.shared.reset()
         LiveActivityController.shared.end()
         LiveShareController.shared.end()
-        ControlRoomRecorder.shared.disarm()
 
         // Seal + upload the per-run diagnostics (events JSONL, pinned
         // voice audio). Fire-and-forget with retries inside.
