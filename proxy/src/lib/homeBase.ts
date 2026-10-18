@@ -8,6 +8,7 @@ import { fetchAmbient, type AmbientInput, type AmbientEnv } from "./ambient";
 import { fetchLocalIntel, formatLocalIntel, type AmapEnv } from "./amap";
 import { fetchBriefing, type BriefingEnv } from "./briefing";
 import { pushCourseBlock, NAMES_RULE } from "./course";
+import { daypart } from "./ambient";
 
 export const HOME_BASE_VOICE_ID = "Awx8TeMHHpDzbm42nIB6";
 
@@ -60,6 +61,7 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         : `KILOMETRE ${input.km} just crossed. Deliver the readout: 4 to 6 sentences, 25 to 40 seconds spoken. Include the split and the average, then heart rate, then ONE thing from history, surroundings, weather or the control room that is worth his attention right now, in an order that differs from the RECENT LINES. End on the number that matters for the next kilometre.`);
     lines.push("");
     lines.push("DATA (the only facts you may use):");
+    lines.push(localNow(c.ambient));
     lines.push(`- run clock: ${fmtClock(c.elapsedSeconds)}`);
     lines.push(`- distance: ${(c.distanceMeters / 1000).toFixed(2)} km, run type ${c.runType}`);
     if (input.lastSplitSecPerKm) lines.push(`- last kilometre: ${fmtPace(input.lastSplitSecPerKm)} per km`);
@@ -145,6 +147,7 @@ export async function generateAnswer(
     if (ctx) {
         lines.push("");
         lines.push("DATA (the only facts you may use):");
+        lines.push(localNow(ctx.ambient));
         lines.push(`- run clock: ${fmtClock(ctx.elapsedSeconds)}`);
         lines.push(`- distance: ${(ctx.distanceMeters / 1000).toFixed(2)} km, run type ${ctx.runType}`);
         if (ctx.avgPaceSecPerKm) lines.push(`- average pace so far: ${fmtPace(ctx.avgPaceSecPerKm)} per km`);
@@ -156,7 +159,7 @@ export async function generateAnswer(
         pushCourseBlock(lines, ctx.raceMode, ctx.distanceMeters);
     } else {
         lines.push("");
-        lines.push(`DATA: he is not running right now. Marathon day: 25 October 2026 (${daysUntil("2026-10-25")} days from today).`);
+        lines.push(`DATA: he is not running right now. ${localNow(undefined).slice(2)}. Marathon day: 25 October 2026 (${daysUntil("2026-10-25")} days from today).`);
     }
     if (recent.length) {
         lines.push("");
@@ -177,6 +180,7 @@ export async function generateFlash(ctx: ReadoutInput["runContext"], env: HomeBa
     lines.push(`FLASH, kind: ${kind}. One or two sentences, under 12 seconds spoken. Not a readout: no split recap. Make it the kind named, from DATA only. If DATA has nothing for that kind, answer exactly: NOTHING.`);
     lines.push("");
     lines.push("DATA:");
+    lines.push(localNow(ctx.ambient));
     lines.push(`- run clock ${fmtClock(ctx.elapsedSeconds)}, ${(ctx.distanceMeters / 1000).toFixed(2)} km${ctx.currentHR ? `, HR ${Math.round(ctx.currentHR)}` : ""}${ctx.avgPaceSecPerKm ? `, average ${fmtPace(ctx.avgPaceSecPerKm)} per km` : ""}`);
     const [ambient, intel, briefing] = await Promise.all([
         ctx.ambient?.lat != null ? fetchAmbient(ctx.ambient, env) : Promise.resolve(null),
@@ -207,8 +211,8 @@ export async function generateFlash(ctx: ReadoutInput["runContext"], env: HomeBa
 }
 
 /// His own past runs at the same kilometre: elapsed and heart rate, from the
-/// metrics rows the phone uploaded. Searched inside a window around tonight's
-/// clock so a 10 km query stays small.
+/// metrics rows the phone uploaded. Searched inside a window around this
+/// run's clock so a 10 km query stays small.
 async function historyAtKm(env: HomeBaseEnv, km: number, elapsed: number, excludeRunId?: string): Promise<string[]> {
     if (!env.DB) return [];
     try {
@@ -241,7 +245,7 @@ async function historyAtKm(env: HomeBaseEnv, km: number, elapsed: number, exclud
             if (best && Math.abs(best.d - target) < 150) {
                 const when = String(r.started_at).slice(0, 10);
                 const delta = Math.round(elapsed - best.t);
-                out.push(`${when}: reached ${km} km at ${fmtClock(best.t)}${best.hr ? `, HR ${Math.round(best.hr)}` : ""} (tonight is ${Math.abs(delta)} s ${delta <= 0 ? "faster" : "slower"})`);
+                out.push(`${when}: reached ${km} km at ${fmtClock(best.t)}${best.hr ? `, HR ${Math.round(best.hr)}` : ""} (this run is ${Math.abs(delta)} s ${delta <= 0 ? "faster" : "slower"})`);
             }
             if (out.length >= 3) break;
         }
@@ -251,6 +255,13 @@ async function historyAtKm(env: HomeBaseEnv, km: number, elapsed: number, exclud
     }
 }
 
+/// His wall clock, Beijing unless the phone sent its own. Without it the model
+/// guessed the time of day from words like "tonight" and called a 10 am run evening.
+function localNow(a: AmbientInput | undefined): string {
+    const clock = a?.localClock ?? new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Asia/Shanghai" }).format(new Date());
+    const day = a?.weekday ?? new Intl.DateTimeFormat("en-GB", { weekday: "long", timeZone: "Asia/Shanghai" }).format(new Date());
+    return `- his local time: ${day} ${clock}, ${daypart(clock)} (never call it any other part of the day)`;
+}
 function fmtClock(s: number): string {
     const t = Math.max(0, Math.round(s));
     const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;

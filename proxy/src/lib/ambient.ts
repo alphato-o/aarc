@@ -236,7 +236,7 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
             if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³${r.usAqi != null ? ` (US scale ${r.usAqi}, ${r.usCategory})` : ""}`);
             bits.push(`measured at the official ${r.aqiStation} monitor ${r.aqiStationKm} km away${r.aqiAsOf ? `, ${r.aqiAsOf} reading` : ""}`);
             // A clean night in Beijing is news; the model's smog reflex is not.
-            if ((r.aqi ?? 999) <= 100) bits.push("the air is CLEAN tonight: do not mention smog, haze or pollution in any line");
+            if ((r.aqi ?? 999) <= 100) bits.push("the air is CLEAN right now: do not mention smog, haze or pollution in any line");
         } else {
             if (r.aqi != null) bits.push(`US AQI ${r.aqi}${r.aqiCategory ? ` (${r.aqiCategory}${r.pollutant ? `, ${r.pollutant} dominant` : ""})` : ""}`);
             if (r.pm25 != null) bits.push(`PM2.5 ${r.pm25} µg/m³`);
@@ -277,7 +277,7 @@ export function pushAmbientBlock(lines: string[], input: AmbientInput | undefine
     lines.push("Roughly one line in three should carry ONE ambient detail, and it must come from the facts above ONLY — do not reach back for an ambient fact you remember from earlier lines (if you already made that joke, make a different kind of joke). Never more than one fact per line, never recite the list. Make the detail do comedic work (a knowing, specific jab), not decoration. A runner hearing his real conditions thinks the coach is watching him; that feeling is the product.");
 }
 
-function daypart(clock: string): string {
+export function daypart(clock: string): string {
     const h = parseInt(clock.slice(0, 2), 10);
     if (h >= 5 && h < 9) return "early morning";
     if (h >= 9 && h < 12) return "late morning";

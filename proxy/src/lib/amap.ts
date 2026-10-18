@@ -58,7 +58,7 @@ async function resolve(lat: number, lon: number, apiKey: string): Promise<LocalI
         const l = live?.lives?.[0];
         if (l) out.weather = `${sky(l.weather)} ${l.temperature}°C, humidity ${l.humidity}%, ${wind(l.winddirection)} wind ${String(l.windpower).replace("≤", "up to ")} (Amap, ${String(l.reporttime).slice(11, 16)})`;
         const cast = wx?.forecasts?.[0]?.casts?.[0];
-        if (cast) out.tonight = `tonight ${sky(cast.nightweather)}, low ${cast.nighttemp}°C, ${wind(cast.nightwind)} wind ${cast.nightpower}`;
+        if (cast) out.tonight = `later tonight ${sky(cast.nightweather)}, low ${cast.nighttemp}°C, ${wind(cast.nightwind)} wind ${cast.nightpower}`;
     }
     return out;
 }

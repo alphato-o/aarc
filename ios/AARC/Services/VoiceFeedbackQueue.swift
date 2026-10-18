@@ -210,7 +210,7 @@ final class VoiceFeedbackQueue {
         // them once playing (founder: "home base is the most relevant"), but
         // they enter POLITELY — only true run milestones may cut a line that's
         // already speaking.
-        if let cur = currentlyPlaying, item.priority == .milestone, item.source != "home", cur.priority < .milestone {
+        if let cur = currentlyPlaying, Self.preempts(item, over: cur) {
             // GRACEFUL YIELD: if the playing line has only a few seconds left
             // (real audio timing from RemoteTTS), let it FINISH and slot the
             // milestone in right behind it, instead of guillotining a nearly
@@ -285,6 +285,13 @@ final class VoiceFeedbackQueue {
         // idle through every music gap.
         prewarm(item)
         if currentlyPlaying == nil { kickNext() }
+    }
+
+    /// Only a run milestone may cut a playing line. Every Control Room line
+    /// queues: "home:camera:*" slipped past an exact "home" match and cut
+    /// Ricky's opening on three runs (18 Oct).
+    static func preempts(_ item: VoiceItem, over cur: VoiceItem) -> Bool {
+        item.priority == .milestone && !item.source.hasPrefix("home") && cur.priority < .milestone
     }
 
     /// True if a line whose source begins with `prefix` is currently playing
@@ -441,6 +448,23 @@ final class VoiceFeedbackQueue {
         // moment of enqueue (which would spoil the roast during the
         // fetch window).
 
+        // Last line of defence: no single line may hold the queue (and the duck)
+        // for more than 90 s, whatever wedged it (18 Oct: one stuck line
+        // silenced the whole run and read as a frozen app).
+        stallGuard?.cancel()
+        let itemId = item.id
+        stallGuard = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(90))
+            guard let self, !Task.isCancelled, self.currentlyPlaying?.id == itemId else { return }
+            RunEventLog.shared.record("voice.stalled", String(item.text.prefix(80)), data: ["source": item.source])
+            self.playbackTask?.cancel()
+            self.playbackTask = nil
+            Speaker.shared.stopActiveBackend()
+            self.currentlyPlaying = nil
+            self.lastVoiceEndedAt = .now
+            self.kickNext()
+        }
+
         playbackTask = Task { @MainActor [weak self] in
             // PREFETCH BEFORE DUCK: render the audio to cache with the music
             // still at full volume. The old path ducked the music the instant
@@ -498,6 +522,7 @@ final class VoiceFeedbackQueue {
     // MARK: - Session deactivate
 
     private var deactivateTask: Task<Void, Never>?
+    private var stallGuard: Task<Void, Never>?
 
     private func scheduleSessionDeactivate() {
         deactivateTask?.cancel()

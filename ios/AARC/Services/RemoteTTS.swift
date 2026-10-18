@@ -135,8 +135,85 @@ final class RemoteTTS: NSObject {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.engineConfigured = false
+                self?.engineChanged()
             }
+        }
+    }
+
+    // MARK: - Stalls
+
+    /// Bumped per scheduled segment so a stale completion cannot end the line
+    /// that replaced it.
+    private var playbackGeneration = 0
+    private var currentFile: AVAudioFile?
+    private var stallTask: Task<Void, Never>?
+
+    /// A route change (the earbuds leaving call mode after a talk-back) stops
+    /// the engine mid-line and the completion never fires: the queue then
+    /// waited forever with the music ducked (18 Oct, run 71341541). Pick the
+    /// line up where it was cut instead.
+    private func engineChanged() {
+        engineConfigured = false
+        guard playbackContinuation != nil, let file = currentFile,
+              let started = playbackStartedAt, let dur = playbackDuration else { return }
+        let played = Date().timeIntervalSince(started)
+        RunEventLog.shared.record("tts.routeChange", String(format: "%.1fs of %.1fs played", played, dur))
+        // A talk-back just opened the mic: let the line go rather than talk over him.
+        guard dur - played > 0.4, !VoiceFeedbackQueue.shared.held else { finishPlayback(); return }
+        do {
+            try ensureEngineStarted()
+            let rate = file.processingFormat.sampleRate
+            let from = AVAudioFramePosition(max(0, played - 0.3) * rate)
+            guard from < file.length else { finishPlayback(); return }
+            playbackGeneration += 1
+            playerNode.stop()
+            schedule(file, from: from)
+            playerNode.play()
+            playbackStartedAt = Date().addingTimeInterval(-Double(from) / rate)
+            armStallGuard()
+        } catch {
+            RunEventLog.shared.record("tts.stalled", "engine restart failed: \(error.localizedDescription)")
+            finishPlayback()
+        }
+    }
+
+    private func schedule(_ file: AVAudioFile, from: AVAudioFramePosition) {
+        let gen = playbackGeneration
+        playerNode.scheduleSegment(file, startingFrame: from,
+                                   frameCount: AVAudioFrameCount(file.length - from),
+                                   at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, gen == self.playbackGeneration else { return }
+                self.finishPlayback()
+            }
+        }
+    }
+
+    /// Backstop for any silent stop the route handler misses: a line that has
+    /// overrun its own length by 3 s is over.
+    private func armStallGuard() {
+        stallTask?.cancel()
+        let gen = playbackGeneration
+        let wait = (playbackRemaining ?? 30) + 3
+        stallTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(wait))
+            guard let self, !Task.isCancelled, gen == self.playbackGeneration,
+                  self.playbackContinuation != nil else { return }
+            RunEventLog.shared.record("tts.stalled", "line overran by 3 s; released the queue",
+                                      data: ["engine": String(self.engine.isRunning)])
+            if self.playerNode.isPlaying { self.playerNode.stop() }
+            self.fallbackPlayer?.stop()
+            self.finishPlayback()
+        }
+    }
+
+    private func finishPlayback() {
+        stallTask?.cancel(); stallTask = nil
+        currentFile = nil
+        clearPlaybackTiming()
+        if let cont = playbackContinuation {
+            playbackContinuation = nil
+            cont.resume()
         }
     }
 
@@ -254,24 +331,14 @@ final class RemoteTTS: NSObject {
 
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             self.playbackContinuation = cont
-            playerNode.scheduleFile(
-                file,
-                at: nil,
-                completionCallbackType: .dataPlayedBack
-            ) { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    self.clearPlaybackTiming()
-                    if let cont = self.playbackContinuation {
-                        self.playbackContinuation = nil
-                        cont.resume()
-                    }
-                }
-            }
+            self.playbackGeneration += 1
+            self.currentFile = file
+            schedule(file, from: 0)
             playerNode.play()
             // Audio is producing samples within ~10ms of .play() — for
             // user perception this is the "start of speaking" moment.
             self.beginPlaybackTiming(duration: dur)
+            self.armStallGuard()
             onStart?()
         }
     }
@@ -306,10 +373,12 @@ final class RemoteTTS: NSObject {
         p.prepareToPlay()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             self.playbackContinuation = cont
+            self.playbackGeneration += 1
             p.play()
             // Same reasoning as the engine path — audio starts within
             // a frame or two of .play().
             self.beginPlaybackTiming(duration: p.duration)
+            self.armStallGuard()
             onStart?()
         }
     }
@@ -325,11 +394,8 @@ final class RemoteTTS: NSObject {
         if playerNode.isPlaying { playerNode.stop() }
         fallbackPlayer?.stop()
         fallbackPlayer = nil
-        clearPlaybackTiming()
-        if let cont = playbackContinuation {
-            playbackContinuation = nil
-            cont.resume()
-        }
+        playbackGeneration += 1
+        finishPlayback()
     }
 
     // MARK: - Prefetch
@@ -601,12 +667,7 @@ final class RemoteTTS: NSObject {
 
 extension RemoteTTS: @preconcurrency AVAudioPlayerDelegate {
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in
-            if let cont = self.playbackContinuation {
-                self.playbackContinuation = nil
-                cont.resume()
-            }
-        }
+        Task { @MainActor in self.finishPlayback() }
     }
 }
 

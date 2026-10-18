@@ -255,14 +255,24 @@ final class ControlRoomRecorder: NSObject {
         try? await Task.sleep(for: .milliseconds(450))
         isRecording = false
 
-        let session = AVAudioSession.sharedInstance()
-        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+        // Off the main thread: a deactivate during a Bluetooth route change can
+        // block for seconds, and on the main actor that froze the app (18 Oct).
+        let deactivateError = await Task.detached { () -> NSError? in
+            do { try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation); return nil }
+            catch { return error as NSError }
+        }.value
+        let deactivate = deactivateError.map { Self.code($0) } ?? "ok"
         AudioPlaybackManager.shared.reassertAfterRecording()
+        // The earbuds take a moment to leave call mode; a line started before
+        // that lands on the dying route and stalls (the 18 Oct silent replies).
+        let settled = await Self.waitForMediaRoute(timeout: 2.5)
         if keepaliveWasRunning {
             BackgroundAudioKeepalive.shared.stop()
             BackgroundAudioKeepalive.shared.start()
         }
         VoiceFeedbackQueue.shared.held = false
+        let session = AVAudioSession.sharedInstance()
+        ControlRoomChannel.shared.diag("talkback handback: deactivate=\(deactivate) settled=\(settled) cat=\(session.category.rawValue) out=\(session.currentRoute.outputs.first?.portType.rawValue ?? "none")")
 
         let url = Self.fileURL(clientId)
         guard send, duration >= 1, spoke || !requireSpeech else {
@@ -286,6 +296,20 @@ final class ControlRoomRecorder: NSObject {
             elapsed: runElapsed, duration: duration, startedAt: startedAt ?? .now,
             streamedText: streamedText)
         await endActivity(phase: outcome == .queued ? "queued" : "sent")
+    }
+
+    /// Polls until no output is the Bluetooth call (HFP) route.
+    private static func waitForMediaRoute(timeout: TimeInterval) async -> Bool {
+        let end = Date.now.addingTimeInterval(timeout)
+        while Date.now < end {
+            let outs = AVAudioSession.sharedInstance().currentRoute.outputs
+            if !outs.contains(where: { $0.portType == .bluetoothHFP }) {
+                try? await Task.sleep(for: .milliseconds(300))
+                return true
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        return false
     }
 
     private var lastPartialSent = ""

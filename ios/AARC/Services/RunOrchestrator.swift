@@ -530,26 +530,45 @@ final class RunOrchestrator {
         return makeStubScript(openerText: openerText)
     }
 
+    /// The opener never gates the start (founder, 18 Oct: a dozen starts died
+    /// on a bad network). Live line if it lands in time, else one generated
+    /// earlier for this plan, else a fixed line. Ricky's later lines catch up.
+    private static let openerBudget: TimeInterval = 5
+
     private func resolveOpener(
         plan: RunPlan,
         runType: RunType,
         personalityId: String
     ) async throws -> String {
         let key = makeKey(plan: plan, personalityId: personalityId)
+        let deadline = Date.now.addingTimeInterval(Self.openerBudget)
         if preGenKey == key, let task = preGenOpenerTasks[runType] {
-            do {
-                let text = try await task.value
-                preGenOpenerTasks[runType] = nil
-                return text
-            } catch {
-                preGenOpenerTasks[runType] = nil
-            }
+            preGenOpenerTasks[runType] = nil
+            if let text = await Self.value(of: task, within: deadline.timeIntervalSinceNow) { return text }
         }
-        return try await generateOpener(
-            plan: plan,
-            runType: runType,
-            personalityId: personalityId
-        )
+        let fresh = Task { @MainActor [weak self] () throws -> String in
+            guard let self else { throw CancellationError() }
+            return try await self.generateOpener(plan: plan, runType: runType, personalityId: personalityId)
+        }
+        if let text = await Self.value(of: fresh, within: max(1.5, deadline.timeIntervalSinceNow)) { return text }
+        if let stashed = OpenerStash.take(key: key, runType: runType) {
+            RunEventLog.shared.record("opener.offline", "stashed opener (network slow or down)")
+            return stashed
+        }
+        RunEventLog.shared.record("opener.offline", "fixed opener (network slow or down, nothing stashed)")
+        return OpenerStash.fixedLine(plan: plan)
+    }
+
+    /// The task's value if it lands within `seconds`, else nil at the deadline.
+    /// Not a task group: a group waits for every child, and awaiting another
+    /// task's value ignores cancellation, so a hung fetch held the start.
+    static func value(of task: Task<String, Error>, within seconds: TimeInterval) async -> String? {
+        guard seconds > 0 else { return nil }
+        return await withCheckedContinuation { (cont: CheckedContinuation<String?, Never>) in
+            let once = ResumeOnce(cont)
+            Task { once.resume(try? await task.value) }
+            Task { try? await Task.sleep(for: .seconds(seconds)); once.resume(nil) }
+        }
     }
 
     private func generateOpener(
@@ -566,6 +585,10 @@ final class RunOrchestrator {
             personalNotes: bullets.isEmpty ? nil : bullets,
             likedLineExamples: liked.isEmpty ? nil : liked
         )
+        // Every opener that arrives is kept, audio too, so a later start on a
+        // dead network still opens in Ricky's voice.
+        OpenerStash.put(result.text, key: makeKey(plan: plan, personalityId: personalityId), runType: runType)
+        Task { await RemoteTTS.shared.prefetch(result.text) }
         return result.text
     }
 
@@ -787,5 +810,15 @@ final class RunOrchestrator {
                 await RemoteTTS.shared.prefetch(text)
             }
         }
+    }
+}
+
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<String?, Never>?
+    init(_ cont: CheckedContinuation<String?, Never>) { self.cont = cont }
+    func resume(_ value: String?) {
+        lock.lock(); let c = cont; cont = nil; lock.unlock()
+        c?.resume(returning: value)
     }
 }
