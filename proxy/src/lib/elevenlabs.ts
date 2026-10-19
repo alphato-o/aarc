@@ -42,7 +42,9 @@ export interface ElevenLabsParams {
 
 export async function callElevenLabs(params: ElevenLabsParams): Promise<ArrayBuffer> {
     const base = (params.baseUrl || DEFAULT_ELEVENLABS_BASE).replace(/\/+$/, "");
-    const url = `${base}/text-to-speech/${encodeURIComponent(params.voiceId)}`;
+    // 64 kbps mono: speech sounds the same, the file is half the 128 kbps
+    // default, and on 19 Oct the phone's link moved about 10 KB/s.
+    const url = `${base}/text-to-speech/${encodeURIComponent(params.voiceId)}?output_format=mp3_44100_64`;
     const body = {
         text: params.text,
         model_id: params.modelId ?? "eleven_v3",

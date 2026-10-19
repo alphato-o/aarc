@@ -204,7 +204,19 @@ final class RemoteTTS: NSObject {
             if self.playerNode.isPlaying { self.playerNode.stop() }
             self.fallbackPlayer?.stop()
             self.finishPlayback()
+            let state = AudioPlaybackManager.shared.heal()
+            self.resetEngine()
+            RunEventLog.shared.record("audio.heal", state)
         }
+    }
+
+    /// Tear the engine down so the next line rebuilds it against the
+    /// session as it is now.
+    func resetEngine() {
+        if playerNode.isPlaying { playerNode.stop() }
+        engine.stop()
+        engine.reset()
+        engineConfigured = false
     }
 
     private func finishPlayback() {
@@ -467,7 +479,10 @@ final class RemoteTTS: NSObject {
     }
 
     /// How long a line holding the queue's slot may wait for its audio.
-    static let slotSynthBudget: TimeInterval = 4
+    /// Online, the runner would rather wait for the real voice than hear
+    /// the phone's (founder, 19 Oct). The queue already waited up to 25 s
+    /// before ducking; this is the extra allowance once the slot is held.
+    static let slotSynthBudget: TimeInterval = 5
 
     /// `prefetch` with a deadline: true once cached, false if the deadline
     /// passed first (the synth keeps going and lands in the cache).

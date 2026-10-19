@@ -349,6 +349,10 @@ final class VoiceFeedbackQueue {
 
     /// Reset diagnostic counters at the start of a run.
     func resetStats() {
+        // The last run's "camera stopped" line must not hold the new run's
+        // opener (19 Oct: it stalled 27 s and pushed Ricky to 1:39).
+        pending.removeAll { $0.source == "home:camera:end" }
+        if currentlyPlaying?.source == "home:camera:end" { Speaker.shared.stopActiveBackend() }
         dispatched = 0
         droppedStale = 0
         droppedDuplicate = 0
@@ -475,7 +479,9 @@ final class VoiceFeedbackQueue {
             // Bounded: one line whose audio cannot be fetched must not hold the
             // slot (and every cached line behind it) on a bad network.
             if item.voiceId != nil || Speaker.shared.preferRemoteVoice {
-                await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId, within: 10)
+                // 25 s: ElevenLabs took 38 s for one long line on 19 Oct;
+                // the phone voice is the last resort, not the default.
+                await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId, within: 25)
             }
             if Task.isCancelled { return }
 

@@ -110,12 +110,14 @@ final class AudioPlaybackManager {
         if sustainedActive { activate() }
     }
 
-    func endSustained() {
+    /// `release: false` leaves the session to the queue's idle release, so
+    /// a line still playing at the end of a run is not cut off.
+    func endSustained(release: Bool = true) {
         guard sustainedActive else { return }
         os_log("[audio] endSustained", log: OSLog(subsystem: "club.aarun.AARC", category: "Audio"), type: .info)
         sustainedActive = false
         applyCategory(duck: false)   // baseline is non-ducking
-        deactivate()
+        if release { deactivate() }
     }
 
     /// Duck the music NOW — called the instant a voice line is about to be
@@ -136,14 +138,35 @@ final class AudioPlaybackManager {
     /// Activates the audio session so the next utterance ducks other
     /// audio. Cheap if already active.
     func activate() {
-        guard !isSessionActive else { return }
+        // Always ask: the flag goes stale when iOS takes the session away
+        // without telling us, and a stale `true` kept every voice silent for
+        // the last 14 minutes of the 19 Oct 10K.
         do {
             try session.setActive(true, options: [])
             isSessionActive = true
         } catch {
-            // Activation can fail if a phone call is up. We retry on the
-            // next speak; nothing else to do here.
+            isSessionActive = false
+            logFailure("audio.activate.failed", error)
         }
+    }
+
+    private var lastFailureLog = Date.distantPast
+    private func logFailure(_ type: String, _ error: Error) {
+        guard Date().timeIntervalSince(lastFailureLog) > 20 else { return }
+        lastFailureLog = Date()
+        RunEventLog.shared.record(type, (error as NSError).description.prefix(160).description)
+    }
+
+    /// A line stalled with the engine silent: rebuild the session from
+    /// scratch and say what the system reports, so the next line can play.
+    func heal() -> String {
+        appliedDuck = nil
+        applyCategory(duck: false)
+        var result = "ok"
+        do { try session.setActive(true, options: []); isSessionActive = true }
+        catch { isSessionActive = false; result = (error as NSError).description.prefix(120).description }
+        let outs = session.currentRoute.outputs.map(\.portType.rawValue).joined(separator: ",")
+        return "activate=\(result) cat=\(session.category.rawValue) out=\(outs) other=\(session.isOtherAudioPlaying)"
     }
 
     /// Deactivates the session and signals other apps to restore their
@@ -175,8 +198,22 @@ final class AudioPlaybackManager {
             // Pull the Sendable bits out of the notification before the
             // actor hop — Notification itself isn't Sendable.
             let raw = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            let reason = notification.userInfo?[AVAudioSessionInterruptionReasonKey] as? UInt
             MainActor.assumeIsolated {
+                RunEventLog.shared.record("audio.interruption", raw == 1 ? "began" : "ended",
+                                          data: ["reason": reason.map(String.init) ?? ""])
                 self?.handleInterruption(rawType: raw)
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                RunEventLog.shared.record("audio.reset", "media services were reset")
+                self?.appliedDuck = nil
+                self?.applyCategory(duck: false)
+                if LiveMetricsConsumer.shared.isRunActive { self?.activate() }
+                RemoteTTS.shared.resetEngine()
             }
         }
     }
@@ -193,9 +230,13 @@ final class AudioPlaybackManager {
             isSessionActive = false
 
         case .ended:
-            // Don't auto-resume in V1. Next user-triggered utterance
-            // will reactivate the session cleanly.
-            break
+            // Mid-run, take the session straight back: in the background the
+            // next line cannot always reclaim it on its own.
+            guard LiveMetricsConsumer.shared.isRunActive else { break }
+            appliedDuck = nil
+            applyCategory(duck: false)
+            activate()
+            RemoteTTS.shared.resetEngine()
 
         @unknown default:
             break

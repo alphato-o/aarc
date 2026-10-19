@@ -301,6 +301,9 @@ final class LiveMetricsConsumer {
 
         // The soundtrack log for the race video.
         MusicTimeline.shared.start(runId: runId, startedAt: startedAt)
+        // Hold the audio session for the whole run: in the background iOS may
+        // refuse to hand it back after an idle release (19 Oct, 14 silent minutes).
+        AudioPlaybackManager.shared.beginSustained()
 
         // In-run roast library: one batched call, cached for quiet-stretch
         // dispatch (intra-batch variety + no per-line LLM round-trip).
@@ -557,6 +560,7 @@ final class LiveMetricsConsumer {
         VenueConfirm.shared.reset()
         RoastPool.shared.reset()
         MusicTimeline.shared.end()
+        if !PhoneWorkoutSession.shared.isActive { AudioPlaybackManager.shared.endSustained(release: false) }
         LiveActivityController.shared.end()
         LiveShareController.shared.end()
 

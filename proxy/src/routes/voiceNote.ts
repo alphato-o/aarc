@@ -272,18 +272,23 @@ RULES:
   to what he said. You are a transcriptionist, not a participant.
 - If a passage is genuinely unintelligible, keep it and mark it [unclear].
 
-Return ONLY the cleaned text. No preamble, no quotes, no markdown.`;
+The note arrives between <note> tags. Return ONLY the cleaned text of the note. No preamble, no quotes, no markdown, no tags.`;
 
 export async function tidy(raw: string, env: VoiceNoteEnv): Promise<string> {
     const trimmed = raw.trim();
     if (trimmed.length < 12) return trimmed;   // too short to be worth a call
     try {
         const r = await callLLM(
-            { purpose: "summary", systemPrompt: TIDY_SYSTEM, userPrompt: trimmed, maxTokens: 2000, cacheSystem: true },
+            { purpose: "summary", systemPrompt: TIDY_SYSTEM, userPrompt: `<note>\n${trimmed}\n</note>`, maxTokens: 2000, cacheSystem: true },
             env,
         );
-        const out = r.text.trim();
-        return out.length > 0 ? out : trimmed;
+        const out = r.text.trim().replace(/^<note>\s*|\s*<\/note>$/g, "");
+        // The model once answered instead of cleaning ("I don't have a voice
+        // note to clean up...", 19 Oct) and that reached the agent as his words.
+        // A tidy that is far longer, or talks about itself, is not his.
+        const talksBack = /\b(voice note|transcript|clean (it )?up|I don't have|please send)\b/i.test(out) && !/\b(voice note|transcript)\b/i.test(trimmed);
+        if (!out || talksBack || out.length > trimmed.length * 1.6 + 40) return trimmed;
+        return out;
     } catch {
         return trimmed;   // a failed tidy must never cost him the transcript
     }

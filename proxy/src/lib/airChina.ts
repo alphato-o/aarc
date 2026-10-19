@@ -55,6 +55,14 @@ export async function fetchChinaStationAir(lat: number, lon: number, env?: AirCn
     if (hit && Date.now() - hit.at < (hit.data ? TTL : NULL_TTL)) return hit.data;
     let data: StationAir | null = null;
     try {
+        // The US gateway has no D1, so it never saw the pushed stations and
+        // read the forecast model instead (19 Oct: "AQI 166" against a measured 19).
+        // Ask the Worker, which holds them.
+        if (!env?.DB) {
+            data = await fromWorker(lat, lon);
+            memo.set(key, { at: Date.now(), data });
+            return data;
+        }
         const feeds = (await loadPushed(env)) ?? (await loadDirect(lat, lon));
         data = feeds ? resolve(lat, lon, feeds) : null;
     } catch {
@@ -62,6 +70,13 @@ export async function fetchChinaStationAir(lat: number, lon: number, env?: AirCn
     }
     memo.set(key, { at: Date.now(), data });
     return data;
+}
+
+async function fromWorker(lat: number, lon: number): Promise<StationAir | null> {
+    const r = await fetch(`https://api.aarun.club/air-cn?lat=${lat}&lon=${lon}`, { signal: AbortSignal.timeout(5000) });
+    if (!r.ok) return null;
+    const body = (await r.json()) as { air?: StationAir | null };
+    return body.air ?? null;
 }
 
 /// Store what the in-China pusher sent. `stations` is keyed by the CNEMC city
