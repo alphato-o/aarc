@@ -4,6 +4,7 @@
     scripts/broll-render.py <captureDir> [--out file.mp4] [--start S --end S]
                             [--fps 30] [--size 1920x1080] [--rate 10]
                             [--encoder auto|videotoolbox|x264] [--labels]
+                            [--music DIR | --no-music]
 
 Needs Python 3 with Pillow (pip install pillow) and ffmpeg/ffprobe on PATH
 (or in /opt/homebrew/bin).
@@ -18,9 +19,17 @@ Frame layout: the left 60% is the agent's Claude Code terminal during the run
 (the capture's `terminal` lane: prompts, replies typed out, tool calls with
 their commands, results, harness notifications, a thinking spinner), scrolling
 as it grew. The right 40% is the AARC view: race clock and Beijing time,
-distance, pace and HR, the map with the trail and a moving dot, the voice line
-being spoken, and the latest Control Room thread card. The audio track is every
-voice line and talk-back clip mixed at the moment it played.
+distance, pace and HR, the map (no text on the tiles) with the trail and a
+moving dot, and under it the AARC message feed: coach lines, his talk-backs as
+text, Control Room messages and race events, the one being spoken highlighted
+in full.
+
+Audio: every voice line at the moment it played. His talk-backs are left out
+(the camera has them). With a music folder (--music, default <captureDir>/music)
+a bed fills the gaps: tracks in file-name order, changing where his real music
+changed (`music.track` events), fading on pauses, ducked 15 dB under every voice
+line. Title, artist and licence come from CREDITS.txt in that folder and the
+attribution is printed at the end.
 
 Frames are drawn at an internal rate (--rate, default 10 per second) and
 piped raw to ffmpeg, which repeats them up to --fps. Map tiles come from the
@@ -89,6 +98,7 @@ def tool(name):
 
 
 FFMPEG = tool("ffmpeg")
+FFPROBE = tool("ffprobe")
 
 
 # --- text ------------------------------------------------------------------
@@ -455,8 +465,9 @@ def plain_keep_lines(text):
 
 
 class Renderer:
-    def __init__(self, capture, manifest, recs, W, H, labels, rate):
+    def __init__(self, capture, manifest, recs, W, H, labels, rate, music=()):
         self.capture, self.W, self.H, self.rate = capture, W, H, rate
+        self.music = list(music)
         k = self.k = H / 1080
         self.start_ms = ms_of(manifest["startedAt"])
         self.gate_ms = ms_of(manifest["gateAt"]) if manifest.get("gateAt") else None
@@ -471,10 +482,8 @@ class Renderer:
         self.map_w = self.col_w
         self.map_h = max(round(H * 0.5), round(540 * k))
         self.map_y = self.stats_h
-        self.sub_y = self.map_y + self.map_h
-        self.sub_h = round(176 * k)
-        self.card_y = self.sub_y + self.sub_h
-        self.card_h = H - self.card_y
+        self.feed_y = self.map_y + self.map_h
+        self.feed_h = H - self.feed_y
 
         self.f_label = Face(round(14 * k), "Semibold")
         self.f_clock = Face(round(76 * k), "Bold")
@@ -483,9 +492,11 @@ class Renderer:
         self.f_unit = Face(round(18 * k), "Medium")
         self.f_head = Face(round(14 * k), "Bold")
         self.f_time = Face(round(13 * k), "Regular", mono=True)
-        self.f_card = Face(round(18 * k), "Regular")
-        self.f_sub = Face(round(27 * k), "Medium")
-        self.f_sub_lab = Face(round(15 * k), "Bold")
+        self.f_card = Face(round(19 * k), "Regular")
+        try:
+            self.f_note = ImageFont.truetype(str(FONT_DIR / "Apple Symbols.ttf"), round(22 * k))
+        except OSError:
+            self.f_note = ImageFont.load_default()
         self.f_chip = Face(round(16 * k), "Semibold")
         self.f_chip_small = Face(round(14 * k), "Regular")
         self.f_km = Face(round(13 * k), "Bold")
@@ -495,14 +506,10 @@ class Renderer:
         self.dist = Series(self.metrics, "distanceM")
         self.pace = Series(self.metrics, "paceS")
         self.hr = Series(self.metrics + [r for r in recs if r["lane"] == "pos"], "hr")
-        places = [r for r in recs if r["lane"] == "event" and r.get("type") == "place.context" and r.get("detail")]
-        self.place_ms = [r["ms"] for r in places]
-        self.place_v = [r["detail"] for r in places]
 
         self._cache = {}
         self._setup_map(recs, labels)
-        self._setup_cards(recs)
-        self._setup_subs(recs)
+        self._setup_feed(recs)
         self._setup_terminal(recs)
         self._setup_chrome()
 
@@ -882,15 +889,18 @@ class Renderer:
         self._cache[key] = img
         return img
 
-    # control room cards
-    def _setup_cards(self, recs):
+    # AARC message feed, under the map
+    def _setup_feed(self, recs):
+        k = self.k
         talk_texts = {plain(r["text"])[:60] for r in recs if r["lane"] == "talkback" and r.get("text")}
-        items = []
+        items, screen_by_text = [], {}
         for r in recs:
-            if r["lane"] == "talkback" and r.get("text"):
-                items.append({"ms": r["ms"], "label": RUNNER[0] + "  \u00b7  TALK-BACK", "color": RUNNER[1],
-                              "text": plain(r["text"])})
-            elif r["lane"] == "screen" and r.get("text"):
+            lane = r["lane"]
+            if lane == "talkback" and r.get("text"):
+                dur = r.get("durationS") or min(30.0, max(3.0, len(r["text"]) / 15))
+                items.append({"ms": r["ms"], "end": r["ms"] + dur * 1000, "label": RUNNER[0] + "  \u00b7  TALK-BACK",
+                              "color": RUNNER[1], "text": plain(r["text"])})
+            elif lane == "screen" and r.get("text"):
                 txt = plain(r["text"])
                 if r.get("role") == "user":
                     if txt[:60] in talk_texts:
@@ -898,104 +908,123 @@ class Renderer:
                     label, color = RUNNER
                 else:
                     label, color = CONTROL
-                items.append({"ms": r["ms"], "label": "CONTROL ROOM THREAD  \u00b7  " + label if label != CONTROL[0]
-                              else "CONTROL ROOM", "color": color, "text": txt})
-        inner = self.col_w - 2 * self.pad - round(26 * self.k)
+                items.append({"ms": r["ms"], "end": r["ms"], "label": label, "color": color, "text": txt})
+                screen_by_text[clean_speech(txt)[:60]] = len(items) - 1
+            elif lane == "voice" and r.get("text"):
+                txt = clean_speech(r["text"])
+                if not txt:
+                    continue
+                dur = r.get("durationS") or min(20.0, max(2.0, len(txt) / 15))
+                prior = screen_by_text.get(txt[:60])
+                if prior is not None and items[prior]["ms"] <= r["ms"]:
+                    # Control Room text spoken aloud: light up its card instead of repeating it.
+                    items[prior].setdefault("plays", []).append((r["ms"], r["ms"] + dur * 1000))
+                    continue
+                label, color = SPEAKERS.get(r.get("speaker"), (str(r.get("speaker", "VOICE")).upper(), MUTED))
+                items.append({"ms": r["ms"], "end": r["ms"] + dur * 1000, "label": label, "color": color,
+                              "text": txt, "voice": True})
+            elif lane == "event" and r.get("detail"):
+                typ = str(r.get("type", ""))
+                if typ.startswith("race."):
+                    items.append({"ms": r["ms"], "end": r["ms"], "label": RACE[0], "color": RACE[1],
+                                  "text": plain(r["detail"]).capitalize()})
+                elif typ in ("camera.say", "camera.link", "camera.gate"):
+                    items.append({"ms": r["ms"], "end": r["ms"], "label": "CAMERA", "color": (150, 160, 255),
+                                  "text": plain(r["detail"]).capitalize()})
+        for n, km_ms in enumerate(self.km_ms):
+            items.append({"ms": km_ms, "end": km_ms, "label": RACE[0], "color": RACE[1],
+                          "text": f"Kilometre {n + 1}"})
         for it in items:
-            it["lines"] = self.f_card.wrap(it["text"], inner, max_lines=2)
-            it["clock"] = datetime.fromtimestamp(it["ms"] / 1000, BEIJING).strftime("%H:%M:%S")
-        items.sort(key=lambda it: it["ms"])
-        self.items = items
-        self.item_ms = [it["ms"] for it in items]
+            plays = it.get("plays") or []
+            if it["end"] > it["ms"]:
+                plays.append((it["ms"], it["end"]))
+            it["plays"] = sorted(plays)
+        self.items = sorted(items, key=lambda it: it["ms"])
+        self.item_ms = [it["ms"] for it in self.items]
+        self.plays = sorted((a, b, i) for i, it in enumerate(self.items) for a, b in it["plays"])
+        self.play_ms = [p[0] for p in self.plays]
 
-    def _card(self, ms, playing):
+        inner = self.col_w - 2 * self.pad - round(44 * k)
+        self.card_lh = round(26 * k)
+        self.card_head = round(46 * k)
+        self.card_pad = round(16 * k)
+        self.max_hot = max(1, (self.feed_h - self.card_head - self.card_pad - round(24 * k)) // self.card_lh)
+        for it in self.items:
+            full = self.f_card.wrap(it["text"], inner)
+            it["full"] = full
+            it["short"] = self.f_card.wrap(it["text"], inner, max_lines=3)
+            it["clock"] = datetime.fromtimestamp(it["ms"] / 1000, BEIJING).strftime("%H:%M:%S")
+
+    def _playing(self, ms):
+        i = bisect.bisect_right(self.play_ms, ms) - 1
+        while i >= 0 and self.plays[i][0] > ms - 120000:
+            a, b, idx = self.plays[i]
+            if b > ms:
+                return idx, a, b
+            i -= 1
+        return None, None, None
+
+    def _card_h(self, nlines):
+        return self.card_head + nlines * self.card_lh + self.card_pad - round(8 * self.k)
+
+    def _feed(self, ms):
         last = bisect.bisect_right(self.item_ms, ms) - 1
-        # Skip a card that only repeats the line being spoken in the subtitle box.
-        while last >= 0 and playing and self.items[last]["text"][:50] == playing[:50]:
-            last -= 1
-        key = ("card", last)
+        hot, a, b = self._playing(ms)
+        k, w, h = self.k, self.col_w, self.feed_h
+        gap = round(10 * k)
+        avail = h - round(12 * k)
+        squeeze, hot_max, page = False, self.max_hot, 0
+        if hot is not None and hot <= last:
+            # The card being spoken must show whole: newer cards shrink to one line if needed.
+            newer = range(hot + 1, last + 1)
+            used = sum(self._card_h(len(self.items[j]["short"])) + gap for j in newer)
+            if used + self._card_h(min(len(self.items[hot]["full"]), self.max_hot)) > avail:
+                squeeze = True
+                used = sum(self._card_h(1) + gap for j in newer)
+            hot_max = max(1, min(self.max_hot, (avail - used - self._card_h(0)) // self.card_lh))
+            full = self.items[hot]["full"]
+            pages = max(1, math.ceil(len(full) / hot_max))
+            if pages > 1:
+                page = min(pages - 1, int((ms - a) / max(1, b - a) * pages))
+        key = ("feed", last, hot, page, squeeze, hot_max)
         if key in self._cache:
             return self._cache[key]
-        k, w, h = self.k, self.col_w, self.card_h
         img = Image.new("RGB", (w, h), PANEL)
         d = ImageDraw.Draw(img)
-        if last >= 0:
-            it = self.items[last]
-            x0, x1 = self.pad, w - self.pad
-            top, bot = round(6 * k), h - round(14 * k)
-            d.rounded_rectangle([x0, top, x1, bot], radius=round(10 * k), fill=CARD)
-            d.rounded_rectangle([x0, top, x0 + round(5 * k), bot], radius=round(3 * k), fill=it["color"])
-            tx = x0 + round(20 * k)
-            self.f_head.draw(d, tx, top + round(26 * k), it["label"], it["color"])
-            self.f_time.draw(d, x1 - round(14 * k) - self.f_time.length(it["clock"]), top + round(26 * k), it["clock"], DIM)
-            by = top + round(54 * k)
-            for line in it["lines"]:
-                self.f_card.draw(d, tx, by, line, TEXT)
-                by += round(25 * k)
-        self._cache[key] = img
-        return img
-
-    # subtitles
-    def _setup_subs(self, recs):
-        subs = []
-        for r in recs:
-            if r["lane"] == "voice" and r.get("text"):
-                txt = clean_speech(r["text"])
-                label, color = SPEAKERS.get(r.get("speaker"), (str(r.get("speaker", "VOICE")).upper(), MUTED))
-            elif r["lane"] == "talkback" and r.get("text"):
-                txt = plain(r["text"])
-                label, color = RUNNER[0] + "  \u00b7  TALK-BACK", RUNNER[1]
+        x0, x1 = self.pad, w - self.pad
+        y = h - round(12 * k)
+        i = last
+        while i >= 0 and y > 0:
+            it = self.items[i]
+            is_hot = i == hot
+            if is_hot:
+                lines = it["full"][page * hot_max:(page + 1) * hot_max]
+            elif squeeze and hot is not None and i > hot:
+                lines = [self.f_card.fit(" ".join(it["short"]), self.col_w - 2 * self.pad - round(44 * k))]
             else:
-                continue
-            if not txt:
-                continue
-            dur = r.get("durationS") or min(20.0, max(2.0, len(txt) / 15))
-            subs.append({"ms": r["ms"], "end": r["ms"] + dur * 1000, "label": label, "color": color, "text": txt})
-        self.subs = subs
-        width = self.col_w - 2 * self.pad - round(22 * self.k)
-        for s in subs:
-            lines = self.f_sub.wrap(s["text"], width)
-            s["pages"] = [lines[i:i + 3] for i in range(0, len(lines), 3)] or [[""]]
-            chars = [sum(len(l) for l in p) for p in s["pages"]]
-            total = sum(chars) or 1
-            acc, s["cuts"] = 0, []
-            for c in chars:
-                acc += c
-                s["cuts"].append(acc / total)
-        self.sub_ms = [s["ms"] for s in subs]
-
-    def _active_sub(self, ms):
-        i = bisect.bisect_right(self.sub_ms, ms) - 1
-        while i >= 0 and self.subs[i]["ms"] > ms - 60000:
-            if self.subs[i]["end"] > ms:
-                return i
+                lines = it["short"]
+            ch = self._card_h(len(lines))
+            top = y - ch
+            d.rounded_rectangle([x0, top, x1, y], radius=round(10 * k), fill=CARD_HOT if is_hot else CARD)
+            d.rounded_rectangle([x0, top, x0 + round(5 * k), y], radius=round(3 * k), fill=it["color"])
+            tx = x0 + round(20 * k)
+            hx = self.f_head.draw(d, tx, top + round(28 * k), it["label"], it["color"])
+            if is_hot:
+                cx, cy = hx + round(12 * k), top + round(23 * k)
+                s = round(6 * k)
+                d.polygon([(cx, cy - s), (cx, cy + s), (cx + s * 1.6, cy)], fill=it["color"])
+            self.f_time.draw(d, x1 - round(14 * k) - self.f_time.length(it["clock"]), top + round(28 * k), it["clock"], DIM)
+            by = top + self.card_head + round(8 * k)
+            body = TEXT if (is_hot or not it.get("voice")) else (200, 206, 218)
+            for line in lines:
+                self.f_card.draw(d, tx, by, line, body)
+                by += self.card_lh
+            y = top - gap
             i -= 1
-        return None
-
-    def _subtitle(self, ms):
-        si = self._active_sub(ms)
-        page = 0
-        if si is not None:
-            s = self.subs[si]
-            prog = (ms - s["ms"]) / max(1, s["end"] - s["ms"])
-            page = next((n for n, c in enumerate(s["cuts"]) if prog < c), len(s["cuts"]) - 1)
-        key = ("sub", si, page)
-        if key in self._cache:
-            return self._cache[key]
-        k, w, h = self.k, self.col_w, self.sub_h
-        img = Image.new("RGB", (w, h), (8, 10, 15))
-        d = ImageDraw.Draw(img)
-        x = self.pad + round(16 * k)
-        if si is not None:
-            s = self.subs[si]
-            d.rectangle([self.pad, round(18 * k), self.pad + round(5 * k), h - round(18 * k)], fill=s["color"])
-            self.f_sub_lab.draw(d, x, round(38 * k), s["label"], s["color"])
-            y = round(38 * k) + round(38 * k)
-            for line in s["pages"][page]:
-                self.f_sub.draw(d, x, y, line, TEXT)
-                y += round(34 * k)
-        else:
-            self.f_sub_lab.draw(d, x, round(38 * k), "ON AIR", (60, 68, 82))
+        fade = Image.linear_gradient("L").resize((w, round(22 * k))).transpose(Image.FLIP_TOP_BOTTOM)
+        img.paste(PANEL, (0, 0, w, fade.height), fade)
+        if len(self._cache) > 600:
+            self._cache.clear()
         self._cache[key] = img
         return img
 
@@ -1048,23 +1077,41 @@ class Renderer:
         return img
 
     def _chip(self, ms):
-        i = bisect.bisect_right(self.place_ms, ms) - 1
-        place = self.place_v[i] if i >= 0 else ""
-        key = ("chip", place)
+        key = ("chip",)
         if key in self._cache:
             return self._cache[key]
         k = self.k
         title = "AARC  \u00b7  " + self.run_date
-        sub = place or "outdoor run"
-        w = round(min(self.map_w - 40 * k, max(self.f_chip.length(title), self.f_chip_small.length(sub)) + 48 * k))
-        sub = self.f_chip_small.fit(sub, w - 40 * k)
-        h = round(66 * k)
+        w = round(self.f_chip.length(title) + 54 * k)
+        h = round(44 * k)
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
         d.rounded_rectangle([0, 0, w - 1, h - 1], radius=round(10 * k), fill=(8, 11, 16, 215), outline=RULE + (255,))
-        d.ellipse([round(18 * k), round(18 * k), round(27 * k), round(27 * k)], fill=TRAIL + (255,))
-        self.f_chip.draw(d, round(36 * k), round(29 * k), title, TEXT)
-        self.f_chip_small.draw(d, round(18 * k), round(52 * k), sub, MUTED)
+        d.ellipse([round(18 * k), round(17 * k), round(27 * k), round(26 * k)], fill=TRAIL + (255,))
+        self.f_chip.draw(d, round(36 * k), round(28 * k), title, TEXT)
+        self._cache[key] = img
+        return img
+
+    def _music_chip(self, ms):
+        t = (ms - self.start_ms) / 1000
+        seg = None
+        for s in self.music:
+            if s["t0"] <= t < s["t1"] - s["fade_out"] * 0.5:
+                seg = s
+        if seg is None:
+            return None
+        key = ("music", seg["title"], seg["artist"])
+        if key in self._cache:
+            return self._cache[key]
+        k = self.k
+        text = f"{seg['title']}  \u00b7  {seg['artist']}"
+        w = round(self.f_chip_small.length(text) + 58 * k)
+        h = round(36 * k)
+        img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=round(18 * k), fill=(8, 11, 16, 220), outline=RULE + (255,))
+        d.text((round(16 * k), round(25 * k)), "\u266a", font=self.f_note, fill=(255, 178, 54), anchor="ls")
+        self.f_chip_small.draw(d, round(40 * k), round(24 * k), text, (214, 220, 230))
         self._cache[key] = img
         return img
 
@@ -1075,65 +1122,237 @@ class Renderer:
         m = self._map_frame(ms)
         chip = self._chip(ms)
         m.paste(chip, (round(16 * self.k), round(16 * self.k)), chip)
+        mc = self._music_chip(ms)
+        if mc is not None:
+            m.paste(mc, (round(16 * self.k), self.map_h - mc.height - round(14 * self.k)), mc)
         x = self.col_x + 1
         img.paste(self._stats(ms), (x, 0))
         img.paste(m, (x, self.map_y))
-        img.paste(self._subtitle(ms), (x, self.sub_y))
-        si = self._active_sub(ms)
-        img.paste(self._card(ms, self.subs[si]["text"] if si is not None else None), (x, self.card_y))
+        img.paste(self._feed(ms), (x, self.feed_y))
         return img
 
 
 # --- audio -----------------------------------------------------------------
 
-def mix_audio(capture, recs, v0_ms, dur, workdir):
-    clips = []
-    for r in recs:
-        if r["lane"] in ("voice", "talkback") and r.get("audio"):
-            p = capture / r["audio"]
-            if not p.exists():
-                continue
-            length = r.get("durationS") or 60
-            off = (r["ms"] - v0_ms) / 1000
-            if off + length <= 0 or off >= dur:
-                continue
-            clips.append((p, off))
-    out = workdir / "mix.wav"
-    fmt = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
-    if not clips:
-        subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i",
-                        "anullsrc=r=48000:cl=stereo", "-t", f"{dur:.3f}", "-c:a", "pcm_s16le", str(out)], check=True)
-        return out, 0
+AFMT = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
+AUDIO_EXT = (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")
 
-    def mix(inputs, dest):
-        args, chains, labels = [FFMPEG, "-y", "-loglevel", "error"], [], []
-        for n, (path, off) in enumerate(inputs):
-            args += ["-i", str(path)]
-            if off < 0:
-                chain = f"[{n}:a]atrim=start={-off:.3f},asetpts=PTS-STARTPTS,{fmt}"
-            else:
-                chain = f"[{n}:a]{fmt},adelay=delays={int(round(off * 1000))}:all=1"
-            chains.append(chain + f"[a{n}]")
-            labels.append(f"[a{n}]")
-        tail = f"apad=whole_dur={dur:.3f},atrim=0:{dur:.3f}"
-        if len(inputs) == 1:
-            graph = ";".join(chains) + f";{labels[0]}{tail}[out]"
-        else:
-            graph = ";".join(chains) + f";{''.join(labels)}amix=inputs={len(inputs)}:normalize=0:duration=longest:dropout_transition=0,{tail}[out]"
-        args += ["-filter_complex", graph, "-map", "[out]", "-ar", "48000", "-c:a", "pcm_s16le", str(dest)]
-        subprocess.run(args, check=True)
 
-    batch = 40
+def ff_mix(items, dest, dur):
+    """Mix [(input args, filter chain)] into one WAV of exactly `dur` seconds, 40 inputs at a time."""
+    tail = f"apad=whole_dur={dur:.3f},atrim=0:{dur:.3f}"
+    if not items:
+        subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+                        "-t", f"{dur:.3f}", "-c:a", "pcm_s16le", str(dest)], check=True)
+        return dest
     parts = []
-    for i in range(0, len(clips), batch):
-        dest = workdir / f"mix{i // batch}.wav"
-        mix(clips[i:i + batch], dest)
-        parts.append(dest)
+    for b in range(0, len(items), 40):
+        batch = items[b:b + 40]
+        args, chains, labels = [FFMPEG, "-y", "-loglevel", "error"], [], []
+        for n, (inp, chain) in enumerate(batch):
+            args += inp
+            chains.append(f"[{n}:a]{chain}[a{n}]")
+            labels.append(f"[a{n}]")
+        mix = (f"{labels[0]}{tail}[out]" if len(batch) == 1 else
+               f"{''.join(labels)}amix=inputs={len(batch)}:normalize=0:duration=longest:dropout_transition=0,{tail}[out]")
+        part = dest.with_name(f"{dest.stem}-{b // 40}.wav")
+        args += ["-filter_complex", ";".join(chains) + ";" + mix, "-map", "[out]", "-ar", "48000",
+                 "-c:a", "pcm_s16le", str(part)]
+        subprocess.run(args, check=True)
+        parts.append(part)
     if len(parts) == 1:
-        parts[0].rename(out)
-    else:
-        mix([(p, 0) for p in parts], out)
-    return out, len(clips)
+        parts[0].rename(dest)
+        return dest
+    return ff_mix([(["-i", str(p)], AFMT) for p in parts], dest, dur)
+
+
+def voice_lines(recs, capture):
+    """Voice lines as heard: (start ms, path or None, seconds). His talk-backs stay out: the camera has them."""
+    out = []
+    for r in recs:
+        if r["lane"] != "voice":
+            continue
+        p = capture / r["audio"] if r.get("audio") else None
+        if p is not None and not p.exists():
+            p = None
+        dur = r.get("durationS") or (min(20.0, max(2.0, len(clean_speech(r.get("text") or "")) / 15)))
+        out.append((r["ms"], p, dur))
+    return out
+
+
+def load_playlist(music_dir):
+    """Tracks in file-name order; title, artist and licence from CREDITS.txt blocks when present."""
+    files = sorted(p for p in music_dir.iterdir() if p.suffix.lower() in AUDIO_EXT and not p.name.startswith("."))
+    meta, cur = {}, None
+    credits = music_dir / "CREDITS.txt"
+    if credits.exists():
+        for line in credits.read_text().splitlines():
+            if line and not line[0].isspace() and line.strip().lower().endswith(AUDIO_EXT):
+                cur = meta.setdefault(line.strip(), {})
+            elif cur is not None and ":" in line and line[:1].isspace():
+                key, _, val = line.strip().partition(":")
+                cur[key.strip().lower()] = val.strip()
+    tracks = []
+    for p in files:
+        m = meta.get(p.name, {})
+        r = subprocess.run([FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(p)],
+                           capture_output=True, text=True)
+        try:
+            length = float(r.stdout.strip())
+        except ValueError:
+            continue
+        tracks.append({"path": p, "length": length, "title": m.get("title") or p.stem,
+                       "artist": m.get("artist") or "", "attribution": m.get("attribution") or "",
+                       "gain": track_gain(p, music_dir)})
+    return tracks
+
+
+def track_gain(path, music_dir, target=-27.0):
+    """dB that brings a track's mean level to the bed level; measured once, cached beside it."""
+    cache = music_dir / ".levels.json"
+    try:
+        levels = json.loads(cache.read_text())
+    except (OSError, ValueError):
+        levels = {}
+    key = f"{path.name}:{path.stat().st_size}"
+    if key not in levels:
+        r = subprocess.run([FFMPEG, "-hide_banner", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+                           capture_output=True, text=True)
+        m = re.search(r"mean_volume: (-?[\d.]+) dB", r.stderr)
+        levels[key] = float(m.group(1)) if m else target
+        try:
+            cache.write_text(json.dumps(levels, indent=1))
+        except OSError:
+            pass
+    return target - levels[key]
+
+
+def music_schedule(recs, start_ms, end_ms, tracks):
+    """Bed segments in run seconds. Songs change where his real music changed; pauses fade out."""
+    if not tracks:
+        return []
+    run_end = (end_ms - start_ms) / 1000
+    events = [((r["ms"] - start_ms) / 1000, r.get("detail") or "") for r in recs
+              if r["lane"] == "event" and r.get("type") == "music.track"]
+    segs, open_seg, nxt, paused_at = [], None, 0, None
+
+    def close(t, fade):
+        nonlocal open_seg
+        if open_seg:
+            open_seg["t1"] = max(open_seg["t0"] + 0.5, t + fade)
+            open_seg["fade_out"] = fade
+            segs.append(open_seg)
+            open_seg = None
+
+    def start(t, idx, src, fade):
+        nonlocal open_seg
+        tr = tracks[idx]
+        open_seg = {"idx": idx, "t0": t, "src": src % tr["length"], "fade_in": fade, "fade_out": 2.0,
+                    "title": tr["title"], "artist": tr["artist"]}
+
+    if not events:
+        t, idx = 0.0, 0
+        while t < run_end:
+            start(t, idx, 0.0, 2.0 if t else 0.5)
+            t2 = t + tracks[idx]["length"] - 2.0
+            close(min(t2, run_end), 2.0)
+            t, idx = t2, (idx + 1) % len(tracks)
+        segs[-1]["t1"] = run_end
+        return segs
+
+    for t, detail in sorted(events):
+        d = detail.strip().lower()
+        if d.startswith("nothing playing"):
+            if open_seg:
+                paused_at = open_seg["src"] + (t - open_seg["t0"])
+                close(t, 2.5)
+        elif d.startswith("resumed"):
+            if open_seg is None and segs:
+                start(t, segs[-1]["idx"], paused_at or 0.0, 1.5)
+        else:
+            close(t, 2.0)
+            start(t, nxt, 0.0, 2.0)
+            nxt = (nxt + 1) % len(tracks)
+            paused_at = None
+    if open_seg:
+        open_seg["t1"] = run_end
+        open_seg["fade_out"] = min(2.0, max(0.1, run_end - open_seg["t0"]))
+        segs.append(open_seg)
+    return segs
+
+
+def duck_envelope(voices, v0_ms, dur, path, depth=-15.0, attack=0.3, release=0.8, rate=100):
+    """Gain curve for the bed: down `depth` dB under every voice line, eased in and out."""
+    n = int(math.ceil(dur * rate)) + 1
+    db = [0.0] * n
+    for ms, _, length in voices:
+        a = (ms - v0_ms) / 1000
+        b = a + length
+        if b + release < 0 or a - attack > dur:
+            continue
+        for i in range(max(0, int((a - attack) * rate)), min(n, int((b + release) * rate) + 1)):
+            t = i / rate
+            if t < a:
+                g = depth * (1 - (a - t) / attack)
+            elif t <= b:
+                g = depth
+            else:
+                g = depth * (1 - (t - b) / release)
+            if g < db[i]:
+                db[i] = g
+    import array
+    arr = array.array("f", (10 ** (g / 20) for g in db))
+    path.write_bytes(arr.tobytes())
+    return path
+
+
+def mix_audio(capture, recs, v0_ms, dur, workdir, start_ms, tracks, segs):
+    voices = voice_lines(recs, capture)
+    items = []
+    for ms, p, length in voices:
+        off = (ms - v0_ms) / 1000
+        if p is None or off + length <= 0 or off >= dur:
+            continue
+        chain = (f"atrim=start={-off:.3f},asetpts=PTS-STARTPTS,{AFMT}" if off < 0
+                 else f"{AFMT},adelay=delays={int(round(off * 1000))}:all=1")
+        items.append((["-i", str(p)], chain))
+    voice_wav = ff_mix(items, workdir / "voice.wav", dur)
+    if not segs:
+        return voice_wav, len(items)
+
+    t0w = (v0_ms - start_ms) / 1000
+    bed = []
+    for s in segs:
+        a, b = s["t0"] - t0w, s["t1"] - t0w
+        if b <= 0 or a >= dur:
+            continue
+        src, fin = s["src"], s["fade_in"]
+        if a < 0:
+            src, fin, a = src - a, 0.0, 0.0
+        length = min(b, dur) - a
+        if length <= 0.05:
+            continue
+        tr = tracks[s["idx"]]
+        src %= tr["length"]
+        fout = s["fade_out"] if b <= dur else 0.0
+        chain = f"atrim=start={src:.3f}:duration={length:.3f},asetpts=PTS-STARTPTS,{AFMT},volume={tr['gain']:.2f}dB"
+        if fin > 0:
+            chain += f",afade=t=in:d={fin:.2f}"
+        if fout > 0:
+            chain += f",afade=t=out:st={max(0.0, length - fout):.3f}:d={min(fout, length):.2f}"
+        chain += f",adelay=delays={int(round(a * 1000))}:all=1"
+        bed.append((["-stream_loop", "-1", "-i", str(tr["path"])], chain))
+    bed_wav = ff_mix(bed, workdir / "bed.wav", dur)
+    env = duck_envelope([v for v in voices], v0_ms, dur, workdir / "duck.f32")
+    out = workdir / "mix.wav"
+    graph = (f"[2:a]aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo[e];"
+             f"[1:a]aformat=sample_fmts=fltp:channel_layouts=stereo[b];[b][e]amultiply[bd];"
+             f"[0:a]aformat=sample_fmts=fltp:channel_layouts=stereo[v];"
+             f"[v][bd]amix=inputs=2:normalize=0:duration=first,atrim=0:{dur:.3f}[out]")
+    subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-i", str(voice_wav), "-i", str(bed_wav),
+                    "-f", "f32le", "-ar", "100", "-ac", "1", "-i", str(env),
+                    "-filter_complex", graph, "-map", "[out]", "-c:a", "pcm_s16le", str(out)], check=True)
+    return out, len(items)
 
 
 # --- main ------------------------------------------------------------------
@@ -1160,6 +1379,8 @@ def main():
     ap.add_argument("--rate", type=float, default=10, help="frames drawn per second of video (ffmpeg repeats them)")
     ap.add_argument("--encoder", default="auto", choices=["auto", "videotoolbox", "x264"])
     ap.add_argument("--labels", action="store_true", help="map tiles with (Chinese) street labels")
+    ap.add_argument("--music", help="music bed folder (default <captureDir>/music when it exists)")
+    ap.add_argument("--no-music", action="store_true", help="voices only, no music bed")
     args = ap.parse_args()
 
     capture = Path(args.capture).expanduser().resolve()
@@ -1180,13 +1401,20 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
 
     wall0 = time.time()
-    r = Renderer(capture, manifest, recs, W, H, args.labels, args.rate)
+    tracks, segs = [], []
+    music_dir = Path(args.music).expanduser() if args.music else capture / "music"
+    if not args.no_music and music_dir.is_dir():
+        tracks = load_playlist(music_dir)
+        segs = music_schedule(recs, start_ms, end_ms, tracks)
+        print(f"music: {len(tracks)} tracks, {len(segs)} bed segments from {music_dir}", file=sys.stderr)
+    r = Renderer(capture, manifest, recs, W, H, args.labels, args.rate, segs)
     print(f"map: {len(r.fixes)} fixes, tiles {r.tiles_ok}/{r.tiles_total}"
           + (f", zoom {r.zoom:.2f}" if r.tiles_total else ""), file=sys.stderr)
 
     with tempfile.TemporaryDirectory(prefix="broll-") as tmp:
-        audio, nclips = mix_audio(capture, recs, v0_ms, dur, Path(tmp))
-        print(f"audio: {nclips} clips mixed ({time.time() - wall0:.1f}s)", file=sys.stderr)
+        audio, nclips = mix_audio(capture, recs, v0_ms, dur, Path(tmp), start_ms, tracks, segs)
+        print(f"audio: {nclips} voice lines" + (" over the music bed" if segs else "")
+              + f" ({time.time() - wall0:.1f}s)", file=sys.stderr)
 
         nframes = max(1, math.ceil(dur * args.rate))
         cmd = [FFMPEG, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
@@ -1211,6 +1439,12 @@ def main():
             sys.exit("ffmpeg failed")
     el = time.time() - wall0
     print(f"\n{out}: {dur:.1f}s of video in {el:.1f}s ({dur / el:.1f}x realtime)", file=sys.stderr)
+    used = sorted({s["idx"] for s in segs if s["t1"] > t0 and s["t0"] < t1})
+    if used:
+        print("Music:", file=sys.stderr)
+        for i in used:
+            tr = tracks[i]
+            print("  " + (tr["attribution"] or f'"{tr["title"]}" {tr["artist"]}'), file=sys.stderr)
 
 
 if __name__ == "__main__":
