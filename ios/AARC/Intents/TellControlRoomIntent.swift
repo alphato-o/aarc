@@ -34,7 +34,7 @@ struct TellControlRoomIntent: AudioRecordingIntent, LiveActivityIntent {
             } catch {
                 // Our own reply still playing holds the session ('!int' at
                 // 10:26 on 17 Oct): stop it, give the session a beat, retry once.
-                Speaker.shared.stopAll()
+                VoiceFeedbackQueue.shared.interruptCurrent()
                 BackgroundAudioKeepalive.shared.stop()
                 try? await Task.sleep(for: .milliseconds(900))
                 try recorder.start()

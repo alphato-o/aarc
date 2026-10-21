@@ -425,7 +425,11 @@ final class LiveMetricsConsumer {
     /// Dead-stream threshold before force-ending. Generous: WC hiccups of
     /// 10-60s happen mid-run (the "watch reconnecting" banner); 2.5 minutes
     /// of TOTAL silence while .running means the workout is gone.
-    private let endSalvageAfterSeconds: TimeInterval = 150
+    /// A race waits 15 minutes: ending early leaves the rest of the race
+    /// without a coach, because a returning watch does not restart it.
+    private var endSalvageAfterSeconds: TimeInterval {
+        RunOrchestrator.shared.raceMode.isRace ? 900 : 150
+    }
 
     private func startEndSweep() {
         endSweepTask?.cancel()

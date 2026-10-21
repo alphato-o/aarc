@@ -4,6 +4,14 @@ import AARCKit
 
 enum RaceMode: String, CaseIterable, Sendable {
     case off, training, actual
+
+    /// Both race modes run the same code: corral and gate, race pack, live
+    /// feed, camera. Only the course data differs (founder, 2026-10-21: the
+    /// training race must exercise everything race day will).
+    var isRace: Bool { self != .off }
+    /// The course the mode races on. A training race has none.
+    var courseId: String? { self == .actual ? Self.marathonCourseId : nil }
+    static let marathonCourseId = "tianjin2026"
 }
 
 /// How a run is being conducted for testing. See `RunOrchestrator.testMode`.
@@ -64,11 +72,8 @@ final class RunOrchestrator {
     /// Any test run (real or simulated) — flags the RunRecord + skips Health.
     var isTestRun: Bool { testMode != .off }
 
-    /// Race mode (founder, 2026-10-15). `.training` = a race rehearsal: every
-    /// spoken line is kept on the run timeline for the camera cut, Ricky and
-    /// Jessica are toned down server-side, and Home Base reads the numbers out
-    /// at every kilometre. `.actual` is reserved for the 25 Oct marathon and
-    /// currently behaves as training until its own rules are built.
+    /// Race mode (founder, 2026-10-15). Training and actual share one path;
+    /// actual adds the Tianjin course and locks the marathon plan.
     nonisolated private static let kRaceMode = "aarc.run.raceMode"
     var raceMode: RaceMode =
         RaceMode(rawValue: UserDefaults.standard.string(forKey: kRaceMode) ?? "") ?? .off {
@@ -267,6 +272,10 @@ final class RunOrchestrator {
                           waitForGate: waitForGate)
         )
 
+        // Armed before the HealthKit launch below: if that call never
+        // returns, the timer still turns a silent wait into the timeout card.
+        armWatchAckTimer()
+
         // Channel 3: HealthKit startWatchApp — background-launches the
         // watch app even when it isn't running (the Apple Fitness path);
         // works without the phone being locked, unlike the notification.
@@ -289,8 +298,6 @@ final class RunOrchestrator {
                 await PhoneNotificationCenter.shared.scheduleWatchTimeoutFallback()
             }
         }
-
-        armWatchAckTimer()
     }
 
     private func armWatchAckTimer() {
@@ -316,10 +323,19 @@ final class RunOrchestrator {
         }
     }
 
-    /// Watch accepted the start (early ack, ~1s after delivery).
+    /// Watch accepted the start (early ack, ~1s after delivery). Accepting is
+    /// not running: keep waiting for workoutStarted, and say so if the watch
+    /// wedges in between (19 Oct: acked, then froze, and the phone sat idle).
     func watchAcknowledgedStart(runId: UUID) {
-        guard phase == .awaitingWatch || phase == .watchTimedOut else { return }
-        settleWatchStart()
+        guard phase == .awaitingWatch else { return }
+        watchAckTask?.cancel()
+        watchAckTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(20))
+            guard let self, !Task.isCancelled, self.phase == .awaitingWatch else { return }
+            RunEventLog.shared.record("watch.startStalled", "acked, no workout after 20 s")
+            self.phase = .watchTimedOut
+            self.watchFailureReason = "The watch accepted the start but the workout never began. Force-quit AARC on the watch and start again, or run phone-only."
+        }
     }
 
     /// Watch can't act on the start — fall back immediately, no timeout.
@@ -361,9 +377,9 @@ final class RunOrchestrator {
         )
     }
 
-    /// Race day only: the watch starts in the corral and holds the race clock
-    /// for the gate press. A training race starts the clock at once.
-    var waitForGate: Bool { raceMode == .actual && testMode != .simulate }
+    /// Every race starts in the corral and holds the race clock for the gate
+    /// press, so the training race rehearses race day's start exactly.
+    var waitForGate: Bool { raceMode.isRace && testMode != .simulate }
 
     /// User picked "Start on phone instead" from the timeout card.
     /// Cancels the watch-side start (best effort) so a late delivery
@@ -734,9 +750,9 @@ final class RunOrchestrator {
 
     /// The race pack's script: the full skeleton plus one-shot lines at real
     /// places on the course, generated at home so it plays with no signal.
-    func generateRaceScript(plan: RunPlan, runType: RunType, personalityId: String) async throws -> GeneratedScript {
+    func generateRaceScript(plan: RunPlan, runType: RunType, personalityId: String, mode: RaceMode) async throws -> GeneratedScript {
         try await generateFull(plan: plan, runType: runType, personalityId: personalityId,
-                               skipOpener: false, racePack: true)
+                               skipOpener: false, racePack: mode)
     }
 
     private func generateFull(
@@ -744,14 +760,14 @@ final class RunOrchestrator {
         runType: RunType,
         personalityId: String,
         skipOpener: Bool,
-        racePack: Bool = false
+        racePack: RaceMode = .off
     ) async throws -> GeneratedScript {
         var payload = AIClient.ScriptPlan.from(plan, runType: runType, personalityId: personalityId)
         payload.skipOpener = skipOpener
-        if racePack {
+        if racePack.isRace {
             payload.goal = "race"
-            payload.raceMode = RaceMode.actual.rawValue
-            payload.courseId = RacePackStore.courseId
+            payload.raceMode = racePack.rawValue
+            payload.courseId = racePack.courseId
         }
         // Pipe the founder's personal-context bullets through as
         // userMemory — the coach uses them as trolling hooks (FydeOS
@@ -768,11 +784,11 @@ final class RunOrchestrator {
         return try await AIClient.shared.generateScript(plan: payload)
     }
 
-    /// Actual race mode with a pack built for this plan: the pack IS the
+    /// A race with a pack built for this plan: the pack IS the
     /// script (opener included), so nothing is generated at the start line
     /// and nothing swaps in later. The live voices still layer on top.
     private func racePackForStart(plan: RunPlan, runType: RunType, personalityId: String) -> RacePack? {
-        guard raceMode == .actual, !AppEnv.uiTest else { return nil }
+        guard raceMode.isRace, !AppEnv.uiTest else { return nil }
         guard let pack = RacePackStore.shared.usablePack(plan: plan, runType: runType, personalityId: personalityId) else {
             RunEventLog.shared.record("race.pack", "no pack for this plan; generating live")
             return nil

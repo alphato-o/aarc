@@ -380,13 +380,19 @@ final class WorkoutSessionHost: NSObject {
         // keeps run state in sync natively, and auto-reconnects after
         // Bluetooth drops — the WC link stays as a redundant fallback.
         // Best-effort: mirroring failing must never block the run.
-        do {
-            try await session.startMirroringToCompanionDevice()
-            WatchBreadcrumbs.shared.drop("mirror ok")
-        } catch {
-            WatchBreadcrumbs.shared.drop("mirror err: \(error)")
-            lastError = nil  // not user-facing; WC still carries the run
+        // Bounded at 3 s: an unanswered mirror call held the run before
+        // startActivity, the likeliest cause of the 19 Oct start freeze. The
+        // call keeps going in the background and WC carries the run anyway.
+        let mirror = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            let once = MirrorOnce(cont)
+            Task { @MainActor in
+                do { try await session.startMirroringToCompanionDevice(); once.resume("mirror ok") }
+                catch { once.resume("mirror err: \(error)") }
+            }
+            Task { try? await Task.sleep(for: .seconds(3)); once.resume("mirror pending after 3 s; started without it") }
         }
+        WatchBreadcrumbs.shared.drop(mirror)
+        lastError = nil  // not user-facing; WC still carries the run
 
         let beginDate = Date()
         session.startActivity(with: beginDate)
@@ -1013,5 +1019,16 @@ enum WorkoutHostError: Error, LocalizedError {
         case .healthKitNotAuthorized:
             return "Health access not granted. Open AARC on the watch and tap Allow Health, then start again."
         }
+    }
+}
+
+/// Resumes a continuation once, whichever of two racers gets there first.
+private final class MirrorOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<String, Never>?
+    init(_ cont: CheckedContinuation<String, Never>) { self.cont = cont }
+    func resume(_ value: String) {
+        lock.lock(); let c = cont; cont = nil; lock.unlock()
+        c?.resume(returning: value)
     }
 }

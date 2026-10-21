@@ -30,7 +30,9 @@ struct RunHomeView: View {
     @AppStorage("aarc.liveShare") private var liveShare = false
 
     private var trackingSource: TrackingSource {
-        TrackingSource(rawValue: trackingSourceRaw) ?? .watch
+        // Every race is tracked by the watch, whatever the picker last said.
+        if orchestrator.raceMode.isRace { return .watch }
+        return TrackingSource(rawValue: trackingSourceRaw) ?? .watch
     }
 
     var body: some View {
@@ -85,11 +87,11 @@ struct RunHomeView: View {
                 planSection(planStore: planStore)
                     .frame(maxHeight: .infinity)
                     .layoutPriority(1)
-                trackingSourcePicker
+                if !orchestrator.raceMode.isRace { trackingSourcePicker }
             }
             testRunToggle
             raceModeToggle
-            if orchestrator.raceMode != .actual { liveShareToggle }
+            if !orchestrator.raceMode.isRace { liveShareToggle }
             watchUnreachableBanner
             startButtons
                 .frame(maxHeight: .infinity)
@@ -150,7 +152,10 @@ struct RunHomeView: View {
                 get: { orchestrator.raceMode != .off },
                 set: { on in
                     orchestrator.raceMode = on ? .training : .off
-                    if on { liveShare = true }
+                    if on {
+                        liveShare = true
+                        trackingSourceRaw = TrackingSource.watch.rawValue   // every race is tracked by the watch
+                    }
                 }
             )) {
                 Label {
@@ -173,8 +178,8 @@ struct RunHomeView: View {
                 }
                 .pickerStyle(.segmented)
                 Text(orchestrator.raceMode == .actual
-                     ? "Race day: the watch starts in the corral and holds the race clock until you tap CROSSED THE GATE on the wrist. Camera rolls from the corral."
-                     : "Every line goes on the timeline. Ricky and Jessica step back; Home Base reads the numbers every km. The Osmo records the run.")
+                     ? "Race day: the Tianjin course, 42.2 km. The watch starts in the corral and holds the race clock until you tap CROSSED THE GATE on the wrist. Camera rolls from the corral."
+                     : "The full race-day flow on your own plan: corral, then CROSSED THE GATE on the wrist starts the clock. Race pack, live feed, camera and Home Base's km calls, exactly as on race day; only the course is missing.")
                     .font(.caption2).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(spacing: 6) {
@@ -591,7 +596,7 @@ struct RunHomeView: View {
         } else {
             // Slide-to-start (not tap) so a stray touch can't begin a run.
             VStack(spacing: 14) {
-              if orchestrator.raceMode == .actual {
+              if orchestrator.raceMode.isRace {
                 SlideToStart(label: "Start the race", icon: "flag.checkered", tint: .purple) {
                     Task { await startTapped(.outdoor) }
                 }

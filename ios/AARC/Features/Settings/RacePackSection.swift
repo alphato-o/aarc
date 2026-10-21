@@ -8,16 +8,25 @@ struct RacePackSection: View {
     @State private var store = RacePackStore.shared
     @State private var orchestrator = RunOrchestrator.shared
 
-    // Always the marathon, whatever the home screen is set to: Actual race
-    // mode locks the start to this plan, so any other pack would never load.
-    private var plan: RunPlan { .distance(km: RunOrchestrator.marathonKm) }
+    /// Which race the pack is for. The marathon is locked to 42.2 km; the
+    /// training race uses the plan on the home screen.
+    @State private var mode: RaceMode = RunOrchestrator.shared.raceMode == .training ? .training : .actual
+    private var plan: RunPlan {
+        mode == .actual ? .distance(km: RunOrchestrator.marathonKm) : ScriptPreviewStore.shared.currentPlan
+    }
     private var runType: RunType { .outdoor }
     private var personalityId: String { LiveMetricsConsumer.shared.pendingPersonalityId }
 
     var body: some View {
         Section {
+            Picker("Pack for", selection: $mode) {
+                Text("Marathon").tag(RaceMode.actual)
+                Text("Training race").tag(RaceMode.training)
+            }
+            .pickerStyle(.segmented)
+            .disabled(store.isBuilding)
             LabeledContent("Plan", value: planText)
-            if let pack = store.pack {
+            if let pack = store.pack(for: mode) {
                 LabeledContent("Built", value: pack.builtAt.formatted(date: .abbreviated, time: .shortened))
                 LabeledContent("Lines", value: "\(pack.lineCount) scripted, \(pack.warmedLines) of \(pack.totalLines) rendered")
                 LabeledContent("Jessica", value: "\(pack.jessicaLines?.count ?? 0) lines")
@@ -26,8 +35,8 @@ struct RacePackSection: View {
                     Text("Jessica and Home Base lines failed: \(err). Rebuild to retry.")
                         .font(.caption2).foregroundStyle(.red)
                 }
-                if store.isStale(plan: plan, runType: runType, personalityId: personalityId) {
-                    Text("Built for a different plan or coach. Rebuild before race day.")
+                if store.isStale(mode: mode, plan: plan, runType: runType, personalityId: personalityId) {
+                    Text("Built for a different plan or coach. Rebuild before you run.")
                         .font(.caption2).foregroundStyle(.orange)
                 }
             } else {
@@ -49,12 +58,12 @@ struct RacePackSection: View {
                 Button("Cancel") { store.cancelBuild() }
             } else {
                 Button {
-                    store.build(plan: plan, runType: runType, personalityId: personalityId)
+                    store.build(mode: mode, plan: plan, runType: runType, personalityId: personalityId)
                 } label: {
-                    Label(store.pack == nil ? "Build race pack" : "Rebuild race pack", systemImage: "shippingbox")
+                    Label(store.pack(for: mode) == nil ? "Build race pack" : "Rebuild race pack", systemImage: "shippingbox")
                 }
-                if store.pack != nil {
-                    Button(role: .destructive) { store.delete() } label: {
+                if store.pack(for: mode) != nil {
+                    Button(role: .destructive) { store.delete(mode: mode) } label: {
                         Label("Delete pack", systemImage: "trash")
                     }
                 }
@@ -62,7 +71,7 @@ struct RacePackSection: View {
         } header: {
             Text("Race pack (offline)")
         } footer: {
-            Text("Used only in Actual race mode, for exactly the plan it was built for. Always built for the marathon (42.2 km, outdoor), whatever plan is on the home screen. Build on Wi‑Fi with the app open: it writes Ricky's course script and downloads every line. At the start the pack is the script; Home Base and Jessica still join when there is signal, and Ricky's scripted line covers any kilometre they cannot reach.")
+            Text("One pack per race. The marathon pack is always 42.2 km on the Tianjin course; the training race pack is built for the plan on the home screen, with no course. Used only in that race mode and only for exactly the plan it was built for. Build on Wi‑Fi with the app open: it writes Ricky's script, Jessica's and Home Base's offline lines, and downloads every line. At the start the pack is the script; the live voices join when there is signal, and the pack covers any kilometre they cannot reach.")
         }
     }
 

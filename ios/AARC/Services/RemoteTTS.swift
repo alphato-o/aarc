@@ -204,9 +204,8 @@ final class RemoteTTS: NSObject {
             if self.playerNode.isPlaying { self.playerNode.stop() }
             self.fallbackPlayer?.stop()
             self.finishPlayback()
-            let state = AudioPlaybackManager.shared.heal()
             self.resetEngine()
-            RunEventLog.shared.record("audio.heal", state)
+            RunEventLog.shared.record("audio.heal", AudioPlaybackManager.shared.heal())
         }
     }
 
@@ -221,6 +220,7 @@ final class RemoteTTS: NSObject {
 
     private func finishPlayback() {
         stallTask?.cancel(); stallTask = nil
+        silenceTask?.cancel(); silenceTask = nil
         currentFile = nil
         clearPlaybackTiming()
         if let cont = playbackContinuation {
@@ -258,7 +258,7 @@ final class RemoteTTS: NSObject {
             // Coalesced synth, shares any in-flight prewarm for this line. The
             // slot waits a few seconds at most: past that the on-phone voice
             // speaks and the synth finishes into the cache for next time.
-            _ = await prefetch(text, voiceId: voiceId, within: Self.slotSynthBudget)
+            _ = await prefetch(text, voiceId: voiceId, within: Self.slotSynthBudget, urgent: true)
             // CRITICAL: if the run was stopped mid-fetch, bail before
             // playing — never speak via Apple AFTER the pipeline was killed
             // (the treadmill End-tap bug).
@@ -313,10 +313,17 @@ final class RemoteTTS: NSObject {
         AudioPlaybackManager.shared.beginTransientDuck()
         defer { AudioPlaybackManager.shared.endTransientDuck() }
 
-        // Primary path: AVAudioEngine with amplified mixer.
+        // Primary path: AVAudioEngine with amplified mixer. A line whose audio
+        // clock never moves is rebuilt and played once more from the file
+        // already on the phone, then handed to AVAudioPlayer.
         do {
             try await playViaEngine(url: url, onStart: onAudioStart)
-            return
+            guard silentLine else { return }
+            if Task.isCancelled { return }
+            RunEventLog.shared.record("tts.replay", String(text.prefix(80)))
+            try await playViaEngine(url: url, onStart: nil)
+            guard silentLine else { return }
+            throw RemoteTTSError.transport("engine silent twice")
         } catch {
             if Task.isCancelled { return }
             log.error("Engine path failed: \(error.localizedDescription, privacy: .public). Falling back to AVAudioPlayer.")
@@ -354,7 +361,40 @@ final class RemoteTTS: NSObject {
             // user perception this is the "start of speaking" moment.
             self.beginPlaybackTiming(duration: dur)
             self.armStallGuard()
+            self.armSilenceCheck()
             onStart?()
+        }
+    }
+
+    /// Set when the last engine line produced no samples.
+    private var silentLine = false
+    private var silenceTask: Task<Void, Never>?
+
+    /// 19 Oct: from minute 43 the engine "played" every line into a dead
+    /// session. If the player's clock has not moved 1.5 s in, end the line,
+    /// rebuild the session and engine, and let `play` replay it.
+    private func armSilenceCheck() {
+        silentLine = false
+        silenceTask?.cancel()
+        let gen = playbackGeneration
+        silenceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard let self, !Task.isCancelled, gen == self.playbackGeneration,
+                  self.playbackContinuation != nil else { return }
+            let moving: Bool = {
+                guard self.engine.isRunning, self.playerNode.isPlaying,
+                      let node = self.playerNode.lastRenderTime,
+                      let t = self.playerNode.playerTime(forNodeTime: node) else { return false }
+                return t.sampleTime > 0
+            }()
+            guard !moving else { return }
+            RunEventLog.shared.record("tts.silent", "no samples 1.5 s in; rebuilding",
+                                      data: ["engine": String(self.engine.isRunning)])
+            self.silentLine = true
+            if self.playerNode.isPlaying { self.playerNode.stop() }
+            self.finishPlayback()
+            self.resetEngine()
+            RunEventLog.shared.record("audio.heal", AudioPlaybackManager.shared.heal())
         }
     }
 
@@ -426,7 +466,33 @@ final class RemoteTTS: NSObject {
     /// requests. Returns once cached, or once the shared synth attempt has
     /// finished (callers re-check the cache to distinguish success). Never
     /// throws; uses the one-retry fetch so a cellular blip doesn't drop it.
-    private func ensureCached(text: String, voiceId: String, key: String) async {
+    // MARK: - Download lane
+
+    /// Background renders take turns, one at a time, so they never split a
+    /// thin link with the line that is due (19 Oct: every queued line
+    /// downloaded at once over ~10 KB/s). The due line never waits.
+    private var backgroundBusy = false
+    private var laneWaiters: [(key: String, cont: CheckedContinuation<Bool, Never>)] = []
+
+    /// True when the caller holds the background turn and must hand it on.
+    private func enterLane(key: String, urgent: Bool) async -> Bool {
+        if urgent { return false }
+        if !backgroundBusy { backgroundBusy = true; return true }
+        return await withCheckedContinuation { laneWaiters.append((key, $0)) }
+    }
+
+    private func leaveLane(holding: Bool) {
+        guard holding else { return }
+        if laneWaiters.isEmpty { backgroundBusy = false } else { laneWaiters.removeFirst().cont.resume(returning: true) }
+    }
+
+    /// The due line's render is still waiting its turn: start it now.
+    private func promote(key: String) {
+        guard let i = laneWaiters.firstIndex(where: { $0.key == key }) else { return }
+        laneWaiters.remove(at: i).cont.resume(returning: false)
+    }
+
+    private func ensureCached(text: String, voiceId: String, key: String, urgent: Bool = false) async {
         // PREVIEW MODE: the feedback simulator is text-only — NEVER call
         // ElevenLabs. This is the single chokepoint every TTS path funnels
         // through (play + prefetch), so guarding it here plugs the leak no
@@ -439,12 +505,16 @@ final class RemoteTTS: NSObject {
         // on-phone voice now; the line is synthesised next time it is needed.
         if EndpointManager.shared.isDark { return }
         if let existing = inFlightSynths[key] {
+            if urgent { promote(key: key) }
             await existing.value
             return
         }
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.inFlightSynths[key] = nil }
+            let holding = await self.enterLane(key: key, urgent: urgent)
+            defer { self.leaveLane(holding: holding) }
+            if Task.isCancelled { return }
             do {
                 let data = try await self.fetchAudioWithOneRetry(text: text, voiceId: voiceId)
                 self.bytesFetchedThisSession += data.count
@@ -487,11 +557,11 @@ final class RemoteTTS: NSObject {
     /// `prefetch` with a deadline: true once cached, false if the deadline
     /// passed first (the synth keeps going and lands in the cache).
     @discardableResult
-    func prefetch(_ text: String, voiceId: String = RemoteTTS.voiceId, within seconds: TimeInterval) async -> Bool {
+    func prefetch(_ text: String, voiceId: String = RemoteTTS.voiceId, within seconds: TimeInterval, urgent: Bool = false) async -> Bool {
         guard !text.isEmpty else { return true }
         let key = AudioCache.key(voiceId: voiceId, text: text)
         if await AudioCache.shared.url(forKey: key) != nil { return true }
-        let synth = Task { @MainActor in await self.ensureCached(text: text, voiceId: voiceId, key: key) }
+        let synth = Task { @MainActor in await self.ensureCached(text: text, voiceId: voiceId, key: key, urgent: urgent) }
         let finished = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             let once = OnceFlag(cont)
             Task { await synth.value; once.resume(true) }
@@ -572,7 +642,9 @@ final class RemoteTTS: NSObject {
     /// cache (gateway → CF) backstops the rare case where both still fire.
     private static func hedgeDelayNanos(forChars chars: Int) -> UInt64 {
         let expected = 4.0 + 0.045 * Double(chars)        // rough v3 gen seconds
-        let delay = min(45.0, max(12.0, expected * 1.6))  // fire only well past expected
+        // Floor 25 s: on a thin link a second download only halves the first
+        // one's speed, so the backup is for a stalled route, not a slow one.
+        let delay = min(45.0, max(25.0, expected * 1.6))
         return UInt64(delay * 1_000_000_000)
     }
 
@@ -615,7 +687,7 @@ final class RemoteTTS: NSObject {
                     }
                     return data
                 case .failure(let error):
-                    if !(error is CancellationError) {
+                    if !(error is CancellationError), (error as? URLError)?.code != .cancelled {
                         lastError = error
                         await MainActor.run {
                             EndpointManager.shared.reportOutcome(
@@ -669,7 +741,8 @@ final class RemoteTTS: NSObject {
             service: "11Labs", label: text, chars: text.count)
         NetworkActivityMonitor.shared.awaiting(net)
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let metrics = TransferMetrics()
+            let (data, response) = try await URLSession.shared.data(for: request, delegate: metrics)
             guard let http = response as? HTTPURLResponse else {
                 NetworkActivityMonitor.shared.fail(net, "non-HTTP response via \(tag)")
                 throw RemoteTTSError.transport("non-HTTP response")
@@ -690,7 +763,7 @@ final class RemoteTTS: NSObject {
             let verdict = hdr("x-tts-cache").map { " · \($0)" }
                 ?? hdr("x-tts-via").map { " · via:\($0)" } ?? ""
             NetworkActivityMonitor.shared.finish(net, bytes: data.count,
-                                                 detail: "HTTP \(http.statusCode) via \(tag)\(verdict)")
+                                                 detail: "HTTP \(http.statusCode) via \(tag)\(verdict)\(metrics.summary(bytes: data.count))")
             return data
         } catch {
             // Hedge loser (the other endpoint won the race) — cancellation
@@ -721,6 +794,31 @@ enum RemoteTTSError: Error, LocalizedError {
         case .transport(let m): return "Network error: \(m)"
         case .httpStatus(let code, let body): return "HTTP \(code): \(body)"
         }
+    }
+}
+
+/// Protocol, wait for the first byte and download speed of one transfer, so
+/// a run log says whether a slow line was ElevenLabs, the route or the link.
+private final class TransferMetrics: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var proto: String?
+    private var ttfbMs: Int?
+    private var downloadSeconds: Double?
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        guard let t = metrics.transactionMetrics.last else { return }
+        lock.lock(); defer { lock.unlock() }
+        proto = t.networkProtocolName
+        if let a = t.requestStartDate, let b = t.responseStartDate { ttfbMs = Int(b.timeIntervalSince(a) * 1000) }
+        if let b = t.responseStartDate, let c = t.responseEndDate { downloadSeconds = c.timeIntervalSince(b) }
+    }
+
+    func summary(bytes: Int) -> String {
+        lock.lock(); defer { lock.unlock() }
+        var out = " · \(proto ?? "?")"
+        if let ttfbMs { out += " · ttfb \(ttfbMs)ms" }
+        if let d = downloadSeconds, d > 0.05 { out += String(format: " · %.1f KB/s", Double(bytes) / 1024 / d) }
+        return out
     }
 }
 

@@ -147,6 +147,11 @@ final class ControlRoomRecorder: NSObject {
         runElapsed = consumer.latest?.elapsed
         keepaliveWasRunning = BackgroundAudioKeepalive.shared.isRunning
         VoiceFeedbackQueue.shared.held = true
+        // Keep the line that was playing for after the talk-back, and stop
+        // our engine before the category switch: switching under a running
+        // engine failed with 'what' on 19 Oct and cut Ricky's opener.
+        VoiceFeedbackQueue.shared.interruptCurrent()
+        RemoteTTS.shared.resetEngine()
 
         let session = AVAudioSession.sharedInstance()
         var steps: [String] = []

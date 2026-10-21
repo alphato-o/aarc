@@ -87,6 +87,7 @@ final class EndpointManager {
     func reportOutcome(endpointId: String, ok: Bool, reason: String = "") {
         guard let idx = endpoints.firstIndex(where: { $0.id == endpointId }) else { return }
         if ok {
+            lastDeliveredAt = Date()
             endpoints[idx].realFailures = 0
             endpoints[idx].lastRealFailureAt = nil
             if pathUp { setDark(false, why: "\(endpointId) delivered") }
@@ -119,6 +120,16 @@ final class EndpointManager {
     private(set) var isDark = false
     private(set) var darkSince: Date?
     private var pathUp = true
+    /// Last time real traffic came back whole. A slow link must not read as
+    /// no link: dark sends every line to the phone's voice.
+    private var lastDeliveredAt: Date?
+    /// Probes on their own connection, so a long download on the shared
+    /// one cannot make them time out.
+    private let probeSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 8
+        return URLSession(configuration: config)
+    }()
     private let pathMonitor = NWPathMonitor()
     private var wake: CheckedContinuation<Void, Never>?
     private var lastKick = Date.distantPast
@@ -170,7 +181,12 @@ final class EndpointManager {
                 self.applySelection()
                 let anyUp = self.endpoints.contains { $0.consecutiveFailures == 0 && $0.lastLatencyMs != nil }
                 if anyUp && self.pathUp { self.setDark(false, why: "probe answered") }
-                else if !anyUp { self.setDark(true, why: self.pathUp ? "no endpoint answers" : "no network path") }
+                else if !anyUp {
+                    let delivering = self.lastDeliveredAt.map { Date().timeIntervalSince($0) < 90 } ?? false
+                    if !self.pathUp || !delivering {
+                        self.setDark(true, why: self.pathUp ? "no endpoint answers" : "no network path")
+                    }
+                }
                 let degraded = self.endpoints.contains { $0.consecutiveFailures > 0 }
                 let pause: Double = self.isDark ? 10 : (degraded ? 15 : 60)
                 await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
@@ -187,13 +203,14 @@ final class EndpointManager {
     /// Both endpoints at once, 6 s each: a dark start is known within seconds.
     private func probeAll() async {
         let targets = endpoints.map { ($0.id, $0.url.appendingPathComponent("ping")) }
+        let session = probeSession
         let results = await withTaskGroup(of: (String, Int?).self) { group in
             for (id, url) in targets {
                 group.addTask {
                     var request = URLRequest(url: url)
-                    request.timeoutInterval = 6
+                    request.timeoutInterval = 8
                     let started = Date()
-                    guard let (_, response) = try? await URLSession.shared.data(for: request),
+                    guard let (_, response) = try? await session.data(for: request),
                           let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode)
                     else { return (id, nil) }
                     return (id, Int(Date().timeIntervalSince(started) * 1000))

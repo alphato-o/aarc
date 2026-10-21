@@ -54,10 +54,11 @@ final class LiveShareController {
     }
 
     /// Begin the channel for a run, test runs included. The uplink
-    /// (events going home) needs sharing on or actual race mode; the downlink
+    /// (events going home) needs sharing on or a race; the downlink
     /// (lines coming back) is always on.
     func startIfEnabled(runId: UUID, isTest: Bool, startedAt: Date) {
-        let race = RunOrchestrator.shared.raceMode == .actual
+        let mode = RunOrchestrator.shared.raceMode
+        let race = mode.isRace
         guard Self.token() != nil else { return }
         self.runId = runId.uuidString
         uplink = Self.enabled || race
@@ -68,7 +69,7 @@ final class LiveShareController {
         if uplink {
             let iso = ISO8601DateFormatter().string(from: startedAt)
             var start: [String: Any] = ["runId": runId.uuidString, "isTest": isTest, "startedAt": iso]
-            if race { start["race"] = true; start["course"] = RacePackStore.courseId }
+            if race { start["race"] = true; if let course = mode.courseId { start["course"] = course } }
             // Retried until it lands: a dark start used to leave the run
             // unknown to the desk for its whole length.
             flushTask = Task { [weak self] in

@@ -85,6 +85,9 @@ struct VoiceItem: Identifiable, Sendable {
         self.isResumed = isResumed
     }
 
+    /// Already sent to the back once because its audio was late.
+    var audioDeferred = false
+
     func isStale(at now: Date = .now) -> Bool {
         guard let expiresAfter else { return false }
         return now.timeIntervalSince(createdAt) > expiresAfter
@@ -347,6 +350,31 @@ final class VoiceFeedbackQueue {
         LiveSubtitleStore.shared.clear()
     }
 
+    /// Stop the line now but keep it: it goes back to the front and plays
+    /// from the top when the queue moves again. Nothing else is touched
+    /// (19 Oct: an interruption and a talk-back each wiped the whole queue).
+    func interruptCurrent() {
+        guard let cur = currentlyPlaying else { return }
+        playbackTask?.cancel()
+        playbackTask = nil
+        stallGuard?.cancel()
+        Speaker.shared.stopActiveBackend()
+        currentlyPlaying = nil
+        guard !cur.isStale() else { return }
+        pending.insert(VoiceItem(
+            text: cur.text, priority: cur.priority, source: cur.source,
+            createdAt: cur.createdAt, expiresAfter: cur.expiresAfter,
+            preferRemoteVoiceOverride: cur.preferRemoteVoiceOverride, voiceId: cur.voiceId,
+            segmentId: cur.segmentId, decisionAt: cur.decisionAt, isResumed: true
+        ), at: 0)
+        RunEventLog.shared.record("voice.requeue", String(cur.text.prefix(80)), data: ["source": cur.source])
+    }
+
+    /// The interruption is over: carry on with what was kept.
+    func resumeAfterInterruption() {
+        if currentlyPlaying == nil { kickNext() }
+    }
+
     /// Reset diagnostic counters at the start of a run.
     func resetStats() {
         // The last run's "camera stopped" line must not hold the new run's
@@ -481,7 +509,33 @@ final class VoiceFeedbackQueue {
             if item.voiceId != nil || Speaker.shared.preferRemoteVoice {
                 // 25 s: ElevenLabs took 38 s for one long line on 19 Oct;
                 // the phone voice is the last resort, not the default.
-                await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId, within: 25)
+                let ready = await RemoteTTS.shared.prefetch(item.text, voiceId: item.voiceId ?? RemoteTTS.voiceId,
+                                                            within: 25, urgent: true)
+                if Task.isCancelled { return }
+                // Late audio: the real voice later beats the phone's voice now
+                // (founder, 19 Oct). A non-milestone line goes to the back
+                // once, its download keeps going, and lines that are ready
+                // play meanwhile. The second miss drops it; only milestones
+                // and Home Base fall back to the phone's voice.
+                if !ready, !EndpointManager.shared.isDark, let self {
+                    let mustLand = item.priority >= .milestone || item.source.hasPrefix("home")
+                    if !mustLand {
+                        self.currentlyPlaying = nil
+                        self.stallGuard?.cancel()
+                        if item.audioDeferred || item.isStale() {
+                            RunEventLog.shared.record("voice.lateDrop", String(item.text.prefix(80)),
+                                                      data: ["source": item.source])
+                        } else {
+                            var again = item
+                            again.audioDeferred = true
+                            self.insertSorted(again)
+                            RunEventLog.shared.record("voice.awaitAudio", String(item.text.prefix(80)),
+                                                      data: ["source": item.source])
+                        }
+                        self.kickNext()
+                        return
+                    }
+                }
             }
             if Task.isCancelled { return }
 

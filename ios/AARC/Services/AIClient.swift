@@ -299,8 +299,8 @@ actor AIClient {
 
     /// Race pack: Jessica's and Home Base's lines for the no-signal stretch,
     /// each tied to a kilometre of the course.
-    func racePackVoices(courseId: String, personalNotes: [String]) async throws -> PackVoices {
-        struct Body: Encodable { let courseId: String; let personalNotes: [String]? }
+    func racePackVoices(courseId: String?, distanceKm: Double?, personalNotes: [String]) async throws -> PackVoices {
+        struct Body: Encodable { let courseId: String?; let distanceKm: Double?; let personalNotes: [String]? }
         struct Envelope: Decodable { let ok: Bool; let error: String?; let detail: String?; let jessica: [PackVoiceLine]?; let home: [PackVoiceLine]? }
         let url = await MainActor.run { Config.apiBaseURL }.appendingPathComponent("race-pack-voices")
         var urlRequest = URLRequest(url: url)
@@ -308,7 +308,7 @@ actor AIClient {
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
         // Two long generations in parallel on the proxy: about a minute.
         urlRequest.timeoutInterval = 300
-        urlRequest.httpBody = try encoder.encode(Body(courseId: courseId, personalNotes: personalNotes.isEmpty ? nil : personalNotes))
+        urlRequest.httpBody = try encoder.encode(Body(courseId: courseId, distanceKm: distanceKm, personalNotes: personalNotes.isEmpty ? nil : personalNotes))
         let (data, response) = try await session.data(for: urlRequest)
         guard let http = response as? HTTPURLResponse else { throw AIError.transport("non-HTTP response") }
         let envelope = try? decoder.decode(Envelope.self, from: data)

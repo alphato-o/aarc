@@ -160,6 +160,9 @@ final class AudioPlaybackManager {
     /// A line stalled with the engine silent: rebuild the session from
     /// scratch and say what the system reports, so the next line can play.
     func heal() -> String {
+        // setActive(true) on a session iOS still calls active changes nothing:
+        // drop it first (the engine is already stopped by the caller).
+        try? session.setActive(false, options: [])
         appliedDuck = nil
         applyCategory(duck: false)
         var result = "ok"
@@ -225,8 +228,9 @@ final class AudioPlaybackManager {
 
         switch type {
         case .began:
-            // Phone call / Siri started — drop in-flight utterance.
-            Speaker.shared.stopAll()
+            // Phone call / Siri started: stop the line and keep it, with the
+            // rest of the queue (19 Oct: an interruption wiped the opener).
+            VoiceFeedbackQueue.shared.interruptCurrent()
             isSessionActive = false
 
         case .ended:
@@ -237,6 +241,7 @@ final class AudioPlaybackManager {
             applyCategory(duck: false)
             activate()
             RemoteTTS.shared.resetEngine()
+            VoiceFeedbackQueue.shared.resumeAfterInterruption()
 
         @unknown default:
             break

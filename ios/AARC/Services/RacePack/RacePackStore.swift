@@ -40,7 +40,6 @@ enum RacePackLocalLines {
 @Observable
 final class RacePackStore {
     static let shared = RacePackStore()
-    static let courseId = "tianjin2026"
     private let log = Logger(subsystem: "club.aarun.AARC", category: "RacePack")
 
     enum Phase: Equatable {
@@ -53,7 +52,12 @@ final class RacePackStore {
     private(set) var phase: Phase = .idle
     /// Why the last build has no Jessica / Home Base lines, for the screen.
     private(set) var voicesError: String?
-    private(set) var pack: RacePack?
+    /// One pack per race mode, so the training race's pack never replaces
+    /// the marathon's.
+    private(set) var packs: [RaceMode: RacePack] = [:]
+    /// The pack for the mode the home screen is set to.
+    var pack: RacePack? { packs[RunOrchestrator.shared.raceMode] }
+    func pack(for mode: RaceMode) -> RacePack? { packs[mode] }
     private var buildTask: Task<Void, Never>?
     /// Offline lines already spoken this run, so none repeats.
     private var spoken: Set<String> = []
@@ -66,7 +70,7 @@ final class RacePackStore {
     }
 
     init() {
-        pack = Self.load()
+        for mode in [RaceMode.training, .actual] { packs[mode] = Self.load(mode) }
     }
 
     /// The pack if it was built for exactly this plan, run type and persona.
@@ -90,9 +94,9 @@ final class RacePackStore {
 
     func resetPlayback() { spoken = [] }
 
-    /// Home Base's pack line for this kilometre, once, in Actual race mode.
+    /// Home Base's pack line for this kilometre, once, in a race.
     func homeLine(km: Int) -> String? {
-        guard RunOrchestrator.shared.raceMode == .actual,
+        guard RunOrchestrator.shared.raceMode.isRace,
               let line = pack?.homeLines?.first(where: { $0.km == km }),
               !spoken.contains(line.text) else { return nil }
         spoken.insert(line.text)
@@ -102,7 +106,7 @@ final class RacePackStore {
     /// Jessica's next pack line: the one for this kilometre or the one
     /// before, so a line whose km went by while she was waiting still plays.
     func jessicaLine(km: Int) -> String? {
-        guard RunOrchestrator.shared.raceMode == .actual,
+        guard RunOrchestrator.shared.raceMode.isRace,
               let line = pack?.jessicaLines?
                 .filter({ $0.km <= km && $0.km >= km - 1 && !spoken.contains($0.text) })
                 .max(by: { $0.km < $1.km }) else { return nil }
@@ -111,11 +115,13 @@ final class RacePackStore {
     }
 
     /// True when the pack on disk no longer matches the current plan.
-    func isStale(plan: RunPlan, runType: RunType, personalityId: String) -> Bool {
-        pack != nil && usablePack(plan: plan, runType: runType, personalityId: personalityId) == nil
+    func isStale(mode: RaceMode, plan: RunPlan, runType: RunType, personalityId: String) -> Bool {
+        guard let p = packs[mode] else { return false }
+        return p.planKey != RacePack.key(plan: plan, personalityId: personalityId) || p.runType != runType.rawValue
     }
 
-    func build(plan: RunPlan, runType: RunType, personalityId: String) {
+    func build(mode: RaceMode, plan: RunPlan, runType: RunType, personalityId: String) {
+        guard mode.isRace else { return }
         guard !isBuilding else { return }
         buildTask?.cancel()
         voicesError = nil
@@ -124,13 +130,13 @@ final class RacePackStore {
             guard let self else { return }
             do {
                 let script = try await RunOrchestrator.shared.generateRaceScript(
-                    plan: plan, runType: runType, personalityId: personalityId)
+                    plan: plan, runType: runType, personalityId: personalityId, mode: mode)
                 guard !Task.isCancelled else { return }
                 var built = RacePack(
                     planKey: RacePack.key(plan: plan, personalityId: personalityId),
                     runType: runType.rawValue,
                     personalityId: personalityId,
-                    courseId: Self.courseId,
+                    courseId: mode.courseId ?? "",
                     builtAt: Date(),
                     script: script,
                     warmedLines: 0,
@@ -139,7 +145,8 @@ final class RacePackStore {
                 // covers the dark kilometres alone, and the screen says so.
                 do {
                     let voices = try await AIClient.shared.racePackVoices(
-                        courseId: Self.courseId, personalNotes: PersonalContextStore.shared.bullets)
+                        courseId: mode.courseId, distanceKm: plan.distanceKm,
+                        personalNotes: PersonalContextStore.shared.bullets)
                     built.jessicaLines = voices.jessica
                     built.homeLines = voices.home
                     RunEventLog.shared.record("race.pack.voices", "jessica \(voices.jessica.count), home \(voices.home.count)")
@@ -148,16 +155,16 @@ final class RacePackStore {
                     self.voicesError = error.localizedDescription
                 }
                 guard !Task.isCancelled else { return }
-                self.pack = built
-                try Self.save(built)
+                self.packs[mode] = built
+                try Self.save(built, mode)
                 RunEventLog.shared.record("race.pack.built", "\(built.lineCount) lines",
                                           data: ["scriptId": script.scriptId, "model": script.model])
                 let warmed = await self.render(pack: built, plan: plan)
                 guard !Task.isCancelled else { return }
                 built.warmedLines = warmed.done
                 built.totalLines = warmed.total
-                self.pack = built
-                try Self.save(built)
+                self.packs[mode] = built
+                try Self.save(built, mode)
                 self.phase = .idle
             } catch {
                 self.log.error("race pack build failed: \(error.localizedDescription, privacy: .public)")
@@ -197,30 +204,32 @@ final class RacePackStore {
         phase = .idle
     }
 
-    func delete() {
+    func delete(mode: RaceMode) {
         cancelBuild()
-        pack = nil
-        try? FileManager.default.removeItem(at: Self.fileURL)
+        packs[mode] = nil
+        try? FileManager.default.removeItem(at: Self.fileURL(mode))
     }
 
     // MARK: - Disk
 
-    private static var fileURL: URL {
+    /// The marathon keeps the original file name, so a pack built before the
+    /// split still loads.
+    private static func fileURL(_ mode: RaceMode) -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("race-pack.json")
+            .appendingPathComponent(mode == .actual ? "race-pack.json" : "race-pack-\(mode.rawValue).json")
     }
 
-    private static func load() -> RacePack? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+    private static func load(_ mode: RaceMode) -> RacePack? {
+        guard let data = try? Data(contentsOf: fileURL(mode)) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try? decoder.decode(RacePack.self, from: data)
     }
 
-    private static func save(_ pack: RacePack) throws {
+    private static func save(_ pack: RacePack, _ mode: RaceMode) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(pack).write(to: fileURL, options: .atomic)
+        try encoder.encode(pack).write(to: fileURL(mode), options: .atomic)
     }
 }
