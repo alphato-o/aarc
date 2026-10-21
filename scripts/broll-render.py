@@ -2,7 +2,7 @@
 """Render a captured run as the Control Room B-roll video.
 
     scripts/broll-render.py <captureDir> [--out file.mp4] [--start S --end S]
-                            [--fps 30] [--size 1920x1080] [--rate 2]
+                            [--fps 30] [--size 1920x1080] [--rate 10]
                             [--encoder auto|videotoolbox|x264] [--labels]
 
 Needs Python 3 with Pillow (pip install pillow) and ffmpeg/ffprobe on PATH
@@ -14,12 +14,15 @@ endedAt), or the --start/--end window in run seconds for previews. Video time
 zero is the run start (or --start), so the B-roll lines up with the A-roll on
 the voice lines, which are audible in both.
 
-Frame layout: map with the route trail and a moving dot on the left, race
-clock and live numbers top right, the Control Room feed and terminal below
-them, and a subtitle band for whatever is being spoken. The audio track is
-every voice line and talk-back clip mixed at the moment it played.
+Frame layout: the left 60% is the agent's Claude Code terminal during the run
+(the capture's `terminal` lane: prompts, replies typed out, tool calls with
+their commands, results, harness notifications, a thinking spinner), scrolling
+as it grew. The right 40% is the AARC view: race clock and Beijing time,
+distance, pace and HR, the map with the trail and a moving dot, the voice line
+being spoken, and the latest Control Room thread card. The audio track is every
+voice line and talk-back clip mixed at the moment it played.
 
-Frames are drawn at a low internal rate (--rate, default 2 per second) and
+Frames are drawn at an internal rate (--rate, default 10 per second) and
 piped raw to ffmpeg, which repeats them up to --fps. Map tiles come from the
 proxy (/maptile, AutoNavi, GCJ-02) and are cached in <captureDir>/tiles/; a
 tile that cannot be fetched is drawn as a dark grid instead.
@@ -181,6 +184,122 @@ class Face:
         return text.rstrip() + "..."
 
 
+class MonoFace:
+    """Monospace text with per-glyph fallback: SF Mono, Menlo, Apple Symbols, Hiragino."""
+
+    CHAIN = [(FONT_DIR / "SFNSMono.ttf", 0), (FONT_DIR / "Menlo.ttc", 0),
+             (FONT_DIR / "Apple Symbols.ttf", 0), (CJK, 0)]
+
+    def __init__(self, size, weight="Regular"):
+        self.fonts = []
+        for path, idx in self.CHAIN:
+            try:
+                f = ImageFont.truetype(str(path), size, index=idx)
+            except OSError:
+                continue
+            if path.name == "SFNSMono.ttf":
+                try:
+                    f.set_variation_by_name(weight)
+                except Exception:
+                    pass
+            if path == CJK and weight in ("Semibold", "Bold"):
+                try:
+                    f = ImageFont.truetype(str(path), size, index=2)
+                except OSError:
+                    pass
+            self.fonts.append(f)
+        self._notdef = [bytes(f.getmask("\ue000")) for f in self.fonts]
+        self._pick = {}
+        self.size = size
+        self.adv = self.fonts[0].getlength("M")
+
+    def font_for(self, ch):
+        i = self._pick.get(ch)
+        if i is None:
+            i = 0
+            if ord(ch) > 0x7e:
+                for n, f in enumerate(self.fonts):
+                    if bytes(f.getmask(ch)) != self._notdef[n]:
+                        i = n
+                        break
+            self._pick[ch] = i
+        return i
+
+    def runs(self, text):
+        out, cur, cur_i = [], "", None
+        for ch in text:
+            i = self.font_for(ch)
+            if cur and i != cur_i:
+                out.append((cur, cur_i))
+                cur = ""
+            cur += ch
+            cur_i = i
+        if cur:
+            out.append((cur, cur_i))
+        return out
+
+    def length(self, text):
+        if text.isascii():
+            return self.adv * len(text)
+        return sum(self.adv * len(r) if "\u23bf" in r and r.count("\u23bf") == len(r) else self.fonts[i].getlength(r)
+                   for r, i in self.runs(text))
+
+    def draw(self, draw, x, baseline, text, fill):
+        for run, i in self.runs(text):
+            if "\u23bf" in run:
+                # The result elbow: no mono font has it, so draw it on the cell grid.
+                for part in re.split("(\u23bf)", run):
+                    if part == "\u23bf":
+                        s, a = self.size, self.adv
+                        w = max(1, round(s / 14))
+                        draw.line([(x + a * 0.3, baseline - s * 0.78), (x + a * 0.3, baseline - s * 0.28),
+                                   (x + a * 1.0, baseline - s * 0.28)], fill=fill, width=w)
+                        x += a
+                    elif part:
+                        draw.text((x, baseline), part, font=self.fonts[i], fill=fill, anchor="ls")
+                        x += self.fonts[i].getlength(part)
+                continue
+            draw.text((x, baseline), run, font=self.fonts[i], fill=fill, anchor="ls")
+            x += self.fonts[i].getlength(run)
+        return x
+
+    def wrap(self, text, width):
+        """Hard-wrap at word boundaries by pixel width, keeping explicit newlines."""
+        out = []
+        for para in text.split("\n"):
+            para = para.replace("\t", "    ").rstrip()
+            if not para:
+                out.append("")
+                continue
+            cur = ""
+            for tok in re.findall(r"\s+|[^\s]+", para):
+                trial = cur + tok
+                if self.length(trial) <= width:
+                    cur = trial
+                    continue
+                if cur.strip():
+                    out.append(cur.rstrip())
+                    cur = "" if tok.isspace() else tok
+                else:
+                    cur = tok.lstrip() if not cur else trial
+                while self.length(cur) > width:
+                    cut = max(1, int(width / self.adv))
+                    while cut > 1 and self.length(cur[:cut]) > width:
+                        cut -= 1
+                    out.append(cur[:cut])
+                    cur = cur[cut:]
+            if cur.strip() or not out:
+                out.append(cur.rstrip())
+        return out
+
+    def fit(self, text, width):
+        if self.length(text) <= width:
+            return text
+        while text and self.length(text + "\u2026") > width:
+            text = text[:-1]
+        return text + "\u2026"
+
+
 # --- geo -------------------------------------------------------------------
 
 _A, _EE = 6378245.0, 0.00669342162296594323
@@ -310,39 +429,67 @@ class Series:
 
 # --- renderer --------------------------------------------------------------
 
+TERM_BG = (24, 24, 27)
+TERM_BAND = (48, 49, 56)
+TERM_HEAD = (36, 37, 42)
+T_TEXT = (228, 228, 231)
+T_DIM = (138, 138, 148)
+T_FAINT = (100, 100, 110)
+T_GREEN = (86, 196, 120)
+T_RED = (232, 100, 100)
+T_CORAL = (215, 119, 87)
+T_RESULT = (172, 172, 182)
+SPIN = "\u00b7\u2722\u2733\u2736\u273b\u2736\u2733\u2722"
+
+
+def strip_md(text):
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    text = re.sub(r"^#+\s*", "", text, flags=re.M)
+    return plain_keep_lines(text)
+
+
+def plain_keep_lines(text):
+    text = re.sub(r"[ \t]*(\u2014|\u2013)[ \t]*", ", ", text or "")
+    return "".join(c for c in text if ord(c) <= 0xFFFF)
+
+
 class Renderer:
-    def __init__(self, capture, manifest, recs, W, H, labels):
-        self.capture, self.W, self.H = capture, W, H
+    def __init__(self, capture, manifest, recs, W, H, labels, rate):
+        self.capture, self.W, self.H, self.rate = capture, W, H, rate
         k = self.k = H / 1080
         self.start_ms = ms_of(manifest["startedAt"])
         self.gate_ms = ms_of(manifest["gateAt"]) if manifest.get("gateAt") else None
         self.run_date = datetime.fromtimestamp(self.start_ms / 1000, BEIJING).strftime("%-d %b %Y").upper()
 
-        self.sub_h = round(150 * k)
-        self.map_w = round(W * 0.6)
-        self.map_h = H - self.sub_h
-        self.col_x = self.map_w
-        self.col_w = W - self.map_w
-        self.pad = round(28 * k)
-        self.stats_h = round(262 * k)
-        self.term_h = round(176 * k)
-        self.feed_y = self.stats_h
-        self.feed_h = self.map_h - self.stats_h - self.term_h
+        # Left: the agent's terminal. Right: the AARC view, stacked.
+        self.term_w = round(W * 0.6)
+        self.col_x = self.term_w
+        self.col_w = W - self.term_w
+        self.pad = round(26 * k)
+        self.stats_h = round(236 * k)
+        self.map_w = self.col_w
+        self.map_h = max(round(H * 0.5), round(540 * k))
+        self.map_y = self.stats_h
+        self.sub_y = self.map_y + self.map_h
+        self.sub_h = round(176 * k)
+        self.card_y = self.sub_y + self.sub_h
+        self.card_h = H - self.card_y
 
-        self.f_label = Face(round(15 * k), "Semibold")
-        self.f_clock = Face(round(84 * k), "Bold")
-        self.f_wall = Face(round(40 * k), "Medium")
-        self.f_num = Face(round(46 * k), "Semibold")
-        self.f_unit = Face(round(20 * k), "Medium")
-        self.f_head = Face(round(15 * k), "Bold")
-        self.f_time = Face(round(14 * k), "Regular", mono=True)
-        self.f_body = Face(round(21 * k), "Regular")
-        self.f_term = Face(round(14 * k), "Regular", mono=True)
-        self.f_sub = Face(round(36 * k), "Medium")
-        self.f_sub_lab = Face(round(17 * k), "Bold")
-        self.f_chip = Face(round(17 * k), "Semibold")
-        self.f_chip_small = Face(round(15 * k), "Regular")
+        self.f_label = Face(round(14 * k), "Semibold")
+        self.f_clock = Face(round(76 * k), "Bold")
+        self.f_wall = Face(round(34 * k), "Medium")
+        self.f_num = Face(round(42 * k), "Semibold")
+        self.f_unit = Face(round(18 * k), "Medium")
+        self.f_head = Face(round(14 * k), "Bold")
+        self.f_time = Face(round(13 * k), "Regular", mono=True)
+        self.f_card = Face(round(18 * k), "Regular")
+        self.f_sub = Face(round(27 * k), "Medium")
+        self.f_sub_lab = Face(round(15 * k), "Bold")
+        self.f_chip = Face(round(16 * k), "Semibold")
+        self.f_chip_small = Face(round(14 * k), "Regular")
         self.f_km = Face(round(13 * k), "Bold")
+        self.f_title = Face(round(15 * k), "Medium")
 
         self.metrics = [r for r in recs if r["lane"] == "metrics"]
         self.dist = Series(self.metrics, "distanceM")
@@ -352,12 +499,12 @@ class Renderer:
         self.place_ms = [r["ms"] for r in places]
         self.place_v = [r["detail"] for r in places]
 
-        self._setup_map(recs, labels)
-        self._setup_feed(recs)
-        self._setup_console(recs)
-        self._setup_subs(recs)
-        self._setup_chrome()
         self._cache = {}
+        self._setup_map(recs, labels)
+        self._setup_cards(recs)
+        self._setup_subs(recs)
+        self._setup_terminal(recs)
+        self._setup_chrome()
 
     # map
     def _setup_map(self, recs, labels):
@@ -517,18 +664,233 @@ class Renderer:
         s = str(km)
         self.f_km.draw(md, p[0] - self.f_km.length(s) / 2, p[1] + 5 * k, s, TEXT)
 
-    # feed
-    def _setup_feed(self, recs):
+    # terminal
+    def _setup_terminal(self, recs):
         k = self.k
+        self.mono = MonoFace(round(17 * k))
+        self.mono_b = MonoFace(round(17 * k), "Bold")
+        self.lh = round(25 * k)
+        self.tx = round(22 * k)
+        self.head_h = round(42 * k)
+        self.input_h = round(92 * k)
+        self.view_y = self.head_h + round(10 * k)
+        self.view_h = self.H - self.view_y - self.input_h
+        inner = self.term_w - 2 * self.tx
+        two = self.mono.length("  ")
+        four = self.mono.length("    ")
+        five = self.mono.length("  \u23bf  ")
+
+        terms = [r for r in recs if r["lane"] == "terminal"]
+        if not terms:
+            # Captures made before the terminal lane: fall back to the short console lane.
+            for r in recs:
+                if r["lane"] == "console" and r.get("text"):
+                    if r.get("kind") == "tool":
+                        name, _, desc = r["text"].partition(": ")
+                        terms.append({"ms": r["ms"], "kind": "tool", "name": name, "description": desc, "text": ""})
+                    else:
+                        terms.append({"ms": r["ms"], "kind": "assistant", "text": r["text"]})
+        self.thinks = sorted((r["ms"], r["ms"] + (r.get("durationS") or 1) * 1000)
+                             for r in terms if r.get("kind") == "thinking")
+        self.think_ms = [t[0] for t in self.thinks]
+
+        # Every line of the session, in order. A line is (segments, indent_px, band, chars),
+        # where chars > 0 marks a typed (assistant) line that reveals over time.
+        lines, entries = [], []
+        prev_kind = None
+        last_end = 0
+        for r in sorted((r for r in terms if r.get("kind") != "thinking"), key=lambda r: r["ms"]):
+            kind = r.get("kind")
+            text = r.get("text") or ""
+            block = []
+            if kind == "user":
+                body = self.mono.wrap(plain_keep_lines(text), inner - two)
+                for n, l in enumerate(body):
+                    block.append(([("> " if n == 0 else "  ", T_DIM), (l, T_TEXT)], 0, TERM_BAND, 0))
+            elif kind == "assistant":
+                body = self.mono.wrap(strip_md(text), inner - two)
+                for n, l in enumerate(body[:40]):
+                    block.append(([("\u25cf " if n == 0 else "  ", T_TEXT), (l, T_TEXT)], 0, None, max(1, len(l))))
+            elif kind == "tool":
+                name = r.get("name") or "Tool"
+                desc = plain(r.get("description") or "")
+                head = self.mono.fit(f"{name}({desc})" if desc else name, inner - two)
+                nm = head[:len(name)]
+                block.append(([("\u25cf ", T_GREEN), (nm, T_TEXT), (head[len(nm):], T_DIM)], 0, None, 0))
+                body = self.mono.wrap(plain_keep_lines(text), inner - four) if text else []
+                for l in body[:6]:
+                    block.append(([(l, T_FAINT)], four, None, 0))
+                if len(body) > 6:
+                    block.append(([(f"\u2026 +{len(body) - 6} lines", T_FAINT)], four, None, 0))
+            elif kind == "result":
+                col = T_RED if r.get("isError") else T_RESULT
+                raw = [l for l in plain_keep_lines(text).split("\n")]
+                while raw and not raw[-1].strip():
+                    raw.pop()
+                total = max(r.get("lines") or 0, len(raw))
+                shown = raw[:4] or ["(No content)"]
+                for n, l in enumerate(shown):
+                    pre = "  \u23bf  " if n == 0 else "     "
+                    block.append(([(pre, T_FAINT), (self.mono.fit(l.replace("\t", "  "), inner - five), col)], 0, None, 0))
+                if total > len(shown):
+                    block.append(([("     ", T_FAINT), (f"\u2026 +{total - len(shown)} lines", T_FAINT)], 0, None, 0))
+            elif kind == "harness":
+                t = plain(text)
+                t = t if t.startswith("[") else f"[{t}]"
+                body = self.mono.wrap(t, inner - two)
+                for l in body[:4]:
+                    block.append(([("  ", T_FAINT), (l, T_FAINT)], 0, None, 0))
+            else:
+                continue
+            if not block:
+                continue
+            gap = kind in ("user", "assistant", "tool") or (kind == "harness" and prev_kind not in ("harness", None))
+            if gap and lines:
+                block.insert(0, ([], 0, None, 0))
+            typed = sum(l[3] for l in block)
+            rate = max(70.0, typed / 2.6) if typed else 0
+            start = max(r["ms"], last_end)
+            dur = (typed / rate * 1000) if typed else 0
+            entries.append({"ms": start, "first": len(lines), "count": len(block), "rate": rate})
+            lines.extend(block)
+            last_end = start + dur
+            prev_kind = kind
+        self.tlines = lines
+        self.entries = entries
+        self.entry_ms = [e["ms"] for e in entries]
+        self.scroll = None
+        self._line_cache = {}
+        self._pane_key = None
+        self._pane = None
+
+    def _revealed(self, ms):
+        """(full lines shown, index of a partly typed line or -1, chars shown on it)."""
+        i = bisect.bisect_right(self.entry_ms, ms) - 1
+        if i < 0:
+            return 0, -1, 0
+        e = self.entries[i]
+        if not e["rate"]:
+            return e["first"] + e["count"], -1, 0
+        budget = (ms - e["ms"]) / 1000 * e["rate"]
+        n = e["first"]
+        for j in range(e["first"], e["first"] + e["count"]):
+            c = self.tlines[j][3]
+            if c == 0 or budget >= c:
+                budget -= c
+                n += 1
+                continue
+            return n, j, int(budget)
+        return n, -1, 0
+
+    def _line_img(self, j, chars=None):
+        key = (j, chars)
+        img = self._line_cache.get(key)
+        if img is not None:
+            return img
+        segs, indent, band, _ = self.tlines[j]
+        img = Image.new("RGB", (self.term_w, self.lh), band or TERM_BG)
+        d = ImageDraw.Draw(img)
+        x = self.tx + indent
+        base = round(self.lh * 0.74)
+        left = chars
+        for n, (text, col) in enumerate(segs):
+            if chars is not None and n == len(segs) - 1:
+                text = text[:left]
+            face = self.mono_b if (col == T_TEXT and n == 1 and segs[0][1] == T_GREEN) else self.mono
+            x = face.draw(d, x, base, text, col)
+        if chars is not None:
+            d.rectangle([x + 1, round(3 * self.k), x + round(9 * self.k), self.lh - round(4 * self.k)], fill=(200, 200, 205))
+        if len(self._line_cache) > 6000:
+            self._line_cache.clear()
+        self._line_cache[key] = img
+        return img
+
+    def _thinking(self, ms):
+        i = bisect.bisect_right(self.think_ms, ms) - 1
+        while i >= 0 and self.thinks[i][0] > ms - 120000:
+            if self.thinks[i][1] > ms:
+                return self.thinks[i][0]
+            i -= 1
+        return None
+
+    def _terminal(self, ms):
+        k = self.k
+        n, partial, chars = self._revealed(ms)
+        think = self._thinking(ms)
+        rows = n + (1 if partial >= 0 else 0) + (2 if think is not None else 0)
+        target = max(0.0, rows * self.lh - self.view_h + round(8 * k))
+        if self.scroll is None:
+            self.scroll = target
+        else:
+            self.scroll += (target - self.scroll) * (1 - math.exp(-(1 / self.rate) / 0.12))
+            if abs(target - self.scroll) < 0.5:
+                self.scroll = target
+        spin = None
+        if think is not None:
+            el = (ms - think) / 1000
+            spin = (SPIN[int(el * 8) % len(SPIN)], int(el))
+        sc = round(self.scroll)
+        key = (n, partial, chars, sc, spin)
+        if key == self._pane_key:
+            return self._pane
+        pane = Image.new("RGB", (self.term_w, self.view_h), TERM_BG)
+        first = max(0, sc // self.lh)
+        last_row = min(rows, (sc + self.view_h) // self.lh + 1)
+        for row in range(first, last_row):
+            y = row * self.lh - sc
+            if row < n:
+                pane.paste(self._line_img(row), (0, y))
+            elif row == n and partial >= 0:
+                pane.paste(self._line_img(partial, chars), (0, y))
+            elif spin is not None and row == rows - 1:
+                d = ImageDraw.Draw(pane)
+                text = f"{spin[0]} Thinking\u2026 ({spin[1]}s \u00b7 esc to interrupt)"
+                self.mono.draw(d, self.tx, y + round(self.lh * 0.74), text, T_CORAL)
+        self._pane_key, self._pane = key, pane
+        return pane
+
+    def _term_chrome(self, ms):
+        """Title bar and the input box; only the clock changes, once a second."""
+        k = self.k
+        wall = datetime.fromtimestamp(ms / 1000, BEIJING).strftime("%H:%M:%S")
+        key = ("tchrome", wall)
+        hit = self._cache.get(key)
+        if hit:
+            return hit
+        img = Image.new("RGB", (self.term_w, self.H), TERM_BG)
+        d = ImageDraw.Draw(img)
+        d.rectangle([0, 0, self.term_w, self.head_h], fill=TERM_HEAD)
+        d.line([(0, self.head_h), (self.term_w, self.head_h)], fill=(56, 57, 64), width=1)
+        r = round(6 * k)
+        for n, c in enumerate([(255, 95, 87), (254, 188, 46), (40, 200, 64)]):
+            cx, cy = round(24 * k) + n * round(20 * k), self.head_h // 2
+            d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=c)
+        title = "claude \u00b7 ~/Dev/ccplayground/aarc \u00b7 Opus 5.5"
+        base = self.head_h // 2 + round(5 * k)
+        self.f_title.draw(d, (self.term_w - self.f_title.length(title)) / 2, base, title, (196, 196, 204))
+        clock = f"Beijing {wall}"
+        self.mono.draw(d, self.term_w - round(20 * k) - self.mono.length(clock), base, clock, (196, 196, 204))
+        y0 = self.H - self.input_h + round(10 * k)
+        y1 = y0 + round(46 * k)
+        d.rounded_rectangle([self.tx - round(6 * k), y0, self.term_w - self.tx + round(6 * k), y1],
+                            radius=round(8 * k), outline=(86, 87, 96), width=max(1, round(1.5 * k)))
+        self.mono.draw(d, self.tx + round(8 * k), y0 + round(30 * k), ">", T_DIM)
+        self.mono.draw(d, self.tx + round(8 * k), y1 + round(24 * k),
+                       "\u25b8\u25b8 bypass permissions on \u00b7 live run watcher armed", T_FAINT)
+        if len(self._cache) > 600:
+            self._cache.clear()
+        self._cache[key] = img
+        return img
+
+    # control room cards
+    def _setup_cards(self, recs):
         talk_texts = {plain(r["text"])[:60] for r in recs if r["lane"] == "talkback" and r.get("text")}
         items = []
-        screen_by_text = {}
         for r in recs:
-            lane = r["lane"]
-            if lane == "talkback" and r.get("text"):
-                items.append({"ms": r["ms"], "label": RUNNER[0] + "  \u00b7  TALK-BACK", "color": RUNNER[1], "text": plain(r["text"])})
-                r["_feed"] = len(items) - 1
-            elif lane == "screen" and r.get("text"):
+            if r["lane"] == "talkback" and r.get("text"):
+                items.append({"ms": r["ms"], "label": RUNNER[0] + "  \u00b7  TALK-BACK", "color": RUNNER[1],
+                              "text": plain(r["text"])})
+            elif r["lane"] == "screen" and r.get("text"):
                 txt = plain(r["text"])
                 if r.get("role") == "user":
                     if txt[:60] in talk_texts:
@@ -536,101 +898,40 @@ class Renderer:
                     label, color = RUNNER
                 else:
                     label, color = CONTROL
-                items.append({"ms": r["ms"], "label": label, "color": color, "text": txt})
-                screen_by_text[clean_speech(txt)[:60]] = len(items) - 1
-            elif lane == "voice" and r.get("text"):
-                txt = clean_speech(r["text"])
-                if not txt:
-                    continue
-                prior = screen_by_text.get(txt[:60])
-                if prior is not None and items[prior]["ms"] <= r["ms"]:
-                    r["_feed"] = prior
-                    continue
-                label, color = SPEAKERS.get(r.get("speaker"), (str(r.get("speaker", "VOICE")).upper(), MUTED))
-                items.append({"ms": r["ms"], "label": label, "color": color, "text": txt, "voice": True})
-                r["_feed"] = len(items) - 1
-            elif lane == "event" and str(r.get("type", "")).startswith("race.") and r.get("detail"):
-                items.append({"ms": r["ms"], "label": RACE[0], "color": RACE[1], "text": plain(r["detail"]).capitalize()})
-        inner = self.col_w - 2 * self.pad - round(46 * k)
+                items.append({"ms": r["ms"], "label": "CONTROL ROOM THREAD  \u00b7  " + label if label != CONTROL[0]
+                              else "CONTROL ROOM", "color": color, "text": txt})
+        inner = self.col_w - 2 * self.pad - round(26 * self.k)
         for it in items:
-            it["lines"] = self.f_body.wrap(it["text"], inner, max_lines=5)
-            it["h"] = round(52 * k) + len(it["lines"]) * round(28 * k)
+            it["lines"] = self.f_card.wrap(it["text"], inner, max_lines=2)
             it["clock"] = datetime.fromtimestamp(it["ms"] / 1000, BEIJING).strftime("%H:%M:%S")
-        order = sorted(range(len(items)), key=lambda i: items[i]["ms"])
-        remap = {old: new for new, old in enumerate(order)}
-        self.items = [items[i] for i in order]
-        for r in recs:
-            if "_feed" in r:
-                r["_feed"] = remap[r["_feed"]]
-        self.item_ms = [it["ms"] for it in self.items]
+        items.sort(key=lambda it: it["ms"])
+        self.items = items
+        self.item_ms = [it["ms"] for it in items]
 
-    def _feed(self, ms, playing):
+    def _card(self, ms, playing):
         last = bisect.bisect_right(self.item_ms, ms) - 1
-        key = ("feed", last, playing)
+        # Skip a card that only repeats the line being spoken in the subtitle box.
+        while last >= 0 and playing and self.items[last]["text"][:50] == playing[:50]:
+            last -= 1
+        key = ("card", last)
         if key in self._cache:
             return self._cache[key]
-        k, w, h = self.k, self.col_w, self.feed_h
+        k, w, h = self.k, self.col_w, self.card_h
         img = Image.new("RGB", (w, h), PANEL)
         d = ImageDraw.Draw(img)
-        y = h - round(16 * k)
-        gap = round(12 * k)
-        x0, x1 = self.pad, w - self.pad
-        i = last
-        while i >= 0 and y > 0:
-            it = self.items[i]
-            top = y - it["h"]
-            hot = i == playing
-            d.rounded_rectangle([x0, top, x1, y], radius=round(10 * k), fill=CARD_HOT if hot else CARD)
-            d.rounded_rectangle([x0, top, x0 + round(5 * k), y], radius=round(3 * k), fill=it["color"])
-            tx = x0 + round(22 * k)
-            hx = self.f_head.draw(d, tx, top + round(30 * k), it["label"], it["color"])
-            if hot:
-                cx, cy = hx + round(14 * k), top + round(25 * k)
-                s = round(6 * k)
-                d.polygon([(cx, cy - s), (cx, cy + s), (cx + s * 1.6, cy)], fill=it["color"])
-            self.f_time.draw(d, x1 - round(16 * k) - self.f_time.length(it["clock"]), top + round(30 * k), it["clock"], DIM)
-            by = top + round(30 * k) + round(30 * k)
+        if last >= 0:
+            it = self.items[last]
+            x0, x1 = self.pad, w - self.pad
+            top, bot = round(6 * k), h - round(14 * k)
+            d.rounded_rectangle([x0, top, x1, bot], radius=round(10 * k), fill=CARD)
+            d.rounded_rectangle([x0, top, x0 + round(5 * k), bot], radius=round(3 * k), fill=it["color"])
+            tx = x0 + round(20 * k)
+            self.f_head.draw(d, tx, top + round(26 * k), it["label"], it["color"])
+            self.f_time.draw(d, x1 - round(14 * k) - self.f_time.length(it["clock"]), top + round(26 * k), it["clock"], DIM)
+            by = top + round(54 * k)
             for line in it["lines"]:
-                self.f_body.draw(d, tx, by, line, TEXT if (hot or not it.get("voice")) else (205, 211, 222))
-                by += round(28 * k)
-            y = top - gap
-            i -= 1
-        fade = Image.linear_gradient("L").resize((w, round(110 * k))).transpose(Image.FLIP_TOP_BOTTOM)
-        img.paste(PANEL, (0, 0, w, fade.height), fade)
-        if len(self._cache) > 400:
-            self._cache.clear()
-        self._cache[key] = img
-        return img
-
-    # console
-    def _setup_console(self, recs):
-        self.console = []
-        for r in recs:
-            if r["lane"] == "console" and r.get("text"):
-                first = plain(r["text"].strip().splitlines()[0])
-                self.console.append((r["ms"], r.get("kind"), first))
-        self.console_ms = [c[0] for c in self.console]
-
-    def _terminal(self, ms):
-        last = bisect.bisect_right(self.console_ms, ms) - 1
-        key = ("term", last)
-        if key in self._cache:
-            return self._cache[key]
-        k, w, h = self.k, self.col_w, self.term_h
-        img = Image.new("RGB", (w, h), PANEL)
-        d = ImageDraw.Draw(img)
-        x0, x1 = self.pad, w - self.pad
-        d.rounded_rectangle([x0, round(6 * k), x1, h - round(18 * k)], radius=round(10 * k), fill=(8, 11, 16), outline=RULE)
-        self.f_label.draw(d, x0 + round(18 * k), round(32 * k), "CONTROL ROOM TERMINAL", DIM)
-        lh = round(22 * k)
-        rows = (h - round(70 * k)) // lh
-        lines = self.console[max(0, last - rows + 1): last + 1] if last >= 0 else []
-        y = round(32 * k) + round(30 * k)
-        width = x1 - x0 - round(36 * k)
-        for _, kind, text in lines:
-            pre, col = ("$ ", TERM) if kind == "tool" else ("  ", (196, 202, 212))
-            self.f_term.draw(d, x0 + round(18 * k), y, self.f_term.fit(pre + text, width), col)
-            y += lh
+                self.f_card.draw(d, tx, by, line, TEXT)
+                by += round(25 * k)
         self._cache[key] = img
         return img
 
@@ -649,13 +950,12 @@ class Renderer:
             if not txt:
                 continue
             dur = r.get("durationS") or min(20.0, max(2.0, len(txt) / 15))
-            subs.append({"ms": r["ms"], "end": r["ms"] + dur * 1000, "label": label, "color": color,
-                         "text": txt, "feed": r.get("_feed")})
+            subs.append({"ms": r["ms"], "end": r["ms"] + dur * 1000, "label": label, "color": color, "text": txt})
         self.subs = subs
-        width = self.W - 2 * round(60 * self.k)
+        width = self.col_w - 2 * self.pad - round(22 * self.k)
         for s in subs:
             lines = self.f_sub.wrap(s["text"], width)
-            s["pages"] = [lines[i:i + 2] for i in range(0, len(lines), 2)] or [[""]]
+            s["pages"] = [lines[i:i + 3] for i in range(0, len(lines), 3)] or [[""]]
             chars = [sum(len(l) for l in p) for p in s["pages"]]
             total = sum(chars) or 1
             acc, s["cuts"] = 0, []
@@ -672,29 +972,30 @@ class Renderer:
             i -= 1
         return None
 
-    def _subtitle(self, ms, si):
-        if si is None:
-            page = 0
-        else:
+    def _subtitle(self, ms):
+        si = self._active_sub(ms)
+        page = 0
+        if si is not None:
             s = self.subs[si]
             prog = (ms - s["ms"]) / max(1, s["end"] - s["ms"])
             page = next((n for n, c in enumerate(s["cuts"]) if prog < c), len(s["cuts"]) - 1)
         key = ("sub", si, page)
         if key in self._cache:
             return self._cache[key]
-        k, w, h = self.k, self.W, self.sub_h
-        img = Image.new("RGB", (w, h), (6, 8, 12))
+        k, w, h = self.k, self.col_w, self.sub_h
+        img = Image.new("RGB", (w, h), (8, 10, 15))
         d = ImageDraw.Draw(img)
-        d.line([(0, 0), (w, 0)], fill=RULE, width=max(1, round(2 * k)))
-        x = round(60 * k)
+        x = self.pad + round(16 * k)
         if si is not None:
             s = self.subs[si]
-            d.rectangle([x - round(22 * k), round(26 * k), x - round(16 * k), h - round(24 * k)], fill=s["color"])
-            self.f_sub_lab.draw(d, x, round(42 * k), s["label"], s["color"])
-            y = round(42 * k) + round(46 * k)
+            d.rectangle([self.pad, round(18 * k), self.pad + round(5 * k), h - round(18 * k)], fill=s["color"])
+            self.f_sub_lab.draw(d, x, round(38 * k), s["label"], s["color"])
+            y = round(38 * k) + round(38 * k)
             for line in s["pages"][page]:
                 self.f_sub.draw(d, x, y, line, TEXT)
-                y += round(44 * k)
+                y += round(34 * k)
+        else:
+            self.f_sub_lab.draw(d, x, round(38 * k), "ON AIR", (60, 68, 82))
         self._cache[key] = img
         return img
 
@@ -703,7 +1004,7 @@ class Renderer:
         k = self.k
         img = Image.new("RGB", (self.W, self.H), PANEL)
         d = ImageDraw.Draw(img)
-        d.line([(self.col_x, 0), (self.col_x, self.map_h)], fill=RULE, width=max(1, round(2 * k)))
+        d.line([(self.col_x, 0), (self.col_x, self.H)], fill=RULE, width=max(1, round(2 * k)))
         self.chrome = img
 
     def _stats(self, ms):
@@ -731,18 +1032,18 @@ class Renderer:
         img = Image.new("RGB", (w, h), PANEL)
         d = ImageDraw.Draw(img)
         x0, x1 = self.pad, w - self.pad
-        self.f_label.draw(d, x0, round(40 * k), label, MUTED)
-        self.f_clock.draw(d, x0 - round(3 * k), round(122 * k), clock, TEXT)
-        self.f_label.draw(d, x1 - self.f_label.length("BEIJING"), round(40 * k), "BEIJING", MUTED)
-        self.f_wall.draw(d, x1 - self.f_wall.length(wall), round(92 * k), wall, (196, 204, 216))
-        d.line([(x0, round(150 * k)), (x1, round(150 * k))], fill=RULE, width=max(1, round(2 * k)))
+        self.f_label.draw(d, x0, round(36 * k), label, MUTED)
+        self.f_clock.draw(d, x0 - round(3 * k), round(110 * k), clock, TEXT)
+        self.f_label.draw(d, x1 - self.f_label.length("BEIJING"), round(36 * k), "BEIJING", MUTED)
+        self.f_wall.draw(d, x1 - self.f_wall.length(wall), round(84 * k), wall, (196, 204, 216))
+        d.line([(x0, round(134 * k)), (x1, round(134 * k))], fill=RULE, width=max(1, round(2 * k)))
         cols = [("DISTANCE", dist, "km"), ("PACE", pace, "/km"), ("HEART RATE", hr, "bpm")]
         cw = (x1 - x0) / 3
         for n, (lab, val, unit) in enumerate(cols):
             cx = x0 + n * cw
-            self.f_label.draw(d, cx, round(184 * k), lab, MUTED)
-            vx = self.f_num.draw(d, cx, round(238 * k), val, TEXT if n != 2 else (255, 120, 120))
-            self.f_unit.draw(d, vx + round(6 * k), round(238 * k), unit, MUTED)
+            self.f_label.draw(d, cx, round(166 * k), lab, MUTED)
+            vx = self.f_num.draw(d, cx, round(214 * k), val, TEXT if n != 2 else (255, 120, 120))
+            self.f_unit.draw(d, vx + round(6 * k), round(214 * k), unit, MUTED)
         self._cache[key] = img
         return img
 
@@ -753,31 +1054,33 @@ class Renderer:
         if key in self._cache:
             return self._cache[key]
         k = self.k
-        title = "AARC  \u00b7  CONTROL ROOM"
-        sub = "  \u00b7  ".join(x for x in (place, self.run_date) if x)
-        w = round(max(self.f_chip.length(title), self.f_chip_small.length(sub)) + 48 * k)
-        h = round(78 * k)
+        title = "AARC  \u00b7  " + self.run_date
+        sub = place or "outdoor run"
+        w = round(min(self.map_w - 40 * k, max(self.f_chip.length(title), self.f_chip_small.length(sub)) + 48 * k))
+        sub = self.f_chip_small.fit(sub, w - 40 * k)
+        h = round(66 * k)
         img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=round(12 * k), fill=(8, 11, 16, 215), outline=RULE + (255,))
-        d.ellipse([round(20 * k), round(22 * k), round(30 * k), round(32 * k)], fill=TRAIL + (255,))
-        self.f_chip.draw(d, round(40 * k), round(33 * k), title, TEXT)
-        self.f_chip_small.draw(d, round(20 * k), round(60 * k), sub, MUTED)
+        d.rounded_rectangle([0, 0, w - 1, h - 1], radius=round(10 * k), fill=(8, 11, 16, 215), outline=RULE + (255,))
+        d.ellipse([round(18 * k), round(18 * k), round(27 * k), round(27 * k)], fill=TRAIL + (255,))
+        self.f_chip.draw(d, round(36 * k), round(29 * k), title, TEXT)
+        self.f_chip_small.draw(d, round(18 * k), round(52 * k), sub, MUTED)
         self._cache[key] = img
         return img
 
     def frame(self, ms):
         img = self.chrome.copy()
+        img.paste(self._term_chrome(ms), (0, 0))
+        img.paste(self._terminal(ms), (0, self.view_y))
         m = self._map_frame(ms)
         chip = self._chip(ms)
-        m.paste(chip, (round(24 * self.k), round(24 * self.k)), chip)
-        img.paste(m, (0, 0))
-        img.paste(self._stats(ms), (self.col_x + 1, 0))
+        m.paste(chip, (round(16 * self.k), round(16 * self.k)), chip)
+        x = self.col_x + 1
+        img.paste(self._stats(ms), (x, 0))
+        img.paste(m, (x, self.map_y))
+        img.paste(self._subtitle(ms), (x, self.sub_y))
         si = self._active_sub(ms)
-        playing = self.subs[si]["feed"] if si is not None else None
-        img.paste(self._feed(ms, playing), (self.col_x + 1, self.feed_y))
-        img.paste(self._terminal(ms), (self.col_x + 1, self.feed_y + self.feed_h))
-        img.paste(self._subtitle(ms, si), (0, self.map_h))
+        img.paste(self._card(ms, self.subs[si]["text"] if si is not None else None), (x, self.card_y))
         return img
 
 
@@ -854,7 +1157,7 @@ def main():
     ap.add_argument("--end", type=float, help="window end, seconds since run start")
     ap.add_argument("--fps", type=float, default=30)
     ap.add_argument("--size", default="1920x1080")
-    ap.add_argument("--rate", type=float, default=2, help="frames drawn per second of video (ffmpeg repeats them)")
+    ap.add_argument("--rate", type=float, default=10, help="frames drawn per second of video (ffmpeg repeats them)")
     ap.add_argument("--encoder", default="auto", choices=["auto", "videotoolbox", "x264"])
     ap.add_argument("--labels", action="store_true", help="map tiles with (Chinese) street labels")
     args = ap.parse_args()
@@ -877,7 +1180,7 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
 
     wall0 = time.time()
-    r = Renderer(capture, manifest, recs, W, H, args.labels)
+    r = Renderer(capture, manifest, recs, W, H, args.labels, args.rate)
     print(f"map: {len(r.fixes)} fixes, tiles {r.tiles_ok}/{r.tiles_total}"
           + (f", zoom {r.zoom:.2f}" if r.tiles_total else ""), file=sys.stderr)
 
