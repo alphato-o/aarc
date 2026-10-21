@@ -152,9 +152,16 @@ final class ControlRoomRecorder: NSObject {
         // engine failed with 'what' on 19 Oct and cut Ricky's opener.
         VoiceFeedbackQueue.shared.interruptCurrent()
         RemoteTTS.shared.resetEngine()
+        BackgroundAudioKeepalive.shared.stop()
 
         let session = AVAudioSession.sharedInstance()
         var steps: [String] = []
+        // Since build 229 the run holds the session open between lines. iOS
+        // refuses to turn an open session into a recording one from the
+        // background ('!int', three talk-backs on the 21 Oct desk test), so
+        // close it first; the mixable open below is allowed from background.
+        do { try session.setActive(false); steps.append("closed") }
+        catch { steps.append("close refused \(Self.code(error))") }
         do {
             // A background app may only activate a MIXABLE session (device,
             // build 209: a non-mixable one failed with "session activation

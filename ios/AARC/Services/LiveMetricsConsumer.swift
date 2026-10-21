@@ -157,6 +157,10 @@ final class LiveMetricsConsumer {
         // row at 0 m). The camera director and the live channel already run
         // from ingestStarted, so the corral is still on the record.
         if metrics.awaitingGate == true {
+            // A tick sent just before the gate press can land after it (21 Oct
+            // desk test: corral again for 13 s, "Gate" said twice). Once
+            // crossed, never back in the corral: drop the stale tick.
+            if gateCrossedAt != nil { return }
             if !awaitingGate {
                 awaitingGate = true
                 RunEventLog.shared.record("race.corral", "session live in the corral; race clock held")
