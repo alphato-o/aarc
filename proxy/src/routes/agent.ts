@@ -48,7 +48,7 @@ interface SendBody {
 
 /// "over and out" is the spoken send, not part of the message.
 const STOP_PHRASE = /[\s,.;:!?-]*\bover\s*(?:and|&|an|n|in)\s*out\b[\s.!?]*$/i;
-interface ReplyBody { text?: string; speak?: boolean; runId?: string; voiceId?: string }
+interface ReplyBody { text?: string; speak?: boolean; runId?: string; voiceId?: string; force?: boolean }
 
 /// Home Base's voice (Kristen). Same id the phone uses for its local lines.
 const HOME_VOICE_ID = "Awx8TeMHHpDzbm42nIB6";
@@ -161,7 +161,15 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
         const answered = await env.DB
             .prepare("SELECT text FROM agent_thread WHERE role='agent' AND id > ? AND source IN ('spoken','auto') ORDER BY id LIMIT 1")
             .bind(said.id).first<{ text: string }>();
-        if (answered) return json({ ok: true, text: answered.text, already: true });
+        if (answered) {
+            // The phone speaks it from this reply, so the queued copy must not
+            // reach it as well (19 Oct: the same answer played twice).
+            if (said.run_id) {
+                await env.DB.prepare("UPDATE live_inject SET consumed_at = datetime('now') WHERE run_id = ? AND text = ? AND consumed_at IS NULL")
+                    .bind(said.run_id, answered.text.slice(0, 1200)).run();
+            }
+            return json({ ok: true, text: answered.text, already: true });
+        }
         const recent = await env.DB
             .prepare("SELECT text FROM agent_thread WHERE role='agent' ORDER BY id DESC LIMIT 4").all<{ text: string }>();
         try {
@@ -236,8 +244,21 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
         const text = (b.text ?? "").trim().slice(0, 8000);
         if (!text) return json({ ok: false, error: "text required" }, 400);
         let spokenTo: string | null = null;
+        let suppressed: string | null = null;
         if (b.speak) {
             spokenTo = typeof b.runId === "string" && b.runId ? b.runId : await latestRunId(env);
+            // His last line already got the watchdog's answer: a second spoken
+            // answer to one question is the 19 Oct double. Thread only,
+            // unless the agent insists.
+            if (spokenTo && !b.force) {
+                const lastSaid = await env.DB
+                    .prepare("SELECT id FROM agent_thread WHERE role='user' AND run_id = ? ORDER BY id DESC LIMIT 1")
+                    .bind(spokenTo).first<{ id: number }>();
+                const auto = lastSaid && await env.DB
+                    .prepare("SELECT id FROM agent_thread WHERE role='agent' AND source='auto' AND id > ? LIMIT 1")
+                    .bind(lastSaid.id).first<{ id: number }>();
+                if (auto) { suppressed = "the watchdog already answered his last line"; spokenTo = null; }
+            }
             if (spokenTo) {
                 const voiceId = typeof b.voiceId === "string" && b.voiceId ? b.voiceId : HOME_VOICE_ID;
                 await env.DB.prepare("INSERT INTO live_inject (run_id, text, voice_id) VALUES (?, ?, ?)")
@@ -247,8 +268,8 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
         const r = await env.DB.prepare("INSERT INTO agent_thread (role, text, source, run_id) VALUES ('agent', ?, ?, ?)")
             // "spoken" even with no run: off-run the phone waits on the thread
             // for this row and plays it (founder, 2026-10-17).
-            .bind(text, b.speak ? "spoken" : null, spokenTo).run();
-        return json({ ok: true, id: r.meta.last_row_id, spokenTo });
+            .bind(text, b.speak && !suppressed ? "spoken" : null, spokenTo).run();
+        return json({ ok: true, id: r.meta.last_row_id, spokenTo, suppressed });
     }
 
     if (request.method === "GET" && p === "/agent/inbox") {
