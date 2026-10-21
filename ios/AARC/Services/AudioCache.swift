@@ -22,7 +22,23 @@ actor AudioCache {
         var noBackup = URLResourceValues(); noBackup.isExcludedFromBackup = true
         try? pinnedDir.setResourceValues(noBackup)
         self.pinned = pinnedDir
+        // A new render (model or bitrate) makes every file on disk stale:
+        // clear both folders once so nothing old is ever played again.
+        let defaults = UserDefaults.standard
+        if defaults.string(forKey: Self.renderVersionKey) != Self.renderVersion {
+            for dir in [directory, pinnedDir] {
+                try? FileManager.default.removeItem(at: dir)
+                try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
+            try? pinnedDir.setResourceValues(noBackup)
+            defaults.set(Self.renderVersion, forKey: Self.renderVersionKey)
+        }
     }
+
+    /// Bump with the server's TTS model or format (proxy/src/lib/elevenlabs.ts).
+    /// Since 21 Oct 2026: Eleven v4 at 64 kbps.
+    nonisolated static let renderVersion = "v4-64"
+    private static let renderVersionKey = "aarc.audioRenderVersion"
 
     /// Keep this entry where iOS cannot purge it. True if it is now pinned.
     @discardableResult
@@ -41,7 +57,7 @@ actor AudioCache {
     /// Stable hash key. Uses SHA-256 over `voiceId\u{1}text` so that
     /// changing either invalidates the entry.
     nonisolated static func key(voiceId: String, text: String) -> String {
-        let combined = "\(voiceId)\u{1}\(text)"
+        let combined = "\(renderVersion)\u{1}\(voiceId)\u{1}\(text)"
         let digest = SHA256.hash(data: Data(combined.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
