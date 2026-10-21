@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { callElevenLabs, ElevenLabsError, TTS_OUTPUT_FORMAT } from "../lib/elevenlabs";
+import { callElevenLabs, ElevenLabsError, TTS_MODEL, TTS_OUTPUT_FORMAT } from "../lib/elevenlabs";
 
 export interface Env {
     ELEVENLABS_API_KEY?: string;
@@ -26,7 +26,8 @@ async function ttsCacheKey(req: {
     text: string; voiceId: string; modelId?: string;
     stability?: number; similarityBoost?: number; style?: number;
 }): Promise<string> {
-    const sig = [req.voiceId, req.modelId ?? "", req.stability ?? "",
+    // The effective model, so a model switch never serves the old model's audio.
+    const sig = [req.voiceId, req.modelId ?? TTS_MODEL, req.stability ?? "",
                  req.similarityBoost ?? "", req.style ?? "", req.text].join("");
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sig));
     const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");

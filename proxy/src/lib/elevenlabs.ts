@@ -40,16 +40,19 @@ export interface ElevenLabsParams {
     baseUrl?: string;
 }
 
-/// 32 kbps mono at the same 44.1 kHz the phone already plays: a quarter of
-/// the 128 kbps default. On 19 Oct the phone's link moved about 10 KB/s.
-export const TTS_OUTPUT_FORMAT = "mp3_44100_32";
+/// 64 kbps mono: half the 128 kbps default for a thin China link (about
+/// 10 KB/s on 19 Oct). 32 kbps was tried on 21 Oct and sounded bad.
+export const TTS_OUTPUT_FORMAT = "mp3_44100_64";
+/// Eleven v4 since 21 Oct 2026: "subtly better" by ear, and the prompts now
+/// write v4 direction tags.
+export const TTS_MODEL = "eleven_v4";
 
 export async function callElevenLabs(params: ElevenLabsParams): Promise<ArrayBuffer> {
     const base = (params.baseUrl || DEFAULT_ELEVENLABS_BASE).replace(/\/+$/, "");
     const url = `${base}/text-to-speech/${encodeURIComponent(params.voiceId)}?output_format=${TTS_OUTPUT_FORMAT}`;
     const body = {
         text: params.text,
-        model_id: params.modelId ?? "eleven_v3",
+        model_id: params.modelId ?? TTS_MODEL,
         voice_settings: {
             stability: params.stability ?? 0.5,
             similarity_boost: params.similarityBoost ?? 0.75,

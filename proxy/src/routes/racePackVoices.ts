@@ -93,7 +93,7 @@ function jessicaPrompt(course: Course, notes: string[]): string {
     lines.push("1. 36 lines. Sparse early, dense late: about 8 across km 1-14, 12 across km 15-28, 16 across km 29-42. Never two on the same km.");
     lines.push("2. Most lines hang on the place at their km (a street, a landmark, the river, a station); the rest on the state of him at that point of a marathon. Never state his pace, heart rate or time: you cannot see them.");
     lines.push("3. One to three sentences, at most ~260 characters. Every line a different angle, image and opening.");
-    lines.push("4. At most a third carry one audio tag ([sighs]/[laughs]/[chuckles]/[exhales]).");
+    lines.push("4. Most lines carry one ElevenLabs v4 tag before the phrase it colours: a sound ([sighs] [soft laugh] [exhales]), an emotion ([teasing] [amused]) or a short delivery direction ([low, unhurried] [pause, savouring it]). Vary them; never a whisper.");
     lines.push("5. Follow your run arc by km: pure contempt early; from about km 25 still cruel but grudging; past km 32 warmer under the ice, the reward feeling closer.");
     lines.push("6. No em-dashes.");
     lines.push("");
@@ -133,7 +133,7 @@ function jessicaTrainingPrompt(km: number, notes: string[]): string {
     lines.push(`1. ${count} lines across km 1-${km}, denser in the second half. Never two on the same km.`);
     lines.push("2. Never state his pace, heart rate or time: you cannot see them.");
     lines.push("3. One to three sentences, at most ~260 characters. Every line a different angle, image and opening.");
-    lines.push("4. At most a third carry one audio tag ([sighs]/[laughs]/[chuckles]/[exhales]).");
+    lines.push("4. Most lines carry one ElevenLabs v4 tag before the phrase it colours: a sound ([sighs] [soft laugh] [exhales]), an emotion ([teasing] [amused]) or a short delivery direction ([low, unhurried] [pause, savouring it]). Vary them; never a whisper.");
     lines.push("5. Contempt early, grudging past halfway, warmer under the ice in the last quarter.");
     lines.push("6. No em-dashes.");
     lines.push("");
