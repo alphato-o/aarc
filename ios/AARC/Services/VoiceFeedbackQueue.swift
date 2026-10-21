@@ -128,6 +128,21 @@ final class VoiceFeedbackQueue {
         didSet { if oldValue && !held { kickNext() } }
     }
 
+    /// After he talks to Control Room the floor is the answer's (founder,
+    /// 21 Oct: "I am taking the timeline"). Ricky and Jessica wait until a
+    /// Home Base line has played, or this passes with no answer.
+    private var yieldUntil: Date?
+
+    func yieldToControlRoom(seconds: TimeInterval = 60) {
+        yieldUntil = Date().addingTimeInterval(seconds)
+        RunEventLog.shared.record("voice.yield", "coaches wait for Control Room's answer",
+                                  data: ["pending": String(pending.count)])
+    }
+
+    private static func mayTalkDuringYield(_ item: VoiceItem) -> Bool {
+        item.priority >= .milestone || item.source.hasPrefix("home")
+    }
+
     private(set) var currentlyPlaying: VoiceItem?
     private(set) var pending: [VoiceItem] = []
     /// Time the last item began playing (announcement included). UI uses this
@@ -408,6 +423,15 @@ final class VoiceFeedbackQueue {
             scheduleSessionDeactivate()
             return
         }
+        if let until = yieldUntil, Date() < until, !Self.mayTalkDuringYield(next) {
+            pending.insert(next, at: 0)
+            if let i = pending.firstIndex(where: { Self.mayTalkDuringYield($0) && !$0.isStale() }) {
+                startPlaying(pending.remove(at: i))
+            } else {
+                scheduleGapKick(after: until.timeIntervalSinceNow)
+            }
+            return
+        }
         // RADIO PACING: non-milestone lines wait until enough music has
         // played since the last line ended. Milestones (km splits / finish)
         // bypass — they have to land on the marker. This is what gives the
@@ -573,6 +597,9 @@ final class VoiceFeedbackQueue {
             // Subtitle now enters dwell window (still on screen, audio
             // done) so the user can hit heart.
             LiveSubtitleStore.shared.finishedPlaying(item)
+            // The answer has been heard: the coaches get the floor back, after
+            // the usual music gap.
+            if item.source.hasPrefix("home"), self.yieldUntil != nil { self.yieldUntil = nil }
             self.dispatched += 1
             self.currentlyPlaying = nil
             // Mark the start of the music breathing-room gap.

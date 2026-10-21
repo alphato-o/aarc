@@ -282,6 +282,8 @@ final class ControlRoomRecorder: NSObject {
             BackgroundAudioKeepalive.shared.stop()
             BackgroundAudioKeepalive.shared.start()
         }
+        // Only a line that is actually going out waits for an answer.
+        if send, duration >= 1, spoke || !requireSpeech { VoiceFeedbackQueue.shared.yieldToControlRoom() }
         VoiceFeedbackQueue.shared.held = false
         let session = AVAudioSession.sharedInstance()
         ControlRoomChannel.shared.diag("talkback handback: deactivate=\(deactivate) settled=\(settled) cat=\(session.category.rawValue) out=\(session.currentRoute.outputs.first?.portType.rawValue ?? "none")")

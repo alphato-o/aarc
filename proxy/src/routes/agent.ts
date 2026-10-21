@@ -162,6 +162,14 @@ export async function agentHandler(request: Request, url: URL, env: AgentEnv): P
             .prepare("SELECT text FROM agent_thread WHERE role='agent' AND id > ? AND source IN ('spoken','auto') ORDER BY id LIMIT 1")
             .bind(said.id).first<{ text: string }>();
         if (answered) {
+            // The phone already collected it as a live line: replaying it is
+            // the double (21 Oct desk test, a resent talk-back re-armed the
+            // phone's watchdog). Nothing to say.
+            if (said.run_id) {
+                const got = await env.DB.prepare("SELECT id FROM live_inject WHERE run_id = ? AND text = ? AND consumed_at IS NOT NULL LIMIT 1")
+                    .bind(said.run_id, answered.text.slice(0, 1200)).first<{ id: number }>();
+                if (got) return json({ ok: false, error: "already delivered" });
+            }
             // The phone speaks it from this reply, so the queued copy must not
             // reach it as well (19 Oct: the same answer played twice).
             if (said.run_id) {
