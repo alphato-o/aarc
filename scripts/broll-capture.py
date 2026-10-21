@@ -311,6 +311,8 @@ def terminal_lines(start_ms, end_ms):
                 rendered = "".join(r.get("content", "") for r in d.get("rendered") or [] if isinstance(r, dict))
                 if kind in SKIP_ATTACH or "<system-reminder>" not in rendered:
                     continue
+                if kind == "total_tokens_reminder" or "<total_tokens>" in rendered:
+                    continue     # a counter after every tool call: noise on screen
                 if kind == "queued_command":
                     if "SYSTEM NOTIFICATION" in rendered:
                         out.append({"ms": ms, "lane": "terminal", "kind": "harness", "label": "system",
