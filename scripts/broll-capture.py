@@ -176,7 +176,7 @@ def main():
         elif typ in ("voice.play", "tts.play", "net.req"):
             continue             # superseded by `speech`, or network noise
         else:
-            if typ == "race.gate":
+            if typ == "race.gate" and gate_ms is None:   # the first press is the real one
                 gate_ms = ms
             timeline.append({"ms": ms, "t": t, "lane": "event", "type": typ, "detail": e["detail"]})
 
