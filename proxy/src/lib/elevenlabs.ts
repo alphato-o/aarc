@@ -40,11 +40,13 @@ export interface ElevenLabsParams {
     baseUrl?: string;
 }
 
+/// 32 kbps mono at the same 44.1 kHz the phone already plays: a quarter of
+/// the 128 kbps default. On 19 Oct the phone's link moved about 10 KB/s.
+export const TTS_OUTPUT_FORMAT = "mp3_44100_32";
+
 export async function callElevenLabs(params: ElevenLabsParams): Promise<ArrayBuffer> {
     const base = (params.baseUrl || DEFAULT_ELEVENLABS_BASE).replace(/\/+$/, "");
-    // 64 kbps mono: speech sounds the same, the file is half the 128 kbps
-    // default, and on 19 Oct the phone's link moved about 10 KB/s.
-    const url = `${base}/text-to-speech/${encodeURIComponent(params.voiceId)}?output_format=mp3_44100_64`;
+    const url = `${base}/text-to-speech/${encodeURIComponent(params.voiceId)}?output_format=${TTS_OUTPUT_FORMAT}`;
     const body = {
         text: params.text,
         model_id: params.modelId ?? "eleven_v3",
@@ -55,15 +57,29 @@ export async function callElevenLabs(params: ElevenLabsParams): Promise<ArrayBuf
             use_speaker_boost: true,
         },
     };
-    const response = await fetch(url, {
-        method: "POST",
-        headers: {
-            "xi-api-key": params.apiKey,
-            "Content-Type": "application/json",
-            Accept: "audio/mpeg",
-        },
-        body: JSON.stringify(body),
-    });
+    // One retry on a rate limit, a 5xx or a hung call: a phone waiting on
+    // this line has no other source for it.
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+            response = await fetch(url, {
+                method: "POST",
+                headers: {
+                    "xi-api-key": params.apiKey,
+                    "Content-Type": "application/json",
+                    Accept: "audio/mpeg",
+                },
+                body: JSON.stringify(body),
+                signal: AbortSignal.timeout(40_000),
+            });
+        } catch (e) {
+            if (attempt === 1) throw new ElevenLabsError(`ElevenLabs unreachable: ${e instanceof Error ? e.message : e}`, 504);
+            continue;
+        }
+        if (response.ok || attempt === 1 || !(response.status === 429 || response.status >= 500)) break;
+        await new Promise((r) => setTimeout(r, 800));
+    }
+    if (!response) throw new ElevenLabsError("ElevenLabs: no response", 504);
 
     if (!response.ok) {
         const errText = await response.text().catch(() => "<no body>");

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { callElevenLabs, ElevenLabsError } from "../lib/elevenlabs";
+import { callElevenLabs, ElevenLabsError, TTS_OUTPUT_FORMAT } from "../lib/elevenlabs";
 
 export interface Env {
     ELEVENLABS_API_KEY?: string;
@@ -30,7 +30,9 @@ async function ttsCacheKey(req: {
                  req.similarityBoost ?? "", req.style ?? "", req.text].join("");
     const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(sig));
     const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-    return `tts-cache/${req.voiceId}/${hex}.mp3`;
+    // The format is in the key so a line cached at an older, bigger bitrate
+    // is rendered again rather than served at that size.
+    return `tts-cache/${req.voiceId}/${TTS_OUTPUT_FORMAT}/${hex}.mp3`;
 }
 
 /// Max characters per request. Bumped to fit Jessica's longer erotic
