@@ -13,7 +13,8 @@ export function pushPlaceBlock(lines: string[], place: PlaceInfo | undefined, in
     if (!place && !intel?.inside && !intel?.nearby.length) return;
     place = place ?? {};
     const amapNearby = intel?.nearby.length ? intel.nearby.map((n) => `${n.name} (${n.meters} m)`) : null;
-    const pois = amapNearby ?? place.pois;
+    // With an Amap fix in hand the phone list (off by the datum) is dropped, even if Amap found nothing.
+    const pois = intel ? (amapNearby ?? []) : place.pois;
     const hasNames = !!(place.road || place.area || intel?.inside || (pois && pois.length));
     if (!hasNames && !place.route) return;
     lines.push("");
