@@ -8,6 +8,9 @@ import Charts
 struct PostRunSummaryView: View {
     @State private var store = RunSummaryStore.shared
     @State private var share: ShareTarget?
+    @State private var homeBase = PostRunWindow.shared
+    @State private var recorder = ControlRoomRecorder.shared
+    @State private var talkError: String?
 
     var body: some View {
         Group {
@@ -23,6 +26,35 @@ struct PostRunSummaryView: View {
         }
         .sheet(item: $share) { target in
             RunShareComposer(target: target)
+        }
+        .onDisappear { PostRunWindow.shared.close(.summaryClosed) }
+    }
+
+    /// Post-run talk-back (founder, 22 Oct: "what did I do wrong and right",
+    /// answered aloud). Only while Home Base still has the floor.
+    @ViewBuilder
+    private var controlRoomButton: some View {
+        if homeBase.isOpen {
+            VStack(spacing: 4) {
+                Button {
+                    Task { @MainActor in
+                        if recorder.isRecording {
+                            await recorder.finish(send: true)
+                        } else {
+                            do { try recorder.start(); talkError = nil }
+                            catch { talkError = error.localizedDescription }
+                        }
+                    }
+                } label: {
+                    Label(recorder.isRecording ? "Send to Control Room" : "Talk to Control Room",
+                          systemImage: recorder.isRecording ? "paperplane.fill" : "mic.fill")
+                        .font(.headline).frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered).tint(.teal).controlSize(.large)
+                if let talkError {
+                    Text(talkError).font(.caption).foregroundStyle(.red)
+                }
+            }
         }
     }
 
@@ -228,6 +260,7 @@ struct PostRunSummaryView: View {
             // asked for: "my memory is so fresh and then I can note down what
             // went wrong". Offering this on the history page only would mean
             // he has to remember to go back, which is exactly what he doesn't.
+            controlRoomButton
             VoiceNoteSection(runId: s.runId, invite: true)
                 .padding(.bottom, 4)
             Button { share = .wholeRun } label: {

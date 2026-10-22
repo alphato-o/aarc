@@ -90,7 +90,7 @@ final class ScriptEngine {
         self.variantCursorByMessageId.removeAll()
         self.lastDispatchAt = nil
         self.recentDispatchedLines.removeAll()
-        VoiceFeedbackQueue.shared.stopAll()
+        VoiceFeedbackQueue.shared.stopForRunEnd()
     }
 
     /// Swap the active script mid-run. Used by the fast-start flow:

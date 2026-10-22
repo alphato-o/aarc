@@ -445,7 +445,8 @@ struct RunDetailView: View {
             async let hr = HealthKitReader.shared.fetchHeartRateSeries(during: workout)
             // Outdoor pace is what the watch measured, every sample; the
             // treadmill keeps minute buckets (its pace is a wrist guess).
-            async let pace = run.runTypeRaw == "outdoor"
+            let isOutdoor = run.runTypeRaw == "outdoor"
+            async let pace = isOutdoor
                 ? HealthKitReader.shared.fetchRawPaceSeries(during: workout)
                 : HealthKitReader.shared.fetchPaceSeries(during: workout)
             async let route = HealthKitReader.shared.fetchRoute(for: workout)

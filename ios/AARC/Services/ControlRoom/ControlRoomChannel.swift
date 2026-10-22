@@ -277,7 +277,8 @@ final class ControlRoomChannel {
 
     private func releaseAwake() {
         // Never pull the audio out from under a live run.
-        guard !LiveShareController.shared.downlinkAlive, !LiveMetricsConsumer.shared.isRunActive else { return }
+        guard !LiveShareController.shared.downlinkAlive, !LiveMetricsConsumer.shared.isRunActive,
+              !PostRunWindow.shared.isOpen else { return }
         BackgroundAudioKeepalive.shared.stop()
         AudioPlaybackManager.shared.endSustained()
     }
@@ -349,5 +350,75 @@ final class ControlRoomChannel {
             NSLog("[controlroom] send failed, queued: \(error.localizedDescription)")
             return nil
         }
+    }
+}
+
+/// After an outdoor or race run, Home Base keeps the floor for a while
+/// (founder, 22 Oct): its replies are still polled and spoken, and talk-back
+/// still works from the summary, so he can ask what went right and wrong.
+/// Ricky and Jessica stay stopped. Treadmill runs end as before.
+/// Lives here because a new file needs an xcodegen run.
+@Observable
+@MainActor
+final class PostRunWindow {
+    static let shared = PostRunWindow()
+    static let length: TimeInterval = 20 * 60
+
+    enum Reason: String { case expired, summaryClosed, newRun }
+
+    private(set) var runId: UUID?
+    private(set) var until: Date?
+    @ObservationIgnored private var handledRunId: UUID?
+    @ObservationIgnored private var timer: Task<Void, Never>?
+
+    var isOpen: Bool {
+        guard runId != nil, let until else { return false }
+        return Date() < until
+    }
+
+    private static var applies: Bool {
+        guard !AppEnv.uiTest, !RunPreview.shared.active else { return false }
+        return LiveMetricsConsumer.shared.pendingRunType == .outdoor || RunOrchestrator.shared.raceMode.isRace
+    }
+
+    /// Called on every end path before anything is stopped; the first wins.
+    func openIfApplicable() {
+        let consumer = LiveMetricsConsumer.shared
+        guard consumer.isRunActive, let rid = consumer.currentRunId, handledRunId != rid else { return }
+        handledRunId = rid
+        guard Self.applies else { return }
+        runId = rid
+        until = Date().addingTimeInterval(Self.length)
+        // The watch session no longer keeps the phone awake: the silent loop does.
+        AudioPlaybackManager.shared.beginSustained()
+        BackgroundAudioKeepalive.shared.start()
+        RunEventLog.shared.record("postrun.open", "Home Base stays on for \(Int(Self.length / 60)) min")
+        timer?.cancel()
+        timer = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.length))
+            guard !Task.isCancelled else { return }
+            self?.close(.expired)
+        }
+    }
+
+    /// A suspended app misses the timer; catch up when it runs again.
+    func expireIfDue() {
+        if runId != nil, !isOpen { close(.expired) }
+    }
+
+    func close(_ reason: Reason) {
+        guard let rid = runId else { return }
+        runId = nil
+        until = nil
+        timer?.cancel()
+        timer = nil
+        NSLog("[postrun] window closed: \(reason.rawValue)")
+        LiveShareController.shared.endDownlink(runId: rid.uuidString)
+        // A new run owns the audio and the banner now.
+        guard reason != .newRun, !LiveMetricsConsumer.shared.isRunActive else { return }
+        if !BackgroundAudioKeepalive.shared.wanted { BackgroundAudioKeepalive.shared.stop() }
+        AudioPlaybackManager.shared.endSustained(release: false)
+        VoiceFeedbackQueue.shared.releaseSessionWhenIdle()
+        ControlRoomRecorder.shared.disarm()
     }
 }

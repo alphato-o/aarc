@@ -220,8 +220,11 @@ final class PhoneWorkoutSession: NSObject {
         // they were on (treadmill). No-ops for outdoor runs that
         // never entered sustained mode.
         BackgroundAudioKeepalive.shared.wanted = false
-        BackgroundAudioKeepalive.shared.stop()
-        AudioPlaybackManager.shared.endSustained()
+        // The post-run window keeps both until it closes.
+        if !PostRunWindow.shared.isOpen {
+            BackgroundAudioKeepalive.shared.stop()
+            AudioPlaybackManager.shared.endSustained()
+        }
 
         // Drain any buffered route locations before HK seals the route.
         let route = pendingRouteLocations

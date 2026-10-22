@@ -278,6 +278,9 @@ final class LiveMetricsConsumer {
             return
         }
 
+        // The last run's Home Base window ends where this run begins.
+        PostRunWindow.shared.close(.newRun)
+
         // Settle the orchestrator's pending handover (adoption: any
         // fresh started run counts, even with a different runId).
         RunOrchestrator.shared.confirmWatchStarted(runId: runId)
@@ -498,11 +501,15 @@ final class LiveMetricsConsumer {
     /// for the summary.
     func endNow() {
         guard isRunActive else { return }
+        PostRunWindow.shared.openIfApplicable()
         resumedFromMarker = false
         awaitingGate = false
         gateCrossedAt = nil
         latest = latest?.with(state: .ended)   // isRunActive → false immediately
         RunSummaryStore.shared.capture()
+        // The watch's confirmation can be lost; the banners must not wait on it.
+        LiveActivityController.shared.end()
+        if !PostRunWindow.shared.isOpen { ControlRoomRecorder.shared.disarm() }
     }
 
     /// Set once an end has been processed for the current run; a second end
@@ -520,6 +527,7 @@ final class LiveMetricsConsumer {
             return
         }
         endHandled = true
+        PostRunWindow.shared.openIfApplicable()
         endSweepTask?.cancel()
         endSweepTask = nil
         // THE GATE (Qingdao, 2026-08-09). Persist the run to the database
@@ -568,9 +576,15 @@ final class LiveMetricsConsumer {
         VenueConfirm.shared.reset()
         RoastPool.shared.reset()
         MusicTimeline.shared.end()
-        if !PhoneWorkoutSession.shared.isActive { AudioPlaybackManager.shared.endSustained(release: false) }
+        let homeBaseStays = PostRunWindow.shared.isOpen
+        if !homeBaseStays {
+            if !PhoneWorkoutSession.shared.isActive { AudioPlaybackManager.shared.endSustained(release: false) }
+            // stopAll ran while the session was still sustained, so nothing released it.
+            VoiceFeedbackQueue.shared.releaseSessionWhenIdle()
+        }
         LiveActivityController.shared.end()
-        LiveShareController.shared.end()
+        LiveShareController.shared.end(keepDownlink: homeBaseStays)
+        if !homeBaseStays { ControlRoomRecorder.shared.disarm() }
 
         // Seal + upload the per-run diagnostics (events JSONL, pinned
         // voice audio). Fire-and-forget with retries inside.

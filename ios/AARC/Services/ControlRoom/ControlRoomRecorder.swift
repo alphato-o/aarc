@@ -555,6 +555,12 @@ final class ControlRoomRecorder: NSObject {
 
     // MARK: - Standing banner
 
+    /// Only during a run and the post-run window (founder, 22 Oct: off-run it
+    /// sat on his phone after he quit AARC).
+    private static var bannerWanted: Bool {
+        LiveMetricsConsumer.shared.isRunActive || PostRunWindow.shared.isOpen
+    }
+
     /// Called at launch, at run start, and whenever AARC comes to the screen.
     func arm() {
         if foregroundObserver == nil {
@@ -563,7 +569,19 @@ final class ControlRoomRecorder: NSObject {
                 Task { @MainActor in ControlRoomRecorder.shared.arm() }
             }
         }
+        PostRunWindow.shared.expireIfDue()
+        guard Self.bannerWanted else {
+            // A run that may resume after a relaunch keeps its banner.
+            if UnfinishedRunStore.pending == nil { disarm() }
+            return
+        }
         if let id = armedId, Self.exists(id) { return }
+        // One left by an earlier launch: reuse it rather than stack another.
+        if let id = Activity<ControlRoomActivityAttributes>.activities.first(where: { $0.activityState == .active })?.id {
+            armedId = id
+            if !isRecording { Task { await Self.push(id, .init(state: .init(phase: "ready", startedAt: .now), staleDate: nil)) } }
+            return
+        }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let state = ControlRoomActivityAttributes.ContentState(phase: "ready", startedAt: .now)
         do {
@@ -574,6 +592,23 @@ final class ControlRoomRecorder: NSObject {
             if Self.foreground {
                 ControlRoomChannel.shared.diag("talkback: could not arm the banner: \(Self.code(error))")
             }
+        }
+    }
+
+    /// Ends every Control Room banner and any leftover run banner. A line
+    /// being recorded keeps its banner until it is sent.
+    func disarm() {
+        guard !Self.bannerWanted else { return }
+        armedId = nil
+        let keep = isRecording ? activityId : nil
+        let ids = Activity<ControlRoomActivityAttributes>.activities.map(\.id).filter { $0 != keep }
+        if !ids.isEmpty { Task { await Self.endNow(ids) } }
+        LiveActivityController.shared.endAll()
+    }
+
+    private nonisolated static func endNow(_ ids: [String]) async {
+        for a in Activity<ControlRoomActivityAttributes>.activities where ids.contains(a.id) {
+            await a.end(nil, dismissalPolicy: .immediate)
         }
     }
 

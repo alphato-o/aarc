@@ -78,7 +78,7 @@ final class Speaker {
     /// audible — used by the queue to surface the in-run subtitle bar
     /// in sync with the first syllable rather than at the start of the
     /// fetch.
-    func playSync(
+    func emit(
         text: String,
         voiceId: String? = nil,
         preferRemoteOverride: Bool? = nil,
@@ -97,6 +97,19 @@ final class Speaker {
         } else {
             await LocalTTS.shared.play(text: text, onAudioStart: onAudioStart)
         }
+    }
+
+    /// Play a line from outside the queue (the post-run verdict, its Play
+    /// button). While Home Base still has the floor after a run it waits its
+    /// turn in the queue: played directly it stopped Home Base mid-line.
+    func playSync(text: String, voiceId: String? = nil) async {
+        if PostRunWindow.shared.isOpen {
+            await VoiceFeedbackQueue.shared.playInTurn(VoiceItem(
+                text: text, priority: .milestone, source: "summary",
+                expiresAfter: 300, voiceId: voiceId))
+            return
+        }
+        await emit(text: text, voiceId: voiceId)
     }
 
     /// Stop the currently-playing backend without touching the queue.

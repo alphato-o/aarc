@@ -101,13 +101,29 @@ final class LiveActivityController {
         }
     }
 
+    /// Run over: the banner goes at once, with any left by an earlier launch
+    /// (founder, 22 Oct: it stayed on his phone after he quit AARC).
     func end() {
+        endAll()
+    }
+
+    /// Ends every run banner of this app, tracked or not.
+    func endAll() {
         guard #available(iOS 16.2, *) else { return }
-        Task { @MainActor in
-            // Send one final snapshot that lingers briefly on the lock
-            // screen showing the closing distance, then dismiss.
-            let final = lastState
-            await endInternal(deliverFinal: final)
+        activity = nil
+        lastState = nil
+        lastUpdateAt = nil
+        isActive = false
+        let ids = Activity<LiveActivityAttributes>.activities.map(\.id)
+        guard !ids.isEmpty else { return }
+        log.info("LiveActivity: ending \(ids.count) banner(s)")
+        Task { await Self.endNow(ids) }
+    }
+
+    @available(iOS 16.2, *)
+    private nonisolated static func endNow(_ ids: [String]) async {
+        for a in Activity<LiveActivityAttributes>.activities where ids.contains(a.id) {
+            await a.end(nil, dismissalPolicy: .immediate)
         }
     }
 
@@ -138,6 +154,20 @@ final class LiveActivityController {
             targetSeconds: plan.totalSeconds,
             isPaused: false
         )
+        // After a relaunch mid-run, adopt this run's banner instead of
+        // stacking a second one; anything older is ended.
+        let existing = Activity<LiveActivityAttributes>.activities
+        if let same = existing.first(where: { $0.attributes.runId == runId && $0.activityState == .active }) {
+            activity = same
+            lastState = nil
+            lastUpdateAt = nil
+            isActive = true
+            let stale = existing.map(\.id).filter { $0 != same.id }
+            if !stale.isEmpty { await Self.endNow(stale) }
+            log.info("LiveActivity adopted for run \(runId.uuidString.prefix(8), privacy: .public)")
+            return
+        }
+        if !existing.isEmpty { await Self.endNow(existing.map(\.id)) }
         do {
             activity = try Activity.request(
                 attributes: attributes,

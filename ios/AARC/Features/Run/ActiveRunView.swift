@@ -572,11 +572,13 @@ struct ActiveRunView: View {
         //      clear the queue and stop the active backend.
         //   3. NowPlayingStore.stop() — done in onDisappear, no Spotify
         //      polling traffic after dismiss.
+        // Outdoor and race runs: Home Base keeps talking after the end.
+        PostRunWindow.shared.openIfApplicable()
         ContextualCoach.shared.stop()
         ScriptEngine.shared.stop()
         Conversation.shared.stop()
         RunDirector.shared.stop()
-        VoiceFeedbackQueue.shared.stopAll()
+        VoiceFeedbackQueue.shared.stopForRunEnd()
 
         // Flip the UI to the post-run summary INSTANTLY — the HK teardown +
         // watch confirmation below run async behind the interstitial.

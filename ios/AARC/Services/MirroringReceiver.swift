@@ -135,7 +135,8 @@ extension MirroringReceiver: @preconcurrency HKWorkoutSessionDelegate {
                 // (ingestEnded is idempotent; a late UUID just gets adopted).
                 self.mirroredSession = nil
                 self.currentRunId = nil
-                VoiceFeedbackQueue.shared.stopAll()
+                PostRunWindow.shared.openIfApplicable()
+                VoiceFeedbackQueue.shared.stopForRunEnd()
                 RunEventLog.shared.record("run.mirrorEnded", "watch session ended; speech stopped, 5s grace for workoutEnded")
                 Task { @MainActor in
                     try? await Task.sleep(for: .seconds(5))

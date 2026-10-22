@@ -241,7 +241,7 @@ final class RunSimulator {
 
     func end() {
         BackgroundAudioKeepalive.shared.wanted = false
-        BackgroundAudioKeepalive.shared.stop()
+        if !PostRunWindow.shared.isOpen { BackgroundAudioKeepalive.shared.stop() }
         guard isActive else { return }
         isActive = false
         ticker?.invalidate(); ticker = nil

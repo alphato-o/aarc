@@ -309,7 +309,8 @@ final class VoiceFeedbackQueue {
     /// queues: "home:camera:*" slipped past an exact "home" match and cut
     /// Ricky's opening on three runs (18 Oct).
     static func preempts(_ item: VoiceItem, over cur: VoiceItem) -> Bool {
-        item.priority == .milestone && !item.source.hasPrefix("home") && cur.priority < .milestone
+        item.priority == .milestone && !item.source.hasPrefix("home") && !item.source.hasPrefix("summary")
+            && cur.priority < .milestone
     }
 
     /// True if a line whose source begins with `prefix` is currently playing
@@ -363,6 +364,46 @@ final class VoiceFeedbackQueue {
         // Wipe the subtitle so nothing lingers after an explicit
         // stop (end-run, mute, audio session interruption).
         LiveSubtitleStore.shared.clear()
+    }
+
+    /// Run end. After an outdoor or race run Home Base keeps talking (founder,
+    /// 22 Oct: the finish cut its readout), so only the coaches are stopped.
+    func stopForRunEnd() {
+        if PostRunWindow.shared.isOpen { stopCoaches() } else { stopAll() }
+    }
+
+    private static func survivesRunEnd(_ item: VoiceItem) -> Bool {
+        item.source.hasPrefix("home") || item.source.hasPrefix("summary")
+    }
+
+    /// Ricky and Jessica go quiet; Home Base lines, playing or queued, stay.
+    func stopCoaches() {
+        pending.removeAll { !Self.survivesRunEnd($0) }
+        if let cur = currentlyPlaying, !Self.survivesRunEnd(cur) {
+            playbackTask?.cancel()
+            playbackTask = nil
+            stallGuard?.cancel()
+            currentlyPlaying = nil
+            Speaker.shared.stopActiveBackend()
+            LiveSubtitleStore.shared.clear()
+        }
+        if currentlyPlaying == nil { kickNext() }
+    }
+
+    /// Plays a line outside the run (the closing verdict) in turn, so it
+    /// neither cuts Home Base nor gets cut by it. Returns when it has played.
+    func playInTurn(_ item: VoiceItem, timeout: TimeInterval = 300) async {
+        enqueue(item)
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !Task.isCancelled,
+              currentlyPlaying?.id == item.id || pending.contains(where: { $0.id == item.id }) {
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+
+    /// Give the session back once the queue is quiet (run end left it open).
+    func releaseSessionWhenIdle() {
+        if currentlyPlaying == nil, pending.isEmpty { scheduleSessionDeactivate() }
     }
 
     /// Stop the line now but keep it: it goes back to the front and plays
@@ -567,7 +608,7 @@ final class VoiceFeedbackQueue {
             // was I" prefix first, in the same voice, in this same slot —
             // no music gap between the cue and the resumed thought.
             if let prefix = item.resumePrefix {
-                await Speaker.shared.playSync(
+                await Speaker.shared.emit(
                     text: prefix,
                     voiceId: item.voiceId,
                     preferRemoteOverride: item.preferRemoteVoiceOverride
@@ -575,7 +616,7 @@ final class VoiceFeedbackQueue {
                 if Task.isCancelled { return }
             }
 
-            await Speaker.shared.playSync(
+            await Speaker.shared.emit(
                 text: item.text,
                 voiceId: item.voiceId,
                 preferRemoteOverride: item.preferRemoteVoiceOverride,

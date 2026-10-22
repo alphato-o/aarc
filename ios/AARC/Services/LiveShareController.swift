@@ -118,10 +118,13 @@ final class LiveShareController {
         if buffer.count >= 40, lastSendOK != nil { Task { await self.flush() } }
     }
 
-    func end() {
+    /// `keepDownlink`: the uplink closes but the inject poll keeps running
+    /// for the post-run window, so Home Base's closing readout still lands.
+    func end(keepDownlink: Bool = false) {
         guard let rid = runId else { return }
-        flushTask?.cancel(); pollTask?.cancel(); flushTask = nil; pollTask = nil
-        let pending = buffer; buffer = []; runId = nil; raceUplink = false
+        flushTask?.cancel(); flushTask = nil
+        if !keepDownlink { pollTask?.cancel(); pollTask = nil; runId = nil }
+        let pending = buffer; buffer = []; raceUplink = false
         let hadUplink = uplink; uplink = false
         guard hadUplink else { NSLog("[live] channel down"); return }
         Task {
@@ -135,6 +138,14 @@ final class LiveShareController {
             _ = await self.send("live/end", ["runId": rid])
             NSLog("[live] sharing ended")
         }
+    }
+
+    /// The post-run window is over: stop polling for that run's lines.
+    func endDownlink(runId rid: String) {
+        guard runId == rid, !uplink else { return }
+        pollTask?.cancel(); pollTask = nil
+        runId = nil
+        NSLog("[live] post-run downlink closed")
     }
 
     /// Send the backlog in order, oldest first, in chunks. A failed chunk is
