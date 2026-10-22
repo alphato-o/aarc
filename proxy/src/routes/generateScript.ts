@@ -3,6 +3,7 @@ import {
     GenerateScriptRequestSchema,
     GenerateScriptResponse,
     ScriptSchema,
+    ScriptMessageSchema,
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
 import { finalizeSpoken } from "../lib/englishOnly";
@@ -55,6 +56,17 @@ export async function generateScriptHandler(
             env,
             (raw) => {
                 const parsed = JSON.parse(stripCodeFences(raw));
+                // Race packs ask for 38 to 48 lines, past the normal cap of 40, and story
+                // lines run long; one bad line must not sink the pack (22 Oct, 502 on 234).
+                if (racePackCourse(req) && Array.isArray(parsed)) {
+                    const kept = parsed
+                        .map((m) => RaceMessageSchema.safeParse(m))
+                        .filter((r) => r.success)
+                        .map((r) => r.data)
+                        .slice(0, 60);
+                    if (kept.length >= 20) return kept;
+                    throw new Error(`race script kept only ${kept.length} of ${parsed.length} lines`);
+                }
                 const v = ScriptSchema.safeParse(parsed);
                 if (!v.success) {
                     throw new Error(
@@ -74,7 +86,7 @@ export async function generateScriptHandler(
                 route: "/generate-script",
             });
             return json(
-                { ok: false, error: "model output failed schema validation after retry", raw: e.raw.slice(0, 500) },
+                { ok: false, error: "model output failed schema validation after retry", detail: e.detail.slice(0, 400), raw: e.raw.slice(0, 500) },
                 { status: 502 },
             );
         }
@@ -184,6 +196,8 @@ function nudgeOffKilometres<T extends { triggerSpec: { type: string; atMeters?: 
         return { ...m, triggerSpec: { ...m.triggerSpec, atMeters: base + 350 } };
     });
 }
+
+const RaceMessageSchema = ScriptMessageSchema.extend({ text: z.string().min(1).max(900) });
 
 function racePackCourse(req: z.infer<typeof GenerateScriptRequestSchema>) {
     if (req.raceMode !== "actual") return null;
