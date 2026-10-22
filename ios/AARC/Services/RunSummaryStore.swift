@@ -168,7 +168,9 @@ final class RunSummaryStore {
                   let workout = try? await HealthKitReader.shared.fetchWorkout(uuid: uuid) {
             // Real run — pull the richer series/route straight from HealthKit.
             async let hrPts = HealthKitReader.shared.fetchHeartRateSeries(during: workout)
-            async let pacePts = HealthKitReader.shared.fetchPaceSeries(during: workout)
+            async let pacePts = isOutdoor
+                ? HealthKitReader.shared.fetchRawPaceSeries(during: workout)
+                : HealthKitReader.shared.fetchPaceSeries(during: workout)
             async let route = HealthKitReader.shared.fetchRoute(for: workout)
             let hrPoints = (try? await hrPts) ?? []
             hr = hrPoints.map(\.value)

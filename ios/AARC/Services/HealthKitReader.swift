@@ -144,6 +144,26 @@ actor HealthKitReader {
         }
     }
 
+    /// Pace (sec/km) of every distance sample the watch wrote, unsmoothed.
+    /// Samples under half a metre (standing still) are skipped.
+    func fetchRawPaceSeries(during workout: HKWorkout) async throws -> [SeriesPoint] {
+        let pred = HKQuery.predicateForSamples(
+            withStart: workout.startDate,
+            end: workout.endDate,
+            options: .strictStartDate
+        )
+        let samples = try await sample(of: HKQuantityType(.distanceWalkingRunning), predicate: pred, limit: HKObjectQueryNoLimit)
+        return samples
+            .compactMap { $0 as? HKQuantitySample }
+            .compactMap { s in
+                let m = s.quantity.doubleValue(for: .meter())
+                let dt = s.endDate.timeIntervalSince(s.startDate)
+                guard m > 0.5, dt > 0 else { return nil }
+                return SeriesPoint(timestamp: s.startDate, value: dt / (m / 1000))
+            }
+            .sorted { $0.timestamp < $1.timestamp }
+    }
+
     /// Per-km pace + HR splits, derived from HealthKit. Returns two
     /// arrays of equal length — one entry per *completed* kilometre.
     ///

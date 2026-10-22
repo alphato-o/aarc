@@ -294,13 +294,11 @@ struct RunDetailView: View {
     // MARK: - Series ranges (computed for normalisation + legends)
 
     private var hrRange: (min: Double, max: Double) {
-        let values = hrSeries.map(\.value)
-        return (values.min() ?? 0, values.max() ?? 1)
+        SeriesNormalize.robustRange(hrSeries.map(\.value))
     }
 
     private var paceRange: (min: Double, max: Double) {
-        let values = paceSeries.map(\.value)
-        return (values.min() ?? 0, values.max() ?? 1)
+        SeriesNormalize.robustRange(paceSeries.map(\.value))
     }
 
     private var hrRangeLabel: String {
@@ -314,9 +312,7 @@ struct RunDetailView: View {
     }
 
     private func normalize(_ value: Double, range: (min: Double, max: Double)) -> Double {
-        let span = range.max - range.min
-        guard span > 0.0001 else { return 0.5 }
-        return (value - range.min) / span
+        SeriesNormalize.unit(value, in: range)
     }
 
     private var loadingHint: some View {
@@ -447,7 +443,11 @@ struct RunDetailView: View {
                 return
             }
             async let hr = HealthKitReader.shared.fetchHeartRateSeries(during: workout)
-            async let pace = HealthKitReader.shared.fetchPaceSeries(during: workout)
+            // Outdoor pace is what the watch measured, every sample; the
+            // treadmill keeps minute buckets (its pace is a wrist guess).
+            async let pace = run.runTypeRaw == "outdoor"
+                ? HealthKitReader.shared.fetchRawPaceSeries(during: workout)
+                : HealthKitReader.shared.fetchPaceSeries(during: workout)
             async let route = HealthKitReader.shared.fetchRoute(for: workout)
             let (hrPoints, pacePoints, locations) = try await (hr, pace, route)
 

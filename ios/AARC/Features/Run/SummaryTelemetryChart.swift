@@ -13,8 +13,8 @@ struct SummaryTelemetryChart: View {
     let hrSeries: [Double]
 
     var body: some View {
-        let speedR = SeriesNormalize.range(speedSeries)
-        let hrR = SeriesNormalize.range(hrSeries)
+        let speedR = SeriesNormalize.robustRange(speedSeries)
+        let hrR = SeriesNormalize.robustRange(hrSeries)
         let speed = speedSeries.enumerated().map { ($0.offset, SeriesNormalize.unit($0.element, in: speedR)) }
         let hr = hrSeries.enumerated().map { ($0.offset, SeriesNormalize.unit($0.element, in: hrR)) }
         return Chart {
