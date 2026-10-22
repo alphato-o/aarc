@@ -1138,7 +1138,7 @@ AFMT = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
 AUDIO_EXT = (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")
 
 
-def ff_mix(items, dest, dur):
+def ff_mix(items, dest, dur, level=0):
     """Mix [(input args, filter chain)] into one WAV of exactly `dur` seconds, 40 inputs at a time."""
     tail = f"apad=whole_dur={dur:.3f},atrim=0:{dur:.3f}"
     if not items:
@@ -1155,7 +1155,7 @@ def ff_mix(items, dest, dur):
             labels.append(f"[a{n}]")
         mix = (f"{labels[0]}{tail}[out]" if len(batch) == 1 else
                f"{''.join(labels)}amix=inputs={len(batch)}:normalize=0:duration=longest:dropout_transition=0,{tail}[out]")
-        part = dest.with_name(f"{dest.stem}-{b // 40}.wav")
+        part = dest.with_name(f"{dest.stem}-L{level}-{b // 40}.wav")  # per level: a pass must not overwrite its inputs
         args += ["-filter_complex", ";".join(chains) + ";" + mix, "-map", "[out]", "-ar", "48000",
                  "-c:a", "pcm_s16le", str(part)]
         subprocess.run(args, check=True)
@@ -1163,7 +1163,7 @@ def ff_mix(items, dest, dur):
     if len(parts) == 1:
         parts[0].rename(dest)
         return dest
-    return ff_mix([(["-i", str(p)], AFMT) for p in parts], dest, dur)
+    return ff_mix([(["-i", str(p)], AFMT) for p in parts], dest, dur, level + 1)
 
 
 def voice_lines(recs, capture):
