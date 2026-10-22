@@ -414,6 +414,40 @@ def load(capture):
     return manifest, recs
 
 
+def load_redactions(path):
+    """`find=replace` lines (case-insensitive find); kept out of the public repo."""
+    pairs = []
+    if path and Path(path).exists():
+        for line in Path(path).read_text().splitlines():
+            find, sep, repl = line.strip().partition("=")
+            if sep and find and not find.startswith("#"):
+                pairs.append((re.compile(re.escape(find), re.IGNORECASE), repl))
+    return pairs
+
+
+def redact(recs, pairs):
+    """Rewrite every text field; a voice line that said a redacted word loses its audio."""
+    def scrub(v):
+        if isinstance(v, str):
+            for rx, repl in pairs:
+                v = rx.sub(repl, v)
+            return v
+        if isinstance(v, list):
+            return [scrub(x) for x in v]
+        if isinstance(v, dict):
+            return {k: scrub(x) for k, x in v.items()}
+        return v
+    muted = 0
+    for r in recs:
+        if r.get("lane") == "voice" and any(rx.search(r.get("text") or "") for rx, _ in pairs):
+            r.pop("audio", None)
+            muted += 1
+        for k, v in list(r.items()):
+            if k != "audio":
+                r[k] = scrub(v)
+    return muted
+
+
 class Series:
     """Last-known and linearly interpolated values of one field over time."""
 
@@ -1381,10 +1415,15 @@ def main():
     ap.add_argument("--labels", action="store_true", help="map tiles with (Chinese) street labels")
     ap.add_argument("--music", help="music bed folder (default <captureDir>/music when it exists)")
     ap.add_argument("--no-music", action="store_true", help="voices only, no music bed")
+    ap.add_argument("--redact", default=str(Path(__file__).resolve().parent.parent / "private" / "broll-redact.txt"),
+                    help="file of find=replace lines (real names etc.); voice lines that say one are muted")
     args = ap.parse_args()
 
     capture = Path(args.capture).expanduser().resolve()
     manifest, recs = load(capture)
+    pairs = load_redactions(args.redact)
+    if pairs:
+        print(f"redact: {len(pairs)} term(s), {redact(recs, pairs)} voice line(s) muted")
     W, H = (int(v) for v in args.size.lower().split("x"))
     W -= W % 2
     H -= H % 2
