@@ -9,6 +9,8 @@ import { fetchLocalIntel, formatLocalIntel, type AmapEnv } from "./amap";
 import { fetchBriefing, type BriefingEnv } from "./briefing";
 import { pushCourseBlock, NAMES_RULE } from "./course";
 import { daypart } from "./ambient";
+import { finalizeSpoken } from "./englishOnly";
+import { recentDeskLines, runnerTalkback, type DeskLine } from "./deskContext";
 
 export const HOME_BASE_VOICE_ID = "Awx8TeMHHpDzbm42nIB6";
 
@@ -43,7 +45,8 @@ export const HOME_BASE_SYSTEM = `You are HOME BASE: the machine at the desk, the
 Register: dry, precise, faintly clinical, a flight controller who has read the whole file. You mock with the RECORD, never with imagery or filth. You speak in the second person. Use "Alpha" sparingly, like a callsign. You may be warm the way an instrument is warm: by reporting something true and good without softening it.
 
 On race day you are also the one who read the city's file: the course notes carry true history and places (STORY HERE). When there is a story at his kilometre, tell it, two sentences, the way a flight controller would brief a crew on the terrain: the fact, precise, then what it means for him right now. You are the tour guide with the clipboard; Ricky and Jessica are the hecklers.
-Shape, which must CHANGE every kilometre: sometimes numbers first, sometimes the place first, sometimes one sentence of weather or the camera first and the split last. Never open two readouts the same way. Never close on a stock phrase ("hold it", "keep it there", "steady"): close on a fact, a number that matters next, or the name of what is coming.
+Shape, which must CHANGE every kilometre: sometimes numbers first, sometimes the place first, sometimes one sentence of weather or the camera first and the split last. Never open two readouts the same way. Never close on a stock phrase ("hold it", "keep it there", "steady", "watch whether"): close on a fact, a number that matters next, or the name of what is coming.
+A kilometre readout is SHORT and says only what CHANGED. A number that is the same as last time is not news: leave it out. A place you have already named this run is not news: never name it again.
 Hard rules:
 - ${NAMES_RULE}
 - Never state a number that is not in the DATA below. If a comparison is unavailable, say nothing about it.
@@ -52,32 +55,49 @@ Hard rules:
 - Do not repeat a RECENT LINE's angle.
 - Never apologise, never hedge with "it seems".`;
 
+/// What a readout can open on. Rotated by kilometre so no two in a row lead
+/// the same way (run CF3B6CD8: fifteen readouts, every one "N kilometres,
+/// clock, split, average, heart rate, history, still on Jinghua Street,
+/// watch whether..."). The template was in our own instruction.
+type Lead = "split" | "heart" | "clock" | "ahead" | "fuel" | "history";
+const LEAD_ORDER: Lead[] = ["split", "heart", "ahead", "history", "clock", "fuel"];
+const LEAD_TEXT: Record<Lead, string> = {
+    split: "the split for this kilometre, compared with the average or the last split",
+    heart: "his heart rate and which way it is moving",
+    clock: "the time of day or the run clock, as a fact about where the run stands",
+    ahead: "what is ahead: distance left, the projected finish, the next water, or the next thing on the course",
+    fuel: "fuel and water: what the plan says to take at the next stop and when",
+    history: "the comparison with his own past runs at this marker",
+};
+const FUEL_WORDS = /\b(water|drink|sip|capsule|gel|fuel|sugar|hydrat\w*)\b/i;
+const KM_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"];
+
 export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Promise<{ text: string; model: string }> {
     const c = input.runContext;
-    const lines: string[] = [];
-    const race = (c as { raceMode?: string }).raceMode === "actual";
-    lines.push(race
-        ? `KILOMETRE ${input.km} just crossed. Deliver the readout: 5 to 7 sentences, 30 to 45 seconds spoken. Include the split, the average and the heart rate somewhere, in your own order, plus the STORY HERE if the course block has one (told, not read), plus one live thing if it matters (weather, air, the camera, the control room). Vary the shape from the RECENT LINES. End on what is coming next on the course or the number that decides the next kilometre.`
-        : `KILOMETRE ${input.km} just crossed. Deliver the readout: 4 to 6 sentences, 25 to 40 seconds spoken. Include the split and the average, then heart rate, then ONE thing from history, surroundings, weather or the control room that is worth his attention right now, in an order that differs from the RECENT LINES. End on the number that matters for the next kilometre.`);
-    lines.push("");
-    lines.push("DATA (the only facts you may use):");
-    lines.push(localNow(c.ambient));
-    lines.push(`- run clock: ${fmtClock(c.elapsedSeconds)}`);
-    lines.push(`- distance: ${(c.distanceMeters / 1000).toFixed(2)} km, run type ${c.runType}`);
-    if (input.lastSplitSecPerKm) lines.push(`- last kilometre: ${fmtPace(input.lastSplitSecPerKm)} per km`);
-    if (c.avgPaceSecPerKm) lines.push(`- average pace so far: ${fmtPace(c.avgPaceSecPerKm)} per km`);
-    if (c.currentPaceSecPerKm) lines.push(`- current pace: ${fmtPace(c.currentPaceSecPerKm)} per km`);
-    if (c.currentHR) lines.push(`- heart rate now: ${Math.round(c.currentHR)} bpm`);
-    if (input.avgHR) lines.push(`- last kilometre average heart rate: ${Math.round(input.avgHR)} bpm`);
+    const race = c.raceMode === "actual";
+    const recent = (input.recentLines ?? []).filter((r) => r.trim().length > 0);
+    const data: string[] = [];
+    data.push("DATA (the only facts you may use):");
+    data.push(localNow(c.ambient));
+    data.push(`- run clock: ${fmtClock(c.elapsedSeconds)}`);
+    data.push(`- distance: ${(c.distanceMeters / 1000).toFixed(2)} km, run type ${c.runType}`);
+    if (input.lastSplitSecPerKm) data.push(`- last kilometre: ${fmtPace(input.lastSplitSecPerKm)} per km`);
+    if (c.avgPaceSecPerKm) data.push(`- average pace so far: ${fmtPace(c.avgPaceSecPerKm)} per km`);
+    if (input.lastSplitSecPerKm && c.avgPaceSecPerKm && Math.abs(input.lastSplitSecPerKm - c.avgPaceSecPerKm) <= 3) {
+        data.push("  (split and average are the same number: say at most one of them)");
+    }
+    if (c.currentPaceSecPerKm) data.push(`- current pace: ${fmtPace(c.currentPaceSecPerKm)} per km`);
+    if (c.currentHR) data.push(`- heart rate now: ${Math.round(c.currentHR)} bpm`);
+    if (input.avgHR) data.push(`- last kilometre average heart rate: ${Math.round(input.avgHR)} bpm`);
     if (c.planKind === "distance" && c.planDistanceKm) {
         const remaining = Math.max(0, c.planDistanceKm * 1000 - c.distanceMeters);
-        lines.push(`- plan: ${c.planDistanceKm} km, ${(remaining / 1000).toFixed(1)} km to go`);
-        if (c.avgPaceSecPerKm) lines.push(`- projected finish at current average: ${fmtClock(c.elapsedSeconds + (remaining / 1000) * c.avgPaceSecPerKm)}`);
+        data.push(`- plan: ${c.planDistanceKm} km, ${(remaining / 1000).toFixed(1)} km to go`);
+        if (c.avgPaceSecPerKm) data.push(`- projected finish at current average: ${fmtClock(c.elapsedSeconds + (remaining / 1000) * c.avgPaceSecPerKm)}`);
     } else if (c.planKind === "time" && c.planTimeMinutes) {
-        lines.push(`- plan: ${c.planTimeMinutes} minutes, ${Math.max(0, Math.round((c.planTimeMinutes * 60 - c.elapsedSeconds) / 60))} minutes to go`);
+        data.push(`- plan: ${c.planTimeMinutes} minutes, ${Math.max(0, Math.round((c.planTimeMinutes * 60 - c.elapsedSeconds) / 60))} minutes to go`);
     }
-    lines.push(`- marathon day: 25 October 2026 (${daysUntil("2026-10-25")} days from today)`);
-    pushCourseBlock(lines, (c as { raceMode?: string }).raceMode, c.distanceMeters);
+    data.push(`- marathon day: 25 October 2026, Tianjin (${daysUntil("2026-10-25")} days from today)`);
+    pushCourseBlock(data, c.raceMode, c.distanceMeters);
     if (input.camera) {
         const cam = input.camera;
         const bits = [cam.connected ? (cam.recording ? "recording" : "connected, NOT recording") : "OFFLINE"];
@@ -85,49 +105,134 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         if (cam.remainMinutes != null) bits.push(`${cam.remainMinutes} min of card left`);
         if ((cam.tempOver ?? 0) >= 2) bits.push("overheating");
         const needsAttention = !cam.connected || !cam.recording || (cam.batteryPercent ?? 100) <= 30 || (cam.remainMinutes ?? 999) <= 20 || (cam.tempOver ?? 0) >= 2;
-        lines.push(`- camera (his Osmo on the chest mount): ${bits.join(", ")}${needsAttention ? ". MENTION the camera in one sentence: he carries three spare batteries, tell him when to swap." : ". Fine; do not mention it."}`);
+        data.push(`- camera (his Osmo on the chest mount): ${bits.join(", ")}${needsAttention ? ". MENTION the camera in one sentence: he carries three spare batteries, tell him when to swap." : ". Fine; do not mention it."}`);
     }
 
-    const [history, ambient, intel, briefing] = await Promise.all([
+    const [history, ambient, intel, briefing, desk, talkback] = await Promise.all([
         historyAtKm(env, input.km, c.elapsedSeconds, input.runId),
         c.ambient?.lat != null ? fetchAmbient(c.ambient, env) : Promise.resolve(null),
         c.ambient?.lat != null && c.ambient?.lon != null ? fetchLocalIntel(c.ambient.lat, c.ambient.lon, env) : Promise.resolve(null),
         fetchBriefing(env).catch(() => []),
+        recentDeskLines(env, Math.min(c.elapsedSeconds + 120, 900)),
+        runnerTalkback(env, c.elapsedSeconds + 120),
     ]);
     if (history.length) {
-        lines.push("");
-        lines.push(`HISTORY at ${input.km} km (his own past runs, same marker):`);
-        for (const h of history) lines.push(`- ${h}`);
+        data.push("");
+        data.push(`HISTORY at ${input.km} km (his own past runs, same marker):`);
+        for (const h of history) data.push(`- ${h}`);
     }
     if (ambient && Object.keys(ambient).length) {
-        lines.push("");
-        lines.push("CONDITIONS (measured):");
-        if (ambient.tempC != null) lines.push(`- ${ambient.tempC}°C${ambient.feelsC != null ? `, feels ${ambient.feelsC}` : ""}, ${ambient.conditions ?? ""}, humidity ${ambient.humidity ?? "?"}%, wind ${ambient.windKmh ?? "?"} km/h`);
-        if (ambient.aqi != null) lines.push(`- air: AQI ${ambient.aqi} (${ambient.aqiCategory}; ${ambient.aqiSource === "station" ? `official ${ambient.aqiStation} monitor ${ambient.aqiStationKm} km away, ${ambient.aqiAsOf} reading; this is the number his watch shows` : "modelled, approximate"})${ambient.pm25 != null ? `, PM2.5 ${ambient.pm25}` : ""}`);
-        if (ambient.sunset) lines.push(`- sunset ${ambient.sunset}${ambient.isDay === false ? ", it is dark" : ""}`);
+        data.push("");
+        data.push("CONDITIONS (measured):");
+        if (ambient.tempC != null) data.push(`- ${ambient.tempC}°C${ambient.feelsC != null ? `, feels ${ambient.feelsC}` : ""}, ${ambient.conditions ?? ""}, humidity ${ambient.humidity ?? "?"}%, wind ${ambient.windKmh ?? "?"} km/h`);
+        if (ambient.aqi != null) data.push(`- air: AQI ${ambient.aqi} (${ambient.aqiCategory}; ${ambient.aqiSource === "station" ? `official ${ambient.aqiStation} monitor ${ambient.aqiStationKm} km away, ${ambient.aqiAsOf} reading; this is the number his watch shows` : "modelled, approximate"})${ambient.pm25 != null ? `, PM2.5 ${ambient.pm25}` : ""}`);
+        if (ambient.sunset) data.push(`- sunset ${ambient.sunset}${ambient.isDay === false ? ", it is dark" : ""}`);
     }
     const intelBlock = formatLocalIntel(intel);
     if (intelBlock) {
-        lines.push("");
-        lines.push("SURROUNDINGS (Amap, live):");
-        lines.push(intelBlock);
+        data.push("");
+        data.push("SURROUNDINGS (Amap, live; names may be Chinese: say them in English or pinyin, never in characters):");
+        data.push(intelBlock);
     }
     if (c.place?.road || c.place?.route) {
-        lines.push(`- route shape: ${c.place.route ?? ""}${c.place.road ? `, on ${c.place.road}` : ""}`);
+        data.push(`- route shape: ${[c.place.route, c.place.road ? `on ${c.place.road}` : ""].filter(Boolean).join(", ")}`);
     }
     const items = briefing.filter((b) => b.kind !== "quiet");
     if (items.length) {
-        lines.push("");
-        lines.push("CONTROL ROOM (from the desk, true today):");
-        for (const b of items.slice(0, 5)) lines.push(`- [${b.kind}] ${b.text}`);
+        data.push("");
+        data.push("CONTROL ROOM (from the desk, true today):");
+        for (const b of items.slice(0, 5)) data.push(`- [${b.kind}] ${b.text}`);
     }
-    if (input.recentLines?.length) {
-        lines.push("");
-        lines.push("RECENT LINES you already said (do not repeat the angle):");
-        for (const r of input.recentLines.slice(-4)) lines.push(`- "${r}"`);
+    if (desk.length) {
+        data.push("");
+        data.push("THE DESK ALREADY TOLD HIM (heard; never repeat it, build on it):");
+        for (const d of desk.slice(-5)) data.push(`- ${agoText(d)}: "${d.text.slice(0, 300)}"`);
     }
-    const result = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: 320, cacheSystem: true }, env);
-    return { text: clean(result.text), model: result.model };
+
+    const lead = pickLead(input.km, {
+        split: !!input.lastSplitSecPerKm,
+        heart: !!(c.currentHR || input.avgHR),
+        clock: true,
+        ahead: c.planKind !== "open" || race,
+        fuel: race || desk.some((d) => FUEL_WORDS.test(d.text)),
+        history: history.length > 0,
+    });
+    const named = placesAlreadyNamed(recent, intel, c.place);
+    const short = input.km % 3 === 0;
+
+    const lines: string[] = [];
+    lines.push(`KILOMETRE ${input.km} just crossed; the phone has ALREADY announced the number, so do not say "${kmWord(input.km)} kilometres" or open on the distance.`);
+    lines.push(race
+        ? `Deliver the readout: ${short ? "2 sentences" : "2 to 4 sentences"}, ${short ? "under 15" : "under 30"} seconds spoken. If the course block has a STORY HERE, tell it (told, not read) in place of a number.`
+        : `Deliver the readout: ${short ? "ONE or TWO sentences, under 12 seconds" : "2 or 3 sentences, under 20 seconds"} spoken. Short and factual: receipts, not commentary.`);
+    lines.push(`LEAD WITH: ${LEAD_TEXT[lead]}. That is your first sentence. Everything else is optional: include another number only if it CHANGED since your last readout. Never recite split, average and heart rate as a set.`);
+    if (talkback.length) {
+        lines.push("");
+        lines.push("HIS INSTRUCTIONS TO YOU THIS RUN (said over the radio; obey every one of them, they override your habits):");
+        for (const t of talkback) lines.push(`- ${agoText(t)}: "${t.text.slice(0, 500)}"`);
+    }
+    lines.push("");
+    lines.push(...data);
+    if (recent.length) {
+        lines.push("");
+        lines.push(`YOUR EARLIER READOUTS THIS RUN, oldest first. He heard every one. Do not reuse their opening words, their order, their closing shape, or any place they named. A number the LAST one gave that has not moved (within 3 s or 2 bpm) is unchanged: leave it out.`);
+        recent.slice(-6).forEach((r, i, a) => lines.push(`- ${i === a.length - 1 ? "LAST" : "earlier"}: "${r}"`));
+        const openers = [...new Set(recent.map((r) => r.split(/\s+/).slice(0, 3).join(" ")))];
+        lines.push(`Openings already used, banned: ${openers.map((o) => `"${o}"`).join(", ")}.`);
+    }
+    if (named.length) {
+        lines.push("");
+        lines.push(`PLACES ALREADY NAMED THIS RUN, never name them again: ${named.join("; ")}. If no NEW place is worth it, say no place at all.`);
+    }
+    const result = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: race ? 260 : 180, cacheSystem: true }, env);
+    return { text: polishReadout(clean(result.text), input.km, named), model: result.model };
+}
+
+function pickLead(km: number, ok: Record<Lead, boolean>): Lead {
+    const eligible = LEAD_ORDER.filter((l) => ok[l]);
+    if (!eligible.length) return "clock";
+    return eligible[(km - 1) % eligible.length]!;
+}
+
+function kmWord(km: number): string {
+    return KM_WORDS[km] ?? String(km);
+}
+
+function agoText(d: DeskLine): string {
+    return d.agoS < 90 ? `${d.agoS} s ago` : `${Math.round(d.agoS / 60)} min ago`;
+}
+
+/// Place names an earlier readout already said: any live POI, road or area
+/// name that appears in them, plus the English proper names they used.
+function placesAlreadyNamed(recent: string[], intel: Awaited<ReturnType<typeof fetchLocalIntel>>, place: ReadoutInput["runContext"]["place"]): string[] {
+    if (!recent.length) return [];
+    const said = recent.join(" \n ");
+    const out = new Set<string>();
+    const candidates = [
+        ...(intel?.nearby.map((n) => n.name) ?? []), intel?.inside, intel?.district,
+        place?.road, place?.area, ...(place?.pois ?? []),
+    ].filter((x): x is string => !!x && x.length >= 2);
+    for (const cand of candidates) if (said.includes(cand)) out.add(cand);
+    for (const m of said.matchAll(/\p{Script=Han}{2,}/gu)) out.add(m[0]);
+    const proper = /\b((?:[A-Z][\p{L}'&-]*\s+){0,4}(?:Street|Road|Park|Lu|Jie|Hotel|Centre|Center|District|International|Tower|Bridge|Plaza|Mall|Station|Square|Gate|Corner|Garden|Gardens|Building))\b/gu;
+    for (const m of said.matchAll(proper)) {
+        const name = m[1]!.trim();
+        if (/^(The|Still|On|You're|Off|Past|Near)\s/.test(name)) out.add(name.replace(/^\S+\s+/, ""));
+        else out.add(name);
+    }
+    return [...out].filter((n) => n.split(/\s+/).length >= 2 || /[^\x00-\x7F]/.test(n)).slice(0, 12);
+}
+
+/// Deterministic backstop for the two repeats the prompt alone did not stop:
+/// opening on the kilometre count, and re-introducing a place already named.
+function polishReadout(text: string, km: number, named: string[]): string {
+    let t = text.replace(new RegExp(`^(?:kilometre\\s+)?(?:${kmWord(km)}|${km})(?:\\s+(?:kilometres?|k|km))?\\s*[,.:;]\\s*`, "i"), "");
+    if (named.length) {
+        const sentences = t.match(/[^.!?]+[.!?]*/g) ?? [t];
+        const kept = sentences.filter((s) => !named.some((n) => s.includes(n)));
+        if (kept.length >= 1 && kept.length < sentences.length) t = kept.join("").trim();
+    }
+    return t ? t[0]!.toUpperCase() + t.slice(1) : text;
 }
 
 /// The watchdog answer (founder, 2026-10-17): he talked to Control Room and
@@ -275,5 +380,5 @@ function daysUntil(iso: string): number {
     return Math.max(0, Math.round((Date.parse(iso + "T00:00:00+08:00") - Date.now()) / 86_400_000));
 }
 function clean(t: string): string {
-    return t.replace(/[*_#>`]/g, "").replace(/—|–/g, ",").replace(/\s+/g, " ").trim();
+    return finalizeSpoken(t.replace(/[*_#>`]/g, "").replace(/\u2014|\u2013/g, ",").replace(/\s+/g, " ").trim(), "home");
 }

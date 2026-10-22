@@ -6,12 +6,15 @@ import {
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { fetchLocalIntel, type AmapEnv } from "../lib/amap";
 import { pushCourseBlock } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
+import { finalizeSpoken } from "../lib/englishOnly";
+import { pushDeskBlock } from "../lib/deskContext";
 
 export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
@@ -99,7 +102,7 @@ export async function musicCommentHandler(
     }
 
     const response: MusicCommentResponse & { provider: string } = {
-        text: validatedData.text,
+        text: finalizeSpoken(validatedData.text, req.personalityId === "jessica" ? "jessica" : "ricky"),
         model,
         provider,
         pickedLine: validatedData.pickedLine,
@@ -177,12 +180,14 @@ async function buildUserPrompt(req: MusicCommentRequest, env: Env): Promise<stri
     }
     lines.push(`- plan: ${c.planKind}`);
     lines.push(`- run type: ${c.runType}`);
-    pushPlaceBlock(lines, c.place);
+    pushPlaceBlock(lines, c.place, c.ambient?.lat != null && c.ambient?.lon != null
+        ? await fetchLocalIntel(c.ambient.lat, c.ambient.lon, env as unknown as AmapEnv) : null);
     pushCourseBlock(lines, c.raceMode, c.distanceMeters);
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);
     await pushBriefingBlock(lines, env, "ricky");
+    await pushDeskBlock(lines, env);
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");

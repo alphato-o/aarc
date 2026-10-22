@@ -7,6 +7,7 @@ import {
 import { reactModeFor, systemPromptFor, runPhaseBlock, jessicaBroadcastPrompt, JessicaLengthMode } from "../lib/personalities";
 import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { fetchLocalIntel, type AmapEnv } from "../lib/amap";
 import { pushCourseBlock, pushStoryDirective } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
@@ -14,6 +15,8 @@ import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
+import { finalizeSpoken } from "../lib/englishOnly";
+import { pushDeskBlock } from "../lib/deskContext";
 
 export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
@@ -166,6 +169,7 @@ export async function reactLineHandler(
     if (req.personalityId === "jessica" && tripsOpenerTic(finalText)) {
         finalText = await rewriteOffTic(finalText, systemPrompt, userPrompt, maxTokens, env) ?? finalText;
     }
+    finalText = finalizeSpoken(finalText, req.personalityId === "jessica" ? "jessica" : "ricky");
 
     const response: ReactLineResponse & { provider: string } = {
         text: finalText,
@@ -212,7 +216,7 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
 
     const isMilestone = !!req.partnerSource && req.partnerSource.startsWith("milestone:");
     if (isMilestone) {
-        lines.push(`MILESTONE: ${req.partnerLine.trim()}`);
+        lines.push(`MILESTONE: ${milestoneTruth(req.partnerSource!, c.distanceMeters) ?? req.partnerLine.trim()}`);
         lines.push(`(moment: ${req.partnerSource})`);
         lines.push("");
         lines.push("THIS KILOMETRE IS YOURS — Ricky's sitting it out, you mark it. Reward him for crossing it: make him feel it in his body, vivid and immersive, the fuel that drags him to the next marker. Don't just restate the number — react to the ACHIEVEMENT and exactly what it earns him.");
@@ -234,21 +238,26 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
     if (c.currentPaceSecPerKm !== undefined) {
         lines.push(`- current pace: ${formatPace(c.currentPaceSecPerKm)}/km`);
     }
-    lines.push(`- plan: ${c.planKind}`);
+    lines.push(`- plan: ${planLine(c)}`);
     lines.push(`- run type: ${c.runType}`);
+    lines.push(c.runType === "outdoor"
+        ? "- SETTING: he is OUTSIDE on the streets. No treadmill, no belt, no gym, no machine he is standing on: those images are wrong today."
+        : "- SETTING: he is INDOORS on a treadmill. No streets, pavements, weather or traffic.");
     // Emotional arc: cold early → "rewardy" late.
     {
         const p = c.progressFraction ?? Math.min(0.999, c.elapsedSeconds / 2400);
         lines.push("");
         lines.push(runPhaseBlock(Math.min(0.999, Math.max(0, p)), "jessica"));
     }
-    pushPlaceBlock(lines, c.place);
+    pushPlaceBlock(lines, c.place, c.ambient?.lat != null && c.ambient?.lon != null
+        ? await fetchLocalIntel(c.ambient.lat, c.ambient.lon, env as unknown as AmapEnv) : null);
     pushCourseBlock(lines, c.raceMode, c.distanceMeters);
     pushStoryDirective(lines, c.raceMode, c.distanceMeters, "jessica");
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);
     await pushBriefingBlock(lines, env, "jessica");
+    await pushDeskBlock(lines, env, req.partnerSource);
 
     if (req.personalNotes && req.personalNotes.length > 0) {
         lines.push("");
@@ -306,6 +315,39 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
         ? "Now give your ONE milestone line — mark his kilometre, fresh and vivid, nothing like the lines above, WITHIN the length limit. JSON only."
         : "Now give your ONE line — a reply that latches onto your chosen hook from Ricky's line, fresh and nothing like the lines above, WITHIN the length limit. JSON only.");
     return lines.join("\n");
+}
+
+/// The phone fires her "milestone" on any distance-type script line and
+/// rounds the distance to a kilometre (run CF3B6CD8: "six whole kilometres"
+/// at 5.68 km, "eleven" at 11.43). Tell her where he really is.
+function milestoneTruth(source: string, distanceMeters: number): string | null {
+    const km = Number(source.match(/(\d+)\s*$/)?.[1]);
+    if (!Number.isFinite(km) || km <= 0) return null;
+    const d = distanceMeters / 1000;
+    const marker = km * 1000;
+    if (distanceMeters < marker - 40) {
+        return `He is at ${d.toFixed(2)} km, ${Math.round(marker - distanceMeters)} m SHORT of the ${km} km marker. He has NOT reached ${km} yet: it is just ahead. Never say he has done ${km} kilometres; "nearly ${km}" is the truth.`;
+    }
+    if (distanceMeters > marker + 200) {
+        return `He passed ${km} km a little while ago and is now at ${d.toFixed(2)} km. Mark ${km} as behind him, not as this second.`;
+    }
+    return `He has just crossed ${km} kilometres (${d.toFixed(2)} km on the watch).`;
+}
+
+/// The plan as a distance she can say. The phone sends only planKind here,
+/// so "finish the half" came out on a 15K: infer the target from progress.
+function planLine(c: { planKind: string; planDistanceKm?: number; distanceMeters: number; progressFraction?: number }): string {
+    if (c.planKind !== "distance") return c.planKind;
+    let km = c.planDistanceKm;
+    if (!km && c.progressFraction && c.progressFraction >= 0.08 && c.distanceMeters > 500) {
+        const raw = c.distanceMeters / 1000 / c.progressFraction;
+        const named = [5, 10, 15, 21.1, 30, 42.2].find((n) => Math.abs(raw - n) / n <= 0.06);
+        km = named ?? Math.round(raw);
+    }
+    if (!km) return "distance";
+    const left = Math.max(0, km - c.distanceMeters / 1000);
+    const what = km === 42.2 ? "a full marathon" : km === 21.1 ? "a half marathon" : `a ${km} km run, NOT a half or full marathon`;
+    return `distance, ${km} km (${what}), ${left.toFixed(1)} km to go. "Halfway" means ${(km / 2).toFixed(1)} km.`;
 }
 
 function formatSeconds(seconds: number): string {

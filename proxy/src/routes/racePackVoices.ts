@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { softStrings } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
+import { finalizeSpoken } from "../lib/englishOnly";
 import { HOME_BASE_SYSTEM } from "../lib/homeBase";
 import { courseById, courseScriptBlock, Course } from "../lib/course";
 import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
@@ -53,7 +54,8 @@ export async function racePackVoicesHandler(request: Request, env: Env): Promise
             generate(env, jessicaSystem, prompts.jessica),
             generate(env, HOME_BASE_SYSTEM, prompts.home),
         ]);
-        return json({ ok: true, jessica, home });
+        const spoken = (ls: Line[], v: "jessica" | "home") => ls.map((l) => ({ ...l, text: finalizeSpoken(l.text, v) }));
+        return json({ ok: true, jessica: spoken(jessica, "jessica"), home: spoken(home, "home") });
     } catch (e) {
         if (e instanceof LLMOutputError) {
             await captureMessage(env, `race-pack-voices rejected after retry: ${e.detail}`, "error", { route: "/race-pack-voices" });

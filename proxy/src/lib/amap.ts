@@ -9,6 +9,7 @@ export interface AmapEnv {
 
 export interface LocalIntel {
     district?: string;
+    inside?: string;         // the area of interest the point sits in (a park, a campus)
     weather?: string;        // "晴 21°C, 湿度 35%, 西南风 ≤3" rendered in English below
     tonight?: string;        // forecast line for tonight
     nearby: { name: string; type: string; meters: number }[];
@@ -36,7 +37,7 @@ async function resolve(lat: number, lon: number, apiKey: string): Promise<LocalI
     const [glat, glon] = wgsToGcj(lat, lon);
     const loc = `${glon.toFixed(6)},${glat.toFixed(6)}`;
     const [regeo, around] = await Promise.all([
-        getJSON(`https://restapi.amap.com/v3/geocode/regeo?key=${apiKey}&location=${loc}&extensions=base`),
+        getJSON(`https://restapi.amap.com/v3/geocode/regeo?key=${apiKey}&location=${loc}&extensions=all&radius=100`),
         // Parks, scenic spots, sports venues, transit: the things a runner passes.
         getJSON(`https://restapi.amap.com/v3/place/around?key=${apiKey}&location=${loc}&radius=350&types=110100|110200|080100|080300|150500|060100|050000&offset=12&page=1&extensions=base`),
     ]);
@@ -44,6 +45,11 @@ async function resolve(lat: number, lon: number, apiKey: string): Promise<LocalI
     const ac = regeo?.regeocode?.addressComponent;
     const adcode: string | undefined = ac?.adcode;
     if (ac) out.district = [ac.district, typeof ac.township === "string" ? ac.township : ""].filter(Boolean).join(" ");
+    // Smallest named area containing the point: the park, not the whole CBD.
+    const aoi = (regeo?.regeocode?.aois ?? [])
+        .filter((a: any) => a?.name && Number(a.distance ?? 0) === 0)
+        .sort((a: any, b: any) => Number(a.area ?? 0) - Number(b.area ?? 0))[0];
+    if (aoi) out.inside = String(aoi.name);
     if (Array.isArray(around?.pois)) {
         for (const p of around.pois) {
             const meters = Number(p.distance);
@@ -67,6 +73,7 @@ export function formatLocalIntel(i: LocalIntel | null): string | null {
     if (!i) return null;
     const bits: string[] = [];
     if (i.district) bits.push(`- district: ${i.district}`);
+    if (i.inside) bits.push(`- he is inside: ${i.inside} (running in it right now, not near it)`);
     if (i.weather) bits.push(`- weather: ${i.weather}`);
     if (i.tonight) bits.push(`- forecast: ${i.tonight}`);
     if (i.nearby.length) bits.push(`- within 350 m: ${i.nearby.map((n) => `${n.name} (${n.type}, ${n.meters} m)`).join("; ")}`);

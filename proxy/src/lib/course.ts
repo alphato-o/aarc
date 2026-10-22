@@ -56,11 +56,12 @@ export function courseFor(raceMode: string | undefined): Course | null {
 
 function fmtKm(m: number): string { return (m / 1000).toFixed(1); }
 
-/// The race is recorded for an English-speaking audience and the voices read
-/// Chinese characters aloud in Mandarin (founder, 2026-10-17: "the
-/// pronunciation is usually funny"). Every Chinese name he hears needs the
-/// English right behind it.
-export const NAMES_RULE = "NAMES, a hard rule for race mode: every Chinese place name you say gets its English meaning or a plain description right after it, the first time, in the same breath: \"马场道, Racecourse Road\", \"鼓楼, the Drum Tower\", \"天津之眼, the Tianjin Eye, the Ferris wheel on the bridge\", \"海河, the Haihe river\". Use the English the course file gives; where it gives none, describe the thing (\"the river road\", \"the station square\"). Never a run of two Chinese names with no English between them. One Chinese name per sentence at most; English names (the Astor, Nankai, the Water Drop) need no Chinese.";
+/// The race is recorded for an English-speaking YouTube audience. On 17 Oct
+/// the voices were told to read Chinese names aloud in Mandarin with the
+/// English after; reversed 22 Oct (run CF3B6CD8): Chinese characters went into
+/// English lines and the TTS read them out mid-sentence. Lines are English only;
+/// lib/englishOnly.ts strips whatever slips through.
+export const NAMES_RULE = "NAMES, a hard rule: every line is ENGLISH ONLY and never contains a Chinese character. Say a Chinese place by its English name (\"Racecourse Road\", \"the Drum Tower\", \"the Tianjin Eye, the Ferris wheel on the bridge\", \"the Haihe river\"), else in pinyin (\"Jinghua Street\", \"Hujialou\"), else describe it (\"the river road\", \"the station square\"). If you cannot render a name in English or pinyin, leave it out. Numbers are English words or digits, never Chinese numerals.";
 
 /// The story for this point (covering it, or the next one within `aheadM`).
 export function storyAt(course: Course, distanceMeters: number, aheadM = 700): { here: CourseStory | null; next: CourseStory | null } {
@@ -98,7 +99,7 @@ export function courseBlock(course: Course, distanceMeters: number): string[] {
     out.push(course.totalM - d > 400
         ? `- remaining: about ${fmtKm(course.totalM - d)} km to the finish at 天津奥林匹克中心 (the Water Drop stadium); his watch may read a little long`
         : `- remaining: the finish arch at 天津奥林匹克中心 (the Water Drop stadium) is close. Never say the race is over or give a remaining number: his watch reads long, the arch is the finish`);
-    out.push("Use these as the REAL surroundings when the live GPS block is thin or absent; name the places as given, in Chinese where they are Chinese. The course is flat; the only climbs are the bridges. Do not recite the list; pick the one thing that sharpens the line.");
+    out.push("Use these as the REAL surroundings when the live GPS block is thin or absent; name the places in English or pinyin, never in Chinese characters. The course is flat; the only climbs are the bridges. Do not recite the list; pick the one thing that sharpens the line.");
     out.push(NAMES_RULE);
     const st = storyAt(course, d);
     if (st.here) {

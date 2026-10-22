@@ -5,6 +5,7 @@ import {
     ScriptSchema,
 } from "../schemas";
 import { systemPromptFor } from "../lib/personalities";
+import { finalizeSpoken } from "../lib/englishOnly";
 import { courseById, courseFor, courseScriptBlock } from "../lib/course";
 import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
@@ -89,7 +90,13 @@ export async function generateScriptHandler(
 
     // Race pack: a one-shot on a round kilometre would stack on the kilometre
     // call, which Home Base owns. Nudge any such line to +350 m, keeping order.
-    const messages = racePackCourse(req) ? nudgeOffKilometres(validated.data) : validated.data;
+    const voice = req.personalityId === "jessica" ? "jessica" : "ricky";
+    const spoken = validated.data.map((m) => ({
+        ...m,
+        text: finalizeSpoken(m.text, voice),
+        ...(m.textVariants ? { textVariants: m.textVariants.map((t) => finalizeSpoken(t, voice)) } : {}),
+    }));
+    const messages = racePackCourse(req) ? nudgeOffKilometres(spoken) : spoken;
     const response: GenerateScriptResponse & { provider: string } = {
         scriptId: crypto.randomUUID(),
         model,
@@ -133,7 +140,7 @@ async function buildUserPrompt(
             `- The run is the ${course.name} on ${course.date}, 42.2 km, his FIRST full marathon. The first 30 minutes are in a crowd with no phone signal, so this script is the only voice he hears until the network comes back, and it is the fallback for any kilometre the live voices cannot reach him later.`,
             "- He starts the race clock himself at the timing gate; distance 0 is the gate, not the corral.",
             "- ON TOP of the required messages, write ONE-SHOT STORY LINES: {\"type\":\"distance\",\"atMeters\":N}, one for EVERY story in the STORIES ALONG THE COURSE list below, at the metres given (shift each by 150 to 500 m so it never lands on a round kilometre, which another voice owns; keep them in order). You are the tour guide on this run, and the tour guide is Ricky: the fact is true and specific (the last emperor dancing at the Astor, Liddell's Sunday, the bridge where the army met, the walls the occupiers pulled down), the angle is yours, and it lands on HIM, on what he is doing at that moment. Kilometres 1 to 8 are the no-signal stretch: make sure each of them has a line.",
-            "- Name the actual places (Chinese names exactly as given, with the English the file gives). Keep every historical fact exactly as the file states it; invent only the jokes. Never recite; one or two sentences of fact per line, then the knife.",
+            "- Name the actual places in English or pinyin, never in Chinese characters (see the NAMES rule below). Keep every historical fact exactly as the file states it; invent only the jokes. Never recite; one or two sentences of fact per line, then the knife.",
             "- The per-km loop pool: 8 variants, race-flavoured (bibs, crowds, gels, cups, the 30 km wall, his first marathon, the city of jokes), none naming a kilometre.",
             "- The HALFWAY line is the half-marathon mat; the NEAR-FINISH line is the last 100 m along the stadium; the FINISH line is the finish, so this once it IS the end.",
             "- Message count for THIS script: 38 to 48 (the normal 8 to 14 limit does not apply here).",

@@ -6,6 +6,7 @@ import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../l
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
+import { finalizeSpoken } from "../lib/englishOnly";
 
 export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
@@ -73,7 +74,9 @@ export async function roastPoolHandler(request: Request, env: Env): Promise<Resp
                 return v.data;
             },
         );
-        return json({ ok: true, lines: out.data.lines, model: out.model, provider: out.provider });
+        const voice = req.personalityId === "jessica" ? "jessica" : "ricky";
+        const lines = out.data.lines.map((l) => finalizeSpoken(l, voice)).filter((l) => l.length >= 4 && !claimsRunPosition(l));
+        return json({ ok: true, lines, model: out.model, provider: out.provider });
     } catch (e) {
         if (e instanceof LLMOutputError) {
             await captureMessage(env, `roast-pool rejected after retry: ${e.detail}`, "error", { route: "/roast-pool" });
@@ -115,12 +118,30 @@ async function buildUserPrompt(req: z.infer<typeof RoastPoolRequestSchema>, n: n
     lines.push(`POOL RULES — the whole point of batching is VARIETY, so enforce it yourself across the ${n} lines:`);
     lines.push("1. Each line: ONE sentence, at most ~150 characters, one idea, landed, out.");
     lines.push("2. Every line takes a DIFFERENT angle (different topic, target, image, and sentence shape). If two lines share a hook, a punchline structure, or a key word, rewrite one. No two lines may use the same personal-note bullet or the same ambient fact.");
-    lines.push("3. TIMELESS within the run: no specific distance/elapsed references ('5k in', 'twenty minutes') — the line may fire at ANY point. Generic run-state ('still going', 'that belt') is fine.");
+    lines.push("3. TIMELESS within the run: the line may fire at ANY point, so it states NO elapsed time, NO distance, NO kilometre and NO pace: not '5k in', not 'twenty-nine minutes in', not 'at kay nine', not even as a pun on someone's age or fortune. Generic run-state ('still going') is fine. Lines that break this are thrown away.");
+    lines.push(c.runType === "outdoor"
+        ? "   SETTING: he is outdoors on the streets. No treadmill, belt, gym or machine images."
+        : "   SETTING: he is indoors on a treadmill. No streets, pavements or weather.");
     lines.push("4. Most lines carry one ElevenLabs v4 tag: a sound ([scoffs] [sighs] [soft chuckle]), an emotion ([dismissive] [deadpan]) or a short delivery direction ([under his breath] [pause, dry amusement]); vary them. Older rule kept for the sounds: at most a third of the lines carry ONE sound tag ([scoffs]/[sighs]/[chuckles]/[laughs]/[snorts]/[exhales]); vary which, never the same tag twice in a row in the list; the rest land bare and deadpan.");
     lines.push("5. Stay in persona: mock-pity, deadpan, specific. No motivational-poster lines.");
     lines.push("");
     lines.push(`Return ONLY JSON: {"lines": ["...", "..."]} with exactly ${n} strings.`);
     return lines.join("\n");
+}
+
+/// A pool line fires at an unknown moment, so any claim about where he is in
+/// the run is a coin toss: "twenty-nine minutes into mild regret" played at
+/// 72 minutes, "an excuse at kay nine" at 15 km (run CF3B6CD8).
+const NUM = "(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|half)(?:[- ](?:one|two|three|four|five|six|seven|eight|nine|and a half))?";
+const RUN_POSITION = new RegExp(
+    `\\b${NUM}\\s*(?:minutes?|mins?|hours?|k|kay|km|kilomet(?:re|er)s?|miles?)\\s+(?:in|into|down|deep|done|gone)\\b` +
+    `|\\b(?:at|past|by)\\s+(?:kay|k|km|kilomet(?:re|er))\\s+${NUM}\\b` +
+    `|\\b(?:at|past|by)\\s+${NUM}\\s*(?:k|kay|km|kilomet(?:re|er)s?)\\b` +
+    `|\\b${NUM}\\s*(?:minutes?|mins?|kay|km|kilomet(?:re|er)s?)\\s+(?:left|to go)\\b`,
+    "i",
+);
+function claimsRunPosition(line: string): boolean {
+    return RUN_POSITION.test(line.replace(/\[[^\]]*\]/g, " "));
 }
 
 function stripCodeFences(text: string): string {

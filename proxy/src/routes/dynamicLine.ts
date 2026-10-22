@@ -6,6 +6,7 @@ import {
 } from "../schemas";
 import { systemPromptFor, runPhaseBlock } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
+import { fetchLocalIntel, type AmapEnv } from "../lib/amap";
 import { pushCourseBlock, pushStoryDirective } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
@@ -13,6 +14,8 @@ import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 import { pushBriefingBlock, BriefingEnv } from "../lib/briefing";
 import { fetchVenueProfile, formatVenueProfile, VenueProfileEnv } from "../lib/venueProfile";
+import { finalizeSpoken } from "../lib/englishOnly";
+import { pushDeskBlock } from "../lib/deskContext";
 
 export type Env = LLMEnv & SentryEnv & BriefingEnv & VenueProfileEnv;
 
@@ -109,6 +112,7 @@ export async function dynamicLineHandler(
     if (req.personalityId === "roast_coach" && tripsRickyTic(finalText)) {
         finalText = await rewriteRickyOffTic(finalText, systemPrompt, userPrompt, env) ?? finalText;
     }
+    finalText = finalizeSpoken(finalText, req.personalityId === "jessica" ? "jessica" : "ricky");
 
     const response: DynamicLineResponse & { provider: string } = {
         text: finalText,
@@ -201,12 +205,14 @@ async function buildUserPrompt(req: DynamicLineRequest, env: Env): Promise<strin
     if (c.stationarySeconds !== undefined && c.stationarySeconds > 0) {
         lines.push(`- stationary for: ${Math.round(c.stationarySeconds)}s (they were running and have now STOPPED — quote the seconds, never a distance)`);
     }
-    pushPlaceBlock(lines, c.place);
+    pushPlaceBlock(lines, c.place, c.ambient?.lat != null && c.ambient?.lon != null
+        ? await fetchLocalIntel(c.ambient.lat, c.ambient.lon, env as unknown as AmapEnv) : null);
     pushCourseBlock(lines, c.raceMode, c.distanceMeters);
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);
     await pushBriefingBlock(lines, env, "ricky");
+    await pushDeskBlock(lines, env, req.trigger);
     pushStoryDirective(lines, c.raceMode, c.distanceMeters, "ricky");
 
     if (req.customNote && req.customNote.trim().length > 0) {

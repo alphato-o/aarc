@@ -33,10 +33,10 @@ const STOP = new Set([
     // the model "this hook is spent, find another angle", and the only other
     // angle for a name is third person or no address at all — the exact failure
     // we just fixed. Density is handled by buildNameRation below instead.
-    "alpha", "wensong",
+    "alpha",
 ]);
 
-const RUNNER_NAMES = ["alpha", "wensong"];
+const RUNNER_NAMES = ["alpha"];
 
 /// Ration the runner's NAME rather than banning it.
 ///

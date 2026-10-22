@@ -1,3 +1,4 @@
+import { runnerName } from "./lib/englishOnly";
 import { z } from "zod";
 
 /// A "soft" string array for anti-repeat / context / persona fields: it
@@ -13,7 +14,7 @@ export const softStrings = (maxItems: number, maxLen: number) =>
                 ? v
                       .filter((x) => typeof x === "string" && x.trim().length > 0)
                       .slice(0, maxItems)
-                      .map((x) => (x as string).slice(0, maxLen))
+                      .map((x) => runnerName((x as string).slice(0, maxLen)))
                 : undefined,
         z.array(z.string()).optional(),
     );
@@ -336,6 +337,8 @@ export const ReactLineRequestSchema = z.object({
         currentHR: z.number().positive().optional(),
         currentPaceSecPerKm: z.number().positive().optional(),
         planKind: z.enum(["distance", "time", "open"]),
+        /// Not sent by the phone yet; the proxy infers it from progressFraction.
+        planDistanceKm: z.number().positive().optional(),
         runType: z.enum(["outdoor", "treadmill"]),
         /// 0..1 how far through the run — drives Jessica's arc (cold early →
         /// "rewardy" late). Sent by the client (RunDirector.progressFraction).
@@ -383,7 +386,8 @@ export const HomeBaseReadoutRequestSchema = z.object({
     runContext: DynamicLineRequestSchema.shape.runContext,
     lastSplitSecPerKm: z.number().positive().optional(),
     avgHR: z.number().positive().optional(),
-    recentLines: softStrings(8, 600),
+    // Readouts run 400-700 chars; 600 cut off the place sentence, the part that repeated.
+    recentLines: softStrings(8, 1200),
     runId: z.string().max(64).optional(),
     camera: z.object({
         connected: z.boolean(),
