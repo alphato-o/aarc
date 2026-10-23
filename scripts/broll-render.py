@@ -448,6 +448,32 @@ def redact(recs, pairs):
     return muted
 
 
+CJK = re.compile(r"[　-〿㐀-䶿一-鿿豈-﫿＀-￯]+")
+
+
+def strip_cjk(recs):
+    """The video goes to YouTube: no Chinese characters on screen, ever. Returns fields changed."""
+    changed = 0
+
+    def scrub(v):
+        nonlocal changed
+        if isinstance(v, str):
+            if not CJK.search(v):
+                return v
+            changed += 1
+            return re.sub(r"\s{2,}", " ", CJK.sub(" ", v)).strip()
+        if isinstance(v, list):
+            return [scrub(x) for x in v]
+        if isinstance(v, dict):
+            return {k: scrub(x) for k, x in v.items()}
+        return v
+    for r in recs:
+        for k, v in list(r.items()):
+            if k != "audio":
+                r[k] = scrub(v)
+    return changed
+
+
 class Series:
     """Last-known and linearly interpolated values of one field over time."""
 
@@ -1424,6 +1450,7 @@ def main():
     pairs = load_redactions(args.redact)
     if pairs:
         print(f"redact: {len(pairs)} term(s), {redact(recs, pairs)} voice line(s) muted")
+    print(f"cjk: {strip_cjk(recs)} text field(s) cleaned")
     W, H = (int(v) for v in args.size.lower().split("x"))
     W -= W % 2
     H -= H % 2
