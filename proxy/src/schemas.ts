@@ -389,6 +389,8 @@ export const HomeBaseReadoutRequestSchema = z.object({
     // Readouts run 400-700 chars; 600 cut off the place sentence, the part that repeated.
     recentLines: softStrings(8, 1200),
     runId: z.string().max(64).optional(),
+    // The run is over: the closing readout (235+), asked for by the phone at the finish.
+    closing: z.boolean().optional(),
     camera: z.object({
         connected: z.boolean(),
         recording: z.boolean(),

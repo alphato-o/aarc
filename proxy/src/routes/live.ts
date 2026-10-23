@@ -96,8 +96,13 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
         const b = await request.json<{ runId?: string; events?: unknown[] }>();
         if (!b.runId || !Array.isArray(b.events)) return json({ ok: false, error: "runId + events required" }, 400);
-        const row = await env.DB.prepare("SELECT recent_events, race FROM live_run WHERE run_id = ?").bind(b.runId).first<{ recent_events: string; race: number }>();
+        const row = await env.DB.prepare("SELECT recent_events, race, last_seq FROM live_run WHERE run_id = ?").bind(b.runId).first<{ recent_events: string; race: number; last_seq: number | null }>();
         if (!row) return json({ ok: false, error: "no such live run" }, 404);
+        // Numbered events (235+) already stored are a resend: drop them.
+        const seen = row.last_seq ?? -1;
+        b.events = (b.events as Array<Record<string, unknown>>).filter((e) => typeof e?.seq !== "number" || (e.seq as number) > seen);
+        const maxSeq = (b.events as Array<Record<string, unknown>>).reduce((m, e) => typeof e?.seq === "number" ? Math.max(m, e.seq as number) : m, seen);
+        if (!b.events.length) return json({ ok: true, count: 0, duplicate: true });
         let recent: unknown[] = [];
         try { recent = JSON.parse(row.recent_events); } catch { /* reset */ }
         // The rolling window keeps type/detail/t only; the race table keeps data.
@@ -118,8 +123,8 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         }
         if (venue) await env.DB.prepare("UPDATE live_run SET venue = ? WHERE run_id = ?").bind(venue, b.runId).run();
         if (city) await env.DB.prepare("UPDATE live_run SET city = ? WHERE run_id = ?").bind(city, b.runId).run();
-        await env.DB.prepare("UPDATE live_run SET recent_events = ?, last_event_at = ? WHERE run_id = ?")
-            .bind(JSON.stringify(recent), now, b.runId).run();
+        await env.DB.prepare("UPDATE live_run SET recent_events = ?, last_event_at = ?, last_seq = ? WHERE run_id = ?")
+            .bind(JSON.stringify(recent), now, maxSeq >= 0 ? maxSeq : null, b.runId).run();
         return json({ ok: true, count: recent.length });
     }
 

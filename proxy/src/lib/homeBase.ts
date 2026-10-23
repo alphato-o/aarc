@@ -37,6 +37,7 @@ export interface ReadoutInput {
     avgHR?: number;
     recentLines?: string[];
     runId?: string;
+    closing?: boolean;
     camera?: { connected: boolean; recording: boolean; batteryPercent?: number; remainMinutes?: number; tempOver?: number };
 }
 
@@ -161,6 +162,24 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
     const short = input.km % 3 === 0;
 
     const lines: string[] = [];
+    if (input.closing) {
+        lines.push("THE RUN IS OVER. He has stopped; this is your CLOSING READOUT, the last thing he hears from the desk.");
+        lines.push(`4 to 6 sentences, under 45 seconds spoken. Say the final distance and time once, then the average pace and heart rate. Then one thing he did right and one thing to fix, each from DATA or your earlier readouts, specific to this run.${race ? " If this was the marathon, the finish time comes first and nothing else matters as much." : ""} No pep talk, no stock sign-off; end on the fact that matters for the next run${c.raceMode === "training" ? " or for race day" : ""}.`);
+        if (talkback.length) {
+            lines.push("");
+            lines.push("WHAT HE SAID OVER THE RADIO THIS RUN (answer anything still open):");
+            for (const t of talkback) lines.push(`- ${agoText(t)}: "${t.text.slice(0, 500)}"`);
+        }
+        lines.push("");
+        lines.push(...data);
+        if (recent.length) {
+            lines.push("");
+            lines.push("YOUR READOUTS THIS RUN, oldest first (he heard them; summarise, do not repeat):");
+            recent.slice(-6).forEach((r) => lines.push(`- "${r}"`));
+        }
+        const fin = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: 320, cacheSystem: true }, env);
+        return { text: clean(fin.text), model: fin.model };
+    }
     lines.push(`KILOMETRE ${input.km} just crossed; the phone has ALREADY announced the number, so do not say "${kmWord(input.km)} kilometres" or open on the distance.`);
     lines.push(race
         ? `Deliver the readout: ${short ? "2 sentences" : "2 to 4 sentences"}, ${short ? "under 15" : "under 30"} seconds spoken. If the course block has a STORY HERE, tell it (told, not read) in place of a number.`
