@@ -170,6 +170,7 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
     const lines: string[] = [];
     if (input.closing) {
         lines.push("THE RUN IS OVER. He has stopped; this is your CLOSING READOUT, the last thing he hears from the desk.");
+        if (race) lines.push(`The marathon is 42.195 km: say that distance, never the watch's ${(c.distanceMeters / 1000).toFixed(1)}. Speak to him in the second person throughout.`);
         lines.push(`4 to 6 sentences, under 45 seconds spoken. Say the final distance and time once, then the average pace and heart rate. Then one thing he did right and one thing to fix, each from DATA or your earlier readouts, specific to this run.${race ? " If this was the marathon, the finish time comes first and nothing else matters as much." : ""} No pep talk, no stock sign-off; end on the fact that matters for the next run${c.raceMode === "training" ? " or for race day" : ""}.`);
         if (talkback.length) {
             lines.push("");
