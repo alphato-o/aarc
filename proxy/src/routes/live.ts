@@ -137,12 +137,21 @@ export async function liveHandler(request: Request, url: URL, env: LiveEnv): Pro
         if (!isDevice(request, env)) return json({ ok: false, error: "unauthorized" }, 401);
         const runId = url.searchParams.get("runId");
         if (!runId) return json({ ok: false, error: "runId required" }, 400);
-        const line = await env.DB
-            .prepare("SELECT id, text, voice_id FROM live_inject WHERE run_id = ? AND consumed_at IS NULL ORDER BY id ASC LIMIT 1")
-            .bind(runId).first<{ id: number; text: string; voice_id: string }>();
+        // v=2 phones (235+) ack each line by id; until acked it is served
+        // again every 20 s. Older phones still consume on read.
+        const acking = url.searchParams.get("v") === "2";
+        const ack = Number(url.searchParams.get("ack") ?? "");
+        if (acking && ack > 0) {
+            await env.DB.prepare("UPDATE live_inject SET consumed_at = ? WHERE id = ? AND run_id = ? AND consumed_at IS NULL").bind(now, ack, runId).run();
+        }
+        const retryBefore = new Date(Date.now() - 20_000).toISOString();
+        const line = await (acking
+            ? env.DB.prepare("SELECT id, text, voice_id FROM live_inject WHERE run_id = ? AND consumed_at IS NULL AND (served_at IS NULL OR served_at < ?) ORDER BY id ASC LIMIT 1").bind(runId, retryBefore)
+            : env.DB.prepare("SELECT id, text, voice_id FROM live_inject WHERE run_id = ? AND consumed_at IS NULL ORDER BY id ASC LIMIT 1").bind(runId)
+        ).first<{ id: number; text: string; voice_id: string }>();
         if (!line) return json({ ok: true, line: null });
-        await env.DB.prepare("UPDATE live_inject SET consumed_at = ? WHERE id = ?").bind(now, line.id).run();
-        return json({ ok: true, line: { text: line.text, voiceId: line.voice_id } });
+        await env.DB.prepare(acking ? "UPDATE live_inject SET served_at = ? WHERE id = ?" : "UPDATE live_inject SET consumed_at = ? WHERE id = ?").bind(now, line.id).run();
+        return json({ ok: true, line: { id: line.id, text: line.text, voiceId: line.voice_id } });
     }
 
     // GET /live/status — ADMIN reads the live feed
