@@ -57,6 +57,19 @@ struct SimRoute {
 }
 
 enum SimRouteBuilder {
+    /// The race course from the proxy (GCJ-02 samples with the organiser's
+    /// metres), as a WGS-84 route whose metres run 1% long like the watch.
+    @MainActor static func course(_ id: String) async -> SimRoute? {
+        guard let url = URL(string: Config.cloudBaseURL.appendingPathComponent("course/\(id)").absoluteString + "?polyline=1"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let course = obj["course"] as? [String: Any],
+              let poly = course["polyline"] as? [[Double]], poly.count > 1 else { return nil }
+        let coords = poly.map { ChinaCoordinateTransform.wgsCoordinate(fromDisplay: CLLocationCoordinate2D(latitude: $0[1], longitude: $0[0])) }
+        let cum = poly.map { $0[2] * 1.01 }
+        return SimRoute(coords: coords, cum: cum, total: cum.last ?? 0)
+    }
+
     /// Offset a WGS-84 coordinate by `meters` along `bearing` (radians).
     static func offset(_ c: CLLocationCoordinate2D, bearing: Double, meters: Double) -> CLLocationCoordinate2D {
         let dLat = meters * cos(bearing) / 111_320.0
@@ -206,7 +219,18 @@ final class RunSimulator {
 
         // Simulated OUTDOOR run: plot a synthetic route from the device's
         // real location so the place-awareness pipeline fires for real.
-        if runType == .outdoor {
+        if runType == .outdoor, let courseId = RunOrchestrator.shared.raceMode.courseId {
+            // Actual race at the desk: ride the real course, so the course
+            // book, stories and GPS snapping run end to end (23 Oct).
+            routeStatus = "loading \(courseId)\u{2026}"
+            Task { @MainActor [weak self] in
+                let route = await SimRouteBuilder.course(courseId)
+                guard let self, self.isActive else { return }
+                self.simRoute = route
+                self.routeStatus = route.map { "course \(courseId): \(Int($0.total)) m, watch reads 1% long" }
+                    ?? "course load failed: metrics only"
+            }
+        } else if runType == .outdoor {
             routeStatus = "plotting route\u{2026}"
             Task { @MainActor [weak self] in
                 guard let self else { return }

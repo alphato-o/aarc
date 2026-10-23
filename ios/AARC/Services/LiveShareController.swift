@@ -47,6 +47,13 @@ final class LiveShareController {
     private static let chunk = 200
     private(set) var droppedEvents = 0
     private(set) var lastSendOK: Date?
+    /// Per-run event number: a batch resent after a lost response is ignored
+    /// server-side instead of landing twice (23 Oct ride, Surge reconnecting).
+    private var nextSeq = 0
+    /// A home line received but not yet acked; the next poll acks it.
+    private var pendingAck: Int?
+    /// Home lines already played this run, by server id: a resend never plays twice.
+    private var playedIds: Set<Int> = []
 
     private static func token() -> String? {
         (Bundle.main.object(forInfoDictionaryKey: "AARCLiveDeviceToken") as? String)
@@ -65,6 +72,10 @@ final class LiveShareController {
         raceUplink = race
         buffer = []
         droppedEvents = 0
+        // Seeded from the clock so a relaunch mid-race keeps counting upward.
+        nextSeq = Int(Date().timeIntervalSince1970 * 1000)
+        pendingAck = nil
+        playedIds = []
         flushTask?.cancel(); pollTask?.cancel(); flushTask = nil
         if uplink {
             let iso = ISO8601DateFormatter().string(from: startedAt)
@@ -103,7 +114,8 @@ final class LiveShareController {
     /// Mirror a run event into the live feed (called from RunEventLog.record).
     func append(type: String, detail: String, t: Double, data: [String: String] = [:]) {
         guard runId != nil, uplink else { return }
-        var ev: [String: Any] = ["t": Int(t), "type": type, "detail": String(detail.prefix(220))]
+        var ev: [String: Any] = ["t": Int(t), "type": type, "detail": String(detail.prefix(220)), "seq": nextSeq]
+        nextSeq += 1
         if raceUplink, !data.isEmpty { ev["data"] = data }
         buffer.append(ev)
         if buffer.count > Self.maxBacklog {
@@ -164,8 +176,10 @@ final class LiveShareController {
 
     /// Poll for a line the agent pushed; play it in the agent's chosen voice.
     private func pollInject() async {
+        let ack = pendingAck
         guard let rid = runId, let token = Self.token(),
-              let url = URL(string: Config.cloudBaseURL.appendingPathComponent("live/inject").absoluteString + "?runId=\(rid)")
+              let url = URL(string: Config.cloudBaseURL.appendingPathComponent("live/inject").absoluteString
+                            + "?runId=\(rid)&v=2" + (ack.map { "&ack=\($0)" } ?? ""))
         else { return }
         var req = URLRequest(url: url)
         req.setValue(token, forHTTPHeaderField: "X-AARC-Device")
@@ -173,11 +187,20 @@ final class LiveShareController {
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode == 200 else { return }
         lastPollAt = Date()
+        if pendingAck == ack { pendingAck = nil }
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let line = obj["line"] as? [String: Any],
               let text = line["text"] as? String,
               let voiceId = line["voiceId"] as? String, !text.isEmpty
         else { return }
+        let lineId = line["id"] as? Int
+        if let lineId {
+            pendingAck = lineId
+            // Ack now rather than on the next 10 s tick.
+            Task { await self.pollInject() }
+            guard playedIds.insert(lineId).inserted else { return }
+        }
+        RunEventLog.shared.record("home.received", "#\(lineId.map(String.init) ?? "?") " + String(text.prefix(60)))
         if ControlRoomChannel.shared.alreadyPlayed(text) { return }
         NSLog("[live] playing line from home (\(voiceId.prefix(8)))")
         // .milestone priority — founder directive (2026-07-21, after his 5K

@@ -391,13 +391,27 @@ final class PostRunWindow {
         until = Date().addingTimeInterval(Self.length)
         // The watch session no longer keeps the phone awake: the silent loop does.
         AudioPlaybackManager.shared.beginSustained()
+        // Restart, not start: a talk-back can leave the flag set on a stopped
+        // engine, and then nothing kept the app awake (23 Oct ride).
+        BackgroundAudioKeepalive.shared.stop()
         BackgroundAudioKeepalive.shared.start()
-        RunEventLog.shared.record("postrun.open", "Home Base stays on for \(Int(Self.length / 60)) min")
+        RunEventLog.shared.record("postrun.open", "Home Base stays on for \(Int(Self.length / 60)) min; keepalive=\(BackgroundAudioKeepalive.shared.isRunning)")
         timer?.cancel()
         timer = Task { [weak self] in
             try? await Task.sleep(for: .seconds(Self.length))
             guard !Task.isCancelled else { return }
             self?.close(.expired)
+        }
+    }
+
+    /// The summary screen went away. It also disappears when it is rebuilt
+    /// (provisional record, then the real one), so only a summary that is
+    /// still gone a moment later counts as closed.
+    func summaryDisappeared() {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !RunSummaryStore.shared.isPresenting else { return }
+            self.close(.summaryClosed)
         }
     }
 
@@ -413,6 +427,7 @@ final class PostRunWindow {
         timer?.cancel()
         timer = nil
         NSLog("[postrun] window closed: \(reason.rawValue)")
+        RunEventLog.shared.record("postrun.close", reason.rawValue)
         LiveShareController.shared.endDownlink(runId: rid.uuidString)
         // A new run owns the audio and the banner now.
         guard reason != .newRun, !LiveMetricsConsumer.shared.isRunActive else { return }

@@ -153,7 +153,10 @@ final class RunEventLog {
         // Mirror into the live "back home" feed (no-op unless sharing is on).
         LiveShareController.shared.append(type: type, detail: detail, t: event.t, data: data)
 
-        guard activeRunId != nil, let handle = fileHandle else { return }
+        guard activeRunId != nil, let handle = fileHandle else {
+            appendPostRun(type: type, detail: detail, data: data, at: now)
+            return
+        }
         guard var line = try? encoder.encode(event) else { return }
         line.append(0x0A) // "\n"
         do {
@@ -174,6 +177,34 @@ final class RunEventLog {
     /// just-ended run's log + re-upload, so it shows in the dashboard share
     /// dropdown. Generated after `endRun()` sealed the log, so it can't go
     /// through the normal path.
+    /// The post-run window (20 min) is part of the run: closing readout,
+    /// Home Base lines, the window closing. Sealed logs dropped all of it,
+    /// so the 23 Oct closing readout failed without a trace.
+    private var lastEndedAt: Date?
+    private var postRunUpload: Task<Void, Never>?
+
+    private func appendPostRun(type: String, detail: String, data: [String: String], at now: Date) {
+        guard let runId = lastEndedRunId, let ended = lastEndedAt,
+              now.timeIntervalSince(ended) < 25 * 60 else { return }
+        let t = lastEndedStartedAt.map { now.timeIntervalSince($0) } ?? -1
+        let event = RunLogEvent(t: (t * 1000).rounded() / 1000, wall: wallFormatter.string(from: now),
+                                type: type, detail: detail, data: data)
+        guard var line = try? encoder.encode(event),
+              let handle = try? FileHandle(forWritingTo: Self.logFileURL(for: runId)) else { return }
+        line.append(0x0A)
+        try? handle.seekToEnd()
+        try? handle.write(contentsOf: line)
+        try? handle.close()
+        guard !(Self.deviceToken?.isEmpty ?? true) else { return }
+        // One re-upload per quiet spell, not one per event.
+        postRunUpload?.cancel()
+        postRunUpload = Task.detached(priority: .utility) {
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            await Self.uploadRun(runId: runId, attempts: 2, spacing: .seconds(20))
+        }
+    }
+
     func recordSummaryLine(text: String, voiceId: String, cacheKey: String) {
         guard let runId = lastEndedRunId else { return }
         let now = Date()
@@ -281,6 +312,7 @@ final class RunEventLog {
         // "summary line" the dashboard share dropdown needs.
         lastEndedRunId = runId
         lastEndedStartedAt = runStartedAt
+        lastEndedAt = Date()
         activeRunId = nil
         runStartedAt = nil
         audioManifest.removeAll()

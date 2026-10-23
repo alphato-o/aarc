@@ -250,6 +250,8 @@ actor AIClient {
         var avgHR: Double?
         var recentLines: [String]?
         var camera: CameraInfo?
+        var runId: String? = nil
+        var closing: Bool? = nil
     }
 
     /// The Osmo's state at readout time (race mode). Home Base mentions it

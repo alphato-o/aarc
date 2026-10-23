@@ -27,7 +27,7 @@ struct PostRunSummaryView: View {
         .sheet(item: $share) { target in
             RunShareComposer(target: target)
         }
-        .onDisappear { PostRunWindow.shared.close(.summaryClosed) }
+        .onDisappear { PostRunWindow.shared.summaryDisappeared() }
     }
 
     /// Post-run talk-back (founder, 22 Oct: "what did I do wrong and right",

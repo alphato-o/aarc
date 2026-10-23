@@ -556,6 +556,9 @@ final class LiveMetricsConsumer {
         // live (chart samples, route + POIs, hearted lines) and kick off
         // the closing roast — before we tear the engines down below.
         RunSummaryStore.shared.capture()
+        if PostRunWindow.shared.isOpen, let final = latest {
+            HomeBaseReadout.shared.deliverClosing(metrics: final, runId: currentRunId)
+        }
 
         // Capture the city BEFORE PlaceContext tears down, so the persisted
         // RunRecord notes where the run happened — including TREADMILL runs,
