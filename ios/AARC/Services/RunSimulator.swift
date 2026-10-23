@@ -21,9 +21,14 @@ struct SimRoute {
     /// Position after `dist` simulated meters; wraps so an open run keeps
     /// repeating the circuit (and the lap detector gets material).
     func location(at dist: Double) -> CLLocation {
+        // A real accuracy: PlaceContext drops fixes outside 0...30 m, and a
+        // bare CLLocation reports 0, so every simulated fix was discarded.
+        func fix(_ lat: Double, _ lon: Double) -> CLLocation {
+            CLLocation(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon), altitude: 0,
+                       horizontalAccuracy: 5, verticalAccuracy: 5, timestamp: Date())
+        }
         guard total > 0, coords.count > 1 else {
-            return CLLocation(latitude: coords.first?.latitude ?? 0,
-                              longitude: coords.first?.longitude ?? 0)
+            return fix(coords.first?.latitude ?? 0, coords.first?.longitude ?? 0)
         }
         var d = dist.truncatingRemainder(dividingBy: total)
         if d < 0 { d += total }
@@ -35,10 +40,7 @@ struct SimRoute {
         let span = cum[hi] - cum[lo]
         let f = span > 0 ? (d - cum[lo]) / span : 0
         let a = coords[lo], b = coords[hi]
-        return CLLocation(
-            latitude: a.latitude + (b.latitude - a.latitude) * f,
-            longitude: a.longitude + (b.longitude - a.longitude) * f
-        )
+        return fix(a.latitude + (b.latitude - a.latitude) * f, a.longitude + (b.longitude - a.longitude) * f)
     }
 
     static func build(points: [CLLocationCoordinate2D]) -> SimRoute? {

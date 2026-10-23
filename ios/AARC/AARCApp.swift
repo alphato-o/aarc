@@ -49,6 +49,11 @@ struct AARCApp: App {
                         await SimRunDriver.runAndWrite(planArg: plan)
                         return
                     }
+                    if let speed = RaceSimHarness.speed {
+                        PhoneSession.shared.activate()
+                        await RaceSimHarness.run(speed: speed)
+                        return
+                    }
                     // UI-TEST mode: skip the system permission prompts + heavy
                     // launch side-effects (HealthKit dialog blocks automation,
                     // uploads/backfill add noise). The app still renders fully
