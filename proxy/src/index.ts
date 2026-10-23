@@ -138,7 +138,9 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         // the tour guide's (founder, 2026-10-17).
         const rc = peek?.runContext;
         const story = mode ? storyHere(mode, onCourseMeters(mode, Number(rc?.distanceMeters ?? 0), rc?.ambient?.lat, rc?.ambient?.lon)) : null;
-        if ((mode === "training" || mode === "actual") && !story) {
+        // "custom" is the post-run sign-off (and the playground): never withheld or
+        // swapped, or Ricky's summary comes back as a flash in his voice (23 Oct sim).
+        if ((mode === "training" || mode === "actual") && !story && peek?.trigger !== "custom") {
             const withheld = { ok: false, error: "race mode: line withheld" };
             const r = Math.random();
             // Jessica is no longer withheld; race mode only makes her less explicit.
