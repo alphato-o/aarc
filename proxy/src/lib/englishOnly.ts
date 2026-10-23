@@ -93,7 +93,9 @@ export function runnerName(text: string): string {
 
 /// The single exit for coach and Home Base text.
 export function finalizeSpoken(text: string, voice: "ricky" | "jessica" | "home"): string {
-    let s = runnerName(text);
+    // Alpha bans the em and en dash everywhere, the B-roll text included;
+    // "--" keeps the short clip DELIVERY_CRAFT asks for.
+    let s = runnerName(text).replace(/\s*[\u2014\u2013]\s*/g, " -- ");
     s = englishOnly(s);
     if (voice !== "home") s = britishRegister(s);
     return s;

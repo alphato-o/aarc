@@ -97,7 +97,13 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
     } else if (c.planKind === "time" && c.planTimeMinutes) {
         data.push(`- plan: ${c.planTimeMinutes} minutes, ${Math.max(0, Math.round((c.planTimeMinutes * 60 - c.elapsedSeconds) / 60))} minutes to go`);
     }
-    data.push(`- marathon day: 25 October 2026, Tianjin (${daysUntil("2026-10-25")} days from today)`);
+    data.push(race
+        ? "- THIS IS THE MARATHON: 25 October 2026, Tianjin, his first full marathon, happening now. Never call it a rehearsal or say it is tomorrow."
+        : `- marathon day: 25 October 2026, Tianjin (${daysUntil("2026-10-25")} days from today)`);
+    // Inside the last 600 m the readout said "done" 150 m short of the arch (23 Oct replay).
+    if (race && 42_195 - onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon) < 600) {
+        data.push("- HE HAS NOT FINISHED. The arch is ahead. Never say done, finished, over, or that he has made it; the finish belongs to the arch.");
+    }
     pushCourseBlock(data, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon));
     if (input.camera) {
         const cam = input.camera;
@@ -114,8 +120,8 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         c.ambient?.lat != null ? fetchAmbient(c.ambient, env) : Promise.resolve(null),
         c.ambient?.lat != null && c.ambient?.lon != null ? fetchLocalIntel(c.ambient.lat, c.ambient.lon, env) : Promise.resolve(null),
         fetchBriefing(env).catch(() => []),
-        recentDeskLines(env, Math.min(c.elapsedSeconds + 120, 900)),
-        runnerTalkback(env, c.elapsedSeconds + 120),
+        recentDeskLines(env, Math.min(c.elapsedSeconds + 120, 900), input.runId),
+        runnerTalkback(env, c.elapsedSeconds + 120, input.runId),
     ]);
     if (history.length) {
         data.push("");
@@ -204,7 +210,9 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         lines.push(`PLACES ALREADY NAMED THIS RUN, never name them again: ${named.join("; ")}. If no NEW place is worth it, say no place at all.`);
     }
     const result = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: race ? 260 : 180, cacheSystem: true }, env);
-    return { text: polishReadout(clean(result.text), input.km, named), model: result.model };
+    let text = polishReadout(clean(result.text), input.km, named);
+    if (race && 42_195 - onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon) < 600) text = dropFinishClaims(text);
+    return { text, model: result.model };
 }
 
 function pickLead(km: number, ok: Record<Lead, boolean>): Lead {
@@ -244,6 +252,13 @@ function placesAlreadyNamed(recent: string[], intel: Awaited<ReturnType<typeof f
 
 /// Deterministic backstop for the two repeats the prompt alone did not stop:
 /// opening on the kilometre count, and re-introducing a place already named.
+/// Before the arch, a sentence that calls the race finished is cut.
+function dropFinishClaims(text: string): string {
+    const sentences = text.match(/[^.!?]+[.!?]*/g) ?? [text];
+    const kept = sentences.filter((s) => !/\b(done|finished|it'?s over|race is over|you made it|you've made it)\b/i.test(s));
+    return kept.length ? kept.join("").trim() : text;
+}
+
 function polishReadout(text: string, km: number, named: string[]): string {
     let t = text.replace(new RegExp(`^(?:kilometre\\s+)?(?:${kmWord(km)}|${km})(?:\\s+(?:kilometres?|k|km))?\\s*[,.:;]\\s*`, "i"), "");
     if (named.length) {

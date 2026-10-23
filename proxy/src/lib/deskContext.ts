@@ -16,23 +16,25 @@ export interface DeskLine {
 }
 
 /// Lines the desk spoke to him (role agent, spoken or watchdog auto) in the last `withinS` seconds.
-export async function recentDeskLines(env: DeskEnv, withinS: number): Promise<DeskLine[]> {
-    return rows(env, "role = 'agent' AND source IN ('spoken','auto')", withinS, 8);
+export async function recentDeskLines(env: DeskEnv, withinS: number, runId?: string): Promise<DeskLine[]> {
+    return rows(env, "role = 'agent' AND source IN ('spoken','auto')", withinS, 8, runId);
 }
 
 /// What he said over talk-back during this run (voice rows only; the
 /// terminal rows are the phone's diagnostics).
-export async function runnerTalkback(env: DeskEnv, withinS: number): Promise<DeskLine[]> {
-    return rows(env, "role = 'user' AND source = 'voice'", withinS, 6);
+export async function runnerTalkback(env: DeskEnv, withinS: number, runId?: string): Promise<DeskLine[]> {
+    return rows(env, "role = 'user' AND source = 'voice'", withinS, 6, runId);
 }
 
-async function rows(env: DeskEnv, where: string, withinS: number, limit: number): Promise<DeskLine[]> {
+/// `runId` keeps another run's lines out (23 Oct: a 4 h race window pulled
+/// in the afternoon ride's talk-back).
+async function rows(env: DeskEnv, where: string, withinS: number, limit: number, runId?: string): Promise<DeskLine[]> {
     if (!env.DB) return [];
     try {
         const res = await env.DB.prepare(
             `SELECT text, CAST((julianday('now') - julianday(created_at)) * 86400 AS INTEGER) AS ago FROM agent_thread ` +
-            `WHERE ${where} AND julianday(created_at) >= julianday('now', ?1) ORDER BY id DESC LIMIT ${limit}`,
-        ).bind(`-${Math.max(1, Math.round(withinS))} seconds`).all<{ text: string; ago: number }>();
+            `WHERE ${where} AND julianday(created_at) >= julianday('now', ?1)${runId ? " AND run_id = ?2" : ""} ORDER BY id DESC LIMIT ${limit}`,
+        ).bind(`-${Math.max(1, Math.round(withinS))} seconds`, ...(runId ? [runId] : [])).all<{ text: string; ago: number }>();
         return (res.results ?? []).reverse().map((r) => ({ text: String(r.text), agoS: Math.max(0, Number(r.ago) || 0) }));
     } catch {
         return [];

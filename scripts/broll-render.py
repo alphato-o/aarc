@@ -458,6 +458,7 @@ def strip_cjk(recs):
     def scrub(v):
         nonlocal changed
         if isinstance(v, str):
+            v = re.sub(r"\s*[\u2014\u2013]\s*", " -- ", v)  # no em or en dashes on screen either
             if not CJK.search(v):
                 return v
             changed += 1
