@@ -6,6 +6,7 @@
 /// that says where he is, what is coming and where the next water is, so the
 /// lines are specific to the kilometre he is running, not generic.
 
+import { wgsToGcj } from "./amap";
 import tianjin from "../data/courses/tianjin-2026.json";
 import tianjinStories from "../data/courses/tianjin-2026-stories.json";
 
@@ -55,6 +56,39 @@ export function courseFor(raceMode: string | undefined): Course | null {
 }
 
 function fmtKm(m: number): string { return (m / 1000).toFixed(1); }
+
+/// Where he is on the course, in the organiser's metres (23 Oct). The watch
+/// reads long, several hundred metres by km 30, so the book read by watch
+/// distance runs ahead of him. A GPS fix within 150 m of the route wins; the
+/// search stays near the watch distance so the out-and-back legs (turns at
+/// km 12.5 and 27) cannot swap. No fix, or off the route: the watch distance.
+export function onCourseMeters(raceMode: string | undefined, watchMeters: number, lat?: number, lon?: number): number {
+    const course = courseFor(raceMode);
+    if (!course || lat == null || lon == null || !course.polyline.length) return watchMeters;
+    const [glat, glon] = wgsToGcj(lat, lon);
+    const mPerLat = 111_320, mPerLon = 111_320 * Math.cos((glat * Math.PI) / 180);
+    const lo = watchMeters - 2500, hi = watchMeters + 800;
+    const hits: { m: number; d: number }[] = [];
+    const p = course.polyline;
+    for (let i = 0; i + 1 < p.length; i++) {
+        const [ax, ay, am] = p[i]!, [bx, by, bm] = p[i + 1]!;
+        if (bm < lo || am > hi) continue;
+        const ux = (bx - ax) * mPerLon, uy = (by - ay) * mPerLat;
+        const px = (glon - ax) * mPerLon, py = (glat - ay) * mPerLat;
+        const len2 = ux * ux + uy * uy;
+        const t = len2 > 0 ? Math.max(0, Math.min(1, (px * ux + py * uy) / len2)) : 0;
+        const d = Math.hypot(px - t * ux, py - t * uy);
+        hits.push({ m: am + t * (bm - am), d });
+    }
+    if (!hits.length) return watchMeters;
+    const best = Math.min(...hits.map((h) => h.d));
+    if (best > 150) return watchMeters;
+    // Both sides of an out-and-back road sit within a few metres: of the
+    // close matches, take the one nearest where a long-reading watch puts him.
+    const expect = watchMeters * 0.985;
+    const pick = hits.filter((h) => h.d <= best + 30).sort((a, b) => Math.abs(a.m - expect) - Math.abs(b.m - expect))[0]!;
+    return Math.max(0, Math.min(course.totalM, pick.m));
+}
 
 /// The race is recorded for an English-speaking YouTube audience. On 17 Oct
 /// the voices were told to read Chinese names aloud in Mandarin with the

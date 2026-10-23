@@ -7,7 +7,7 @@ import { callLLM, LLMEnv } from "./llm";
 import { fetchAmbient, type AmbientInput, type AmbientEnv } from "./ambient";
 import { fetchLocalIntel, formatLocalIntel, type AmapEnv } from "./amap";
 import { fetchBriefing, type BriefingEnv } from "./briefing";
-import { pushCourseBlock, NAMES_RULE } from "./course";
+import { onCourseMeters, pushCourseBlock, NAMES_RULE } from "./course";
 import { daypart } from "./ambient";
 import { finalizeSpoken } from "./englishOnly";
 import { recentDeskLines, runnerTalkback, type DeskLine } from "./deskContext";
@@ -98,7 +98,7 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         data.push(`- plan: ${c.planTimeMinutes} minutes, ${Math.max(0, Math.round((c.planTimeMinutes * 60 - c.elapsedSeconds) / 60))} minutes to go`);
     }
     data.push(`- marathon day: 25 October 2026, Tianjin (${daysUntil("2026-10-25")} days from today)`);
-    pushCourseBlock(data, c.raceMode, c.distanceMeters);
+    pushCourseBlock(data, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon));
     if (input.camera) {
         const cam = input.camera;
         const bits = [cam.connected ? (cam.recording ? "recording" : "connected, NOT recording") : "OFFLINE"];
@@ -280,7 +280,7 @@ export async function generateAnswer(
         if (ctx.planKind === "distance" && ctx.planDistanceKm) {
             lines.push(`- plan: ${ctx.planDistanceKm} km, ${(Math.max(0, ctx.planDistanceKm * 1000 - ctx.distanceMeters) / 1000).toFixed(1)} km to go`);
         }
-        pushCourseBlock(lines, ctx.raceMode, ctx.distanceMeters);
+        pushCourseBlock(lines, ctx.raceMode, onCourseMeters(ctx.raceMode, ctx.distanceMeters, ctx.ambient?.lat, ctx.ambient?.lon));
     } else {
         lines.push("");
         lines.push(`DATA: he is not running right now. ${localNow(undefined).slice(2)}. Marathon day: 25 October 2026 (${daysUntil("2026-10-25")} days from today).`);

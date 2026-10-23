@@ -106,7 +106,7 @@ function wind(zh: unknown): string {
 
 // WGS-84 → GCJ-02 (the standard public transform; sub-metre agreement with
 // the usual implementations, more than enough for a 350 m POI search).
-function wgsToGcj(lat: number, lon: number): [number, number] {
+export function wgsToGcj(lat: number, lon: number): [number, number] {
     const a = 6378245.0, ee = 0.00669342162296594323;
     const dLat0 = transformLat(lon - 105.0, lat - 35.0);
     const dLon0 = transformLon(lon - 105.0, lat - 35.0);

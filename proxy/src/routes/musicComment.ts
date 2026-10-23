@@ -7,7 +7,7 @@ import {
 import { systemPromptFor } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchLocalIntel, type AmapEnv } from "../lib/amap";
-import { pushCourseBlock } from "../lib/course";
+import { onCourseMeters, pushCourseBlock } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
@@ -182,7 +182,7 @@ async function buildUserPrompt(req: MusicCommentRequest, env: Env): Promise<stri
     lines.push(`- run type: ${c.runType}`);
     pushPlaceBlock(lines, c.place, c.ambient?.lat != null && c.ambient?.lon != null
         ? await fetchLocalIntel(c.ambient.lat, c.ambient.lon, env as unknown as AmapEnv) : null);
-    pushCourseBlock(lines, c.raceMode, c.distanceMeters);
+    pushCourseBlock(lines, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon));
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);

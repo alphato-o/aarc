@@ -7,7 +7,7 @@ import {
 import { systemPromptFor, runPhaseBlock } from "../lib/personalities";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchLocalIntel, type AmapEnv } from "../lib/amap";
-import { pushCourseBlock, pushStoryDirective } from "../lib/course";
+import { onCourseMeters, pushCourseBlock, pushStoryDirective } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
@@ -207,13 +207,13 @@ async function buildUserPrompt(req: DynamicLineRequest, env: Env): Promise<strin
     }
     pushPlaceBlock(lines, c.place, c.ambient?.lat != null && c.ambient?.lon != null
         ? await fetchLocalIntel(c.ambient.lat, c.ambient.lon, env as unknown as AmapEnv) : null);
-    pushCourseBlock(lines, c.raceMode, c.distanceMeters);
+    pushCourseBlock(lines, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon));
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);
     await pushBriefingBlock(lines, env, "ricky");
     await pushDeskBlock(lines, env, req.trigger);
-    pushStoryDirective(lines, c.raceMode, c.distanceMeters, "ricky");
+    pushStoryDirective(lines, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon), "ricky");
 
     if (req.customNote && req.customNote.trim().length > 0) {
         lines.push("");

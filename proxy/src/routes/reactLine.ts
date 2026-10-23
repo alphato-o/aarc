@@ -8,7 +8,7 @@ import { reactModeFor, systemPromptFor, runPhaseBlock, jessicaBroadcastPrompt, J
 import { deckBlock, DeckMode } from "../lib/jessicaDeck";
 import { pushPlaceBlock } from "../lib/placeBlock";
 import { fetchLocalIntel, type AmapEnv } from "../lib/amap";
-import { pushCourseBlock, pushStoryDirective } from "../lib/course";
+import { onCourseMeters, pushCourseBlock, pushStoryDirective } from "../lib/course";
 import { fetchAmbient, pushAmbientBlock } from "../lib/ambient";
 import { callLLM, salvageText, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { buildRepetitionBan, buildNameRation } from "../lib/repetition";
@@ -251,8 +251,8 @@ async function buildUserPrompt(req: ReactLineRequest, lengthMode: JessicaLengthM
     }
     pushPlaceBlock(lines, c.place, c.ambient?.lat != null && c.ambient?.lon != null
         ? await fetchLocalIntel(c.ambient.lat, c.ambient.lon, env as unknown as AmapEnv) : null);
-    pushCourseBlock(lines, c.raceMode, c.distanceMeters);
-    pushStoryDirective(lines, c.raceMode, c.distanceMeters, "jessica");
+    pushCourseBlock(lines, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon));
+    pushStoryDirective(lines, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon), "jessica");
     const vProfileRaw = await fetchVenueProfile(env, c.ambient?.venueConfirmed ? c.ambient?.venue : undefined);
     const vProfile = vProfileRaw && c.ambient?.venue ? formatVenueProfile(c.ambient!.venue!, vProfileRaw) : null;
     pushAmbientBlock(lines, c.ambient, await fetchAmbient(c.ambient ?? {}, env), vProfile);

@@ -11,7 +11,7 @@ import { voiceNoteHandler } from "./routes/voiceNote";
 import { ttsHandler } from "./routes/tts";
 import { liveHandler } from "./routes/live";
 import { racePageHandler } from "./routes/racePage";
-import { storyHere } from "./lib/course";
+import { onCourseMeters, storyHere } from "./lib/course";
 import { agentHandler } from "./routes/agent";
 import { venueSearchHandler } from "./routes/venueSearch";
 import {
@@ -136,7 +136,8 @@ async function dispatch(request: Request, env: Env, url: URL): Promise<Response>
         const mode = peek?.runContext?.raceMode;
         // A story on the course at this point is never withheld: that line is
         // the tour guide's (founder, 2026-10-17).
-        const story = mode ? storyHere(mode, Number(peek?.runContext?.distanceMeters ?? 0)) : null;
+        const rc = peek?.runContext;
+        const story = mode ? storyHere(mode, onCourseMeters(mode, Number(rc?.distanceMeters ?? 0), rc?.ambient?.lat, rc?.ambient?.lon)) : null;
         if ((mode === "training" || mode === "actual") && !story) {
             const withheld = { ok: false, error: "race mode: line withheld" };
             const r = Math.random();
