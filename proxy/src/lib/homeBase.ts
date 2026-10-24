@@ -10,6 +10,7 @@ import { fetchBriefing, type BriefingEnv } from "./briefing";
 import { onCourseMeters, pushCourseBlock, NAMES_RULE } from "./course";
 import { daypart } from "./ambient";
 import { finalizeSpoken } from "./englishOnly";
+import { fuelPlanBlock, fuelStopAt, withFuelCue } from "./fuelPlan";
 import { recentDeskLines, runnerTalkback, type DeskLine } from "./deskContext";
 
 export const HOME_BASE_VOICE_ID = "Awx8TeMHHpDzbm42nIB6";
@@ -105,6 +106,11 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
         data.push("- HE HAS NOT FINISHED. The arch is ahead. Never say done, finished, over, or that he has made it; the finish belongs to the arch.");
     }
     pushCourseBlock(data, c.raceMode, onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon));
+    if (race && !input.closing) {
+        data.push(...fuelPlanBlock());
+        const stop = fuelStopAt(input.km);
+        if (stop) data.push(`- THIS KILOMETRE CARRIES A FUEL CUE: say "${stop.cue}" in your own words, plainly, as its own sentence.`);
+    }
     if (input.camera) {
         const cam = input.camera;
         const bits = [cam.connected ? (cam.recording ? "recording" : "connected, NOT recording") : "OFFLINE"];
@@ -212,6 +218,7 @@ export async function generateReadout(input: ReadoutInput, env: HomeBaseEnv): Pr
     }
     const result = await callLLM({ purpose: "reply", systemPrompt: HOME_BASE_SYSTEM, userPrompt: lines.join("\n"), maxTokens: race ? 260 : 180, cacheSystem: true }, env);
     let text = polishReadout(clean(result.text), input.km, named);
+    if (race) text = withFuelCue(text, input.km);
     if (race && 42_195 - onCourseMeters(c.raceMode, c.distanceMeters, c.ambient?.lat, c.ambient?.lon) < 600) text = dropFinishClaims(text);
     return { text, model: result.model };
 }

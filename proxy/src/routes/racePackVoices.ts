@@ -4,6 +4,7 @@ import { systemPromptFor } from "../lib/personalities";
 import { finalizeSpoken } from "../lib/englishOnly";
 import { HOME_BASE_SYSTEM } from "../lib/homeBase";
 import { courseById, courseScriptBlock, Course } from "../lib/course";
+import { MARATHON_FUEL, fuelPlanBlock, withFuelCue } from "../lib/fuelPlan";
 import { callLLMJSON, LLMOutputError, describeUpstreamError, LLMEnv } from "../lib/llm";
 import { captureMessage, SentryEnv } from "../lib/sentry";
 
@@ -55,7 +56,9 @@ export async function racePackVoicesHandler(request: Request, env: Env): Promise
             generate(env, HOME_BASE_SYSTEM, prompts.home),
         ]);
         const spoken = (ls: Line[], v: "jessica" | "home") => ls.map((l) => ({ ...l, text: finalizeSpoken(l.text, v) }));
-        return json({ ok: true, jessica: spoken(jessica, "jessica"), home: spoken(home, "home") });
+        // The marathon pack's fuel cues are mechanical: present even if the model dropped one.
+        const homeOut = parsed.data.courseId ? spoken(home, "home").map((l) => ({ ...l, text: withFuelCue(l.text, l.km) })) : spoken(home, "home");
+        return json({ ok: true, jessica: spoken(jessica, "jessica"), home: homeOut });
     } catch (e) {
         if (e instanceof LLMOutputError) {
             await captureMessage(env, `race-pack-voices rejected after retry: ${e.detail}`, "error", { route: "/race-pack-voices" });
@@ -108,11 +111,15 @@ function homePrompt(course: Course): string {
     lines.push("This is the night before the race. Write your kilometre readouts now, one for every kilometre from 1 to 42. They are cached on his phone for the stretches with no signal, where you cannot see his numbers: so no pace, no heart rate, no time, no comparisons. Ricky announces the kilometre itself; you brief the ground.");
     for (const l of courseScriptBlock(course)) lines.push(l);
     lines.push("");
+    for (const l of fuelPlanBlock()) lines.push(l);
+    lines.push("");
     lines.push("RULES:");
+    lines.push(`0. The lines for km ${MARATHON_FUEL.map((s) => s.km).join(", ")} each carry their fuel cue from the plan as one plain sentence: which gel or tablet, at which station. Say it clearly; it is the one thing in the line he must not miss.`);
     lines.push("1. One line per km, km 1 to 42, 42 lines. Each says where he is and what is next on the course: the water or the medical point coming, the turn, the bridge, the story at that point.");
     lines.push("2. One or two short sentences, at most ~200 characters. The kilometre number may appear; no other number that is not in the course file.");
     lines.push("3. Change the shape every kilometre; never open two the same way. Close on a fact or the name of what is coming.");
-    lines.push("4. No em-dashes.");
+    lines.push("4. The km 42 line plays 195 m before the arch: he has NOT finished. Never say done, finished or made it; point him at the arch.");
+    lines.push("5. No em-dashes.");
     lines.push("");
     lines.push('Return ONLY JSON: {"lines": [{"km": 1, "text": "..."}, ...]}');
     return lines.join("\n");
