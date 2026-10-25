@@ -80,6 +80,7 @@ final class RunOrchestrator {
         didSet {
             UserDefaults.standard.set(raceMode.rawValue, forKey: Self.kRaceMode)
             if raceMode == .actual { Self.lockMarathonPlan() }
+            else if oldValue == .actual { Self.restoreOwnPlan() }
         }
     }
 
@@ -88,8 +89,24 @@ final class RunOrchestrator {
     static let marathonKm = 42.2
     static func lockMarathonPlan() {
         let store = ScriptPreviewStore.shared
+        // Keep his own plan aside: leaving the actual race gives it back
+        // (founder, 25 Oct: the training race came back as 42.2 km).
+        if !(store.planKind == .distance && store.distanceKm == marathonKm) {
+            UserDefaults.standard.set(store.planKind.rawValue, forKey: kOwnPlanKind)
+            UserDefaults.standard.set(store.distanceKm, forKey: kOwnPlanKm)
+        }
         if store.planKind != .distance { store.planKind = .distance }
         if store.distanceKm != marathonKm { store.distanceKm = marathonKm }
+    }
+
+    nonisolated private static let kOwnPlanKind = "aarc.run.ownPlanKind"
+    nonisolated private static let kOwnPlanKm = "aarc.run.ownPlanKm"
+    static func restoreOwnPlan() {
+        let store = ScriptPreviewStore.shared
+        let d = UserDefaults.standard
+        if let raw = d.string(forKey: kOwnPlanKind), let kind = RunPlan.Kind(rawValue: raw) { store.planKind = kind }
+        if let km = d.object(forKey: kOwnPlanKm) as? Double { store.distanceKm = km }
+        else if store.distanceKm == marathonKm { store.distanceKm = 5 }
     }
     /// Read without touching the main actor: request encoders stamp this on
     /// every line call so the proxy knows the run's mode.

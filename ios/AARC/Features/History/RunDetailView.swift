@@ -23,6 +23,9 @@ struct RunDetailView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var showCalibration = false
     @State private var calibrationInput = ""
+    @State private var showOfficial = false
+    @State private var officialTimeInput = ""
+    @State private var officialKmInput = ""
 
     var body: some View {
         ScrollView {
@@ -34,6 +37,7 @@ struct RunDetailView: View {
                 }
                 chartSection
                 calibrationSection
+                officialSection
                 if !isNike { VoiceLineExportSection(run: run) }
                 if !isNike { VoiceNoteSection(runId: run.id) }
                 if isLoading { loadingHint }
@@ -150,6 +154,71 @@ struct RunDetailView: View {
         }
     }
 
+    /// Race result (founder, Tianjin 25 Oct): the chip time and the official
+    /// distance replace the watch's numbers everywhere they are shown; the
+    /// watch's stay in Health and on this card as the record of what it saw.
+    @ViewBuilder private var officialSection: some View {
+        if run.raceModeRaw != "off" && !isNike {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Official result").font(.subheadline.bold())
+                if let t = run.officialDurationSeconds {
+                    HStack(spacing: 6) {
+                        Image(systemName: "flag.checkered").foregroundStyle(.purple)
+                        Text("\(formatDuration(t)) · \(formatDistance(run.displayDistanceMeters))")
+                    }
+                    .font(.caption)
+                    Text("Watch recorded \(formatDuration(run.cachedDurationSeconds)) · \(formatDistance(run.cachedDistanceMeters)). The official result is used everywhere.")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                    Button("Change") { prepareOfficialInputs(); showOfficial = true }.font(.caption)
+                } else {
+                    Text("Got your chip time? Enter it and it replaces the watch's time and distance.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button { prepareOfficialInputs(); showOfficial = true } label: {
+                        Label("Add official result", systemImage: "flag.checkered").font(.caption.bold())
+                    }
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 14).fill(.ultraThinMaterial))
+            .alert("Official result", isPresented: $showOfficial) {
+                TextField("Chip time, e.g. 4:40:34", text: $officialTimeInput)
+                    .keyboardType(.numbersAndPunctuation)
+                TextField("Distance km, e.g. 42.195", text: $officialKmInput)
+                    .keyboardType(.decimalPad)
+                Button("Save") { applyOfficial() }
+                if run.officialDurationSeconds != nil {
+                    Button("Remove official result", role: .destructive) {
+                        run.officialDurationSeconds = nil
+                        run.calibratedDistanceMeters = nil
+                        try? modelContext.save()
+                    }
+                }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("The watch recorded \(formatDuration(run.cachedDurationSeconds)) over \(formatDistance(run.cachedDistanceMeters)).")
+            }
+        }
+    }
+
+    private func prepareOfficialInputs() {
+        officialTimeInput = run.officialDurationSeconds.map(formatDuration) ?? ""
+        let km = run.calibratedDistanceMeters.map { $0 / 1000 } ?? (run.raceModeRaw == "actual" ? 42.195 : nil)
+        officialKmInput = km.map { String(format: "%g", $0) } ?? ""
+    }
+
+    private func applyOfficial() {
+        // h:mm:ss or mm:ss; every part a whole number.
+        let parts = officialTimeInput.split(separator: ":").map { Int($0.trimmingCharacters(in: .whitespaces)) }
+        guard (2...3).contains(parts.count), parts.allSatisfy({ $0 != nil && $0! >= 0 }) else { return }
+        let secs = parts.reduce(0) { $0 * 60 + $1! }
+        guard secs > 0, secs < 24 * 3600 else { return }
+        run.officialDurationSeconds = Double(secs)
+        let km = Double(officialKmInput.replacingOccurrences(of: ",", with: "."))
+        if let km, km > 0, km < 500 { run.calibratedDistanceMeters = km * 1000 }
+        try? modelContext.save()
+    }
+
     private func applyCalibration() {
         let cleaned = calibrationInput.replacingOccurrences(of: ",", with: ".")
         guard let km = Double(cleaned), km > 0, km < 500 else { return }
@@ -161,7 +230,7 @@ struct RunDetailView: View {
         let cols = [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())]
         return LazyVGrid(columns: cols, spacing: 12) {
             statTile("Distance", value: formatDistance(run.displayDistanceMeters), system: "ruler")
-            statTile("Duration", value: formatDuration(run.cachedDurationSeconds), system: "stopwatch")
+            statTile("Duration", value: formatDuration(run.displayDurationSeconds), system: "stopwatch")
             statTile("Avg Pace", value: formatPace(run.displayAvgPaceSecPerKm), system: "speedometer")
             // Energy reads 0 on a run the HealthKit pass never enriched. Say
             // so rather than asserting a confident zero — the founder saw

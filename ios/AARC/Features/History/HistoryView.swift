@@ -436,8 +436,8 @@ struct RunListRow: View {
             }
 
             HStack(spacing: 12) {
-                Label(formatDistance(run.cachedDistanceMeters), systemImage: "ruler")
-                Label(formatDuration(run.cachedDurationSeconds), systemImage: "stopwatch")
+                Label(formatDistance(run.displayDistanceMeters), systemImage: "ruler")
+                Label(formatDuration(run.displayDurationSeconds), systemImage: "stopwatch")
                 Label(formatPace(run.cachedAvgPaceSecPerKm), systemImage: "speedometer")
             }
             .font(.caption.monospacedDigit())

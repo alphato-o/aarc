@@ -21,6 +21,10 @@ struct RunShareComposer: View {
 
     @State private var aspect = ShareCardModel.portrait
     @State private var quoteIdx = 0          // 0 = closing roast, 1… = hearted lines
+    /// Any line from the whole run (founder, Tianjin 25 Oct), picked in a sheet;
+    /// overrides the menu while set.
+    @State private var pickedLine: VoiceLineTimeline.Line?
+    @State private var showLinePicker = false
     @State private var busy = false
     @State private var status = ""
     @State private var shareItems: [Any] = []
@@ -79,7 +83,8 @@ struct RunShareComposer: View {
             .sheet(isPresented: $showShare) { ActivityView(items: shareItems) }
             .onAppear { regenPreview() }
             .onChange(of: aspect) { _, _ in if layout == .route { buildMapIfNeeded() } else { regenPreview() } }
-            .onChange(of: quoteIdx) { _, _ in regenPreview() }
+            .onChange(of: quoteIdx) { _, _ in pickedLine = nil; regenPreview() }
+            .onChange(of: pickedLine) { _, _ in regenPreview() }
             .onChange(of: store.finalRoast) { _, _ in regenPreview() }
             .onChange(of: layout) { _, l in if l == .route { buildMapIfNeeded() } else { regenPreview() } }
             .onChange(of: mapMode) { _, _ in if layout == .route { buildMapIfNeeded() } }
@@ -110,6 +115,11 @@ struct RunShareComposer: View {
     }
 
     private var selectedQuote: (label: String, text: String, who: String, voiceId: String?) {
+        if let l = pickedLine {
+            let who = l.voiceId == RemoteTTS.jessicaVoiceId ? "jessica" : l.voiceId == RemoteTTS.homeVoiceId ? "home" : "ricky"
+            // The phone's own fallback voice has no audio to put in a video.
+            return (l.text, l.text, who, l.voiceId == "local" ? nil : l.voiceId)
+        }
         let opts = quoteOptions
         // A hearted-line target preselects that line.
         if case .heartedLine(let l) = target,
@@ -164,12 +174,32 @@ struct RunShareComposer: View {
     // MARK: controls
 
     @ViewBuilder private var quotePicker: some View {
-        if case .wholeRun = target, quoteOptions.count > 1 {
-            Picker("Centrepiece", selection: $quoteIdx) {
-                ForEach(Array(quoteOptions.enumerated()), id: \.offset) { i, o in
-                    Text(o.label).tag(i)
+        if case .wholeRun = target {
+            VStack(spacing: 6) {
+                if quoteOptions.count > 1 {
+                    Picker("Centrepiece", selection: $quoteIdx) {
+                        ForEach(Array(quoteOptions.enumerated()), id: \.offset) { i, o in
+                            Text(o.label).tag(i)
+                        }
+                    }.pickerStyle(.menu)
                 }
-            }.pickerStyle(.menu)
+                Button {
+                    showLinePicker = true
+                } label: {
+                    Label(pickedLine == nil ? "Any line from the run\u{2026}" : "Line: \(pickedLine!.speaker), \(VoiceLineTimeline.clock(pickedLine!.t))",
+                          systemImage: "text.quote")
+                        .font(.subheadline)
+                }
+                if pickedLine != nil {
+                    Button("Back to the closing line") { pickedLine = nil }.font(.caption)
+                }
+            }
+            .sheet(isPresented: $showLinePicker) {
+                RunLinePicker(runId: store.summary?.runId) { line in
+                    pickedLine = line
+                    showLinePicker = false
+                }
+            }
         }
     }
 

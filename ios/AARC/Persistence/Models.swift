@@ -99,13 +99,19 @@ final class RunRecord {
         guard let c = calibratedDistanceMeters, c > 0, cachedDistanceMeters > 0 else { return nil }
         return c / cachedDistanceMeters
     }
+    /// The race's official chip time (founder, Tianjin 25 Oct: 4:40:34 against
+    /// the watch's 4:40:56). Like the distance calibration it sits beside the
+    /// watch's number, which HealthKit keeps; nil = no official result.
+    var officialDurationSeconds: Double? = nil
+
     /// Distance to SHOW: the runner's if he gave us one, else the watch's.
     var displayDistanceMeters: Double { calibratedDistanceMeters ?? cachedDistanceMeters }
-    /// Pace recomputed against whichever distance we are showing.
+    var displayDurationSeconds: Double { officialDurationSeconds ?? cachedDurationSeconds }
+    /// Pace recomputed against whichever distance and time we are showing.
     var displayAvgPaceSecPerKm: Double {
-        let d = displayDistanceMeters
-        guard d > 0, cachedDurationSeconds > 0 else { return cachedAvgPaceSecPerKm }
-        return cachedDurationSeconds / (d / 1000)
+        let d = displayDistanceMeters, t = displayDurationSeconds
+        guard d > 0, t > 0 else { return cachedAvgPaceSecPerKm }
+        return t / (d / 1000)
     }
 
     init(

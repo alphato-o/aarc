@@ -78,6 +78,7 @@ enum VoiceLineTimeline {
         let t: Double          // seconds from run start
         let speaker: String
         let text: String
+        var voiceId: String? = nil
     }
 
     static func speakerName(voiceId: String?) -> String {
@@ -98,7 +99,7 @@ enum VoiceLineTimeline {
                   let t = obj["t"] as? Double, t >= 0,
                   let text = obj["detail"] as? String, !text.isEmpty else { continue }
             let data = obj["data"] as? [String: String]
-            out.append(Line(t: t, speaker: speakerName(voiceId: data?["voiceId"]), text: text))
+            out.append(Line(t: t, speaker: speakerName(voiceId: data?["voiceId"]), text: text, voiceId: data?["voiceId"]))
         }
         return out.sorted { $0.t < $1.t }
     }
