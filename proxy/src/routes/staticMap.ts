@@ -89,28 +89,46 @@ function rampColor(v: number | null, lo: number, hi: number, mode: string): [num
     return mode === "hr" ? hsvToRgb(0.62 * (1 - t), 0.85, 0.92) : hsvToRgb(0.33 * t, 0.85, 0.92);
 }
 
-// Label-free dark basemap (CARTO, OSM/WGS-84). No Chinese labels / POI noise,
-// already dark; we add the brand-green tint on composite. Fetched server-side
-// so China reachability is a non-issue. One retry so a dropped tile doesn't
-// leave a seam.
+// Label-free AutoNavi base (ltype=3: roads, water, parks, no text), fetched
+// server-side and darkened on composite. CARTO's free basemaps went behind an
+// API key in 2026 and answer 200 with an "API KEY REQUIRED" tile (founder,
+// 25 Oct), so a 200 is not proof of a map. AutoNavi tiles are GCJ-02.
 async function fetchTile(x: number, y: number, z: number): Promise<Uint8Array | null> {
-    const sub = ["a", "b", "c"][Math.abs(x + y) % 3];
-    const url = `https://${sub}.basemaps.cartocdn.com/dark_nolabels/${z}/${x}/${y}.png`;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const first = (Math.abs(x + y) % 4) + 1;
+    for (let i = 0; i < 4; i++) {
+        const s = ((first - 1 + i) % 4) + 1;
+        const url = `https://wprd0${s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scl=1&style=7&ltype=3&x=${x}&y=${y}&z=${z}`;
         try {
             const resp = await fetch(url, {
-                headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15" },
+                headers: {
+                    "Referer": "https://www.amap.com/",
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+                },
                 cf: { cacheTtl: 604800, cacheEverything: true },
             } as RequestInit);
-            if (!resp.ok) continue;
-            const buf = await resp.arrayBuffer();
-            const img = UPNG.decode(buf);
+            if (!resp.ok || !(resp.headers.get("content-type") ?? "").startsWith("image/")) continue;
+            const img = UPNG.decode(await resp.arrayBuffer());
+            if (img.width !== TILE || img.height !== TILE) continue;
             return new Uint8Array(UPNG.toRGBA8(img)[0]); // 256*256*4 RGBA
         } catch {
-            // retry once
+            // next host
         }
     }
     return null;
+}
+
+/// WGS-84 → GCJ-02 for one point, by inverting gcjToWgs (sub-metre here).
+function wgsToGcj(lon: number, lat: number): [number, number] {
+    const [wl, wa] = gcjToWgs(lon, lat);
+    return [2 * lon - wl, 2 * lat - wa];
+}
+
+/// The light AutoNavi style as the card's dark map: whatever stands off the
+/// pale ground (roads, parks, water) comes up as muted green-grey on near black.
+function nightPixel(r: number, g: number, b: number): [number, number, number] {
+    const d = Math.max(0, 249 - (0.299 * r + 0.587 * g + 0.114 * b));
+    const v = Math.min(160, d * 2.2);
+    return [Math.round(8 + v * 0.55), Math.round(17 + v * 0.75), Math.round(11 + v * 0.6)];
 }
 
 export async function staticMapHandler(request: Request): Promise<Response> {
@@ -126,8 +144,8 @@ export async function staticMapHandler(request: Request): Promise<Response> {
     const raw = Array.isArray(body.points) ? body.points : [];
     if (raw.length < 2) return new Response("need >=2 points", { status: 400 });
 
-    // CARTO tiles are WGS-84 — keep points in WGS (convert only if a caller
-    // explicitly sends GCJ).
+    // Clients project in WGS with the zoom/origin headers below; the GCJ tiles
+    // are shifted into that space (the offset is flat across one route).
     const pts = raw.map((p) => {
         const lon = p[0]!, lat = p[1]!;
         const [wlon, wlat] = body.datum === "gcj" ? gcjToWgs(lon, lat) : [lon, lat];
@@ -163,14 +181,18 @@ export async function staticMapHandler(request: Request): Promise<Response> {
     for (let i = 0; i < W * H; i++) { out[i * 4] = 8; out[i * 4 + 1] = 17; out[i * 4 + 2] = 11; out[i * 4 + 3] = 255; }
 
     // Fetch + composite the covering tiles.
-    const minTX = Math.floor(originX / TILE), maxTX = Math.floor((originX + W) / TILE);
-    const minTY = Math.floor(originY / TILE), maxTY = Math.floor((originY + H) / TILE);
+    const midLon = (minLon + maxLon) / 2, midLat = (minLat + maxLat) / 2;
+    const [gx, gy] = world(...wgsToGcj(midLon, midLat), zoom);
+    const [wx0, wy0] = world(midLon, midLat, zoom);
+    const tileX = originX + (gx - wx0), tileY = originY + (gy - wy0);
+    const minTX = Math.floor(tileX / TILE), maxTX = Math.floor((tileX + W) / TILE);
+    const minTY = Math.floor(tileY / TILE), maxTY = Math.floor((tileY + H) / TILE);
     const maxIdx = Math.pow(2, zoom) - 1;
     const jobs: Promise<void>[] = [];
     for (let tx = minTX; tx <= maxTX; tx++) {
         for (let ty = minTY; ty <= maxTY; ty++) {
             if (tx < 0 || ty < 0 || tx > maxIdx || ty > maxIdx) continue;
-            const dx = Math.round(tx * TILE - originX), dy = Math.round(ty * TILE - originY);
+            const dx = Math.round(tx * TILE - tileX), dy = Math.round(ty * TILE - tileY);
             jobs.push(fetchTile(tx, ty, zoom).then((rgba) => {
                 if (!rgba) return;
                 for (let py = 0; py < TILE; py++) {
@@ -180,13 +202,8 @@ export async function staticMapHandler(request: Request): Promise<Response> {
                         const ox = dx + px;
                         if (ox < 0 || ox >= W) continue;
                         const si = (py * TILE + px) * 4, di = (oy * W + ox) * 4;
-                        // Brand-green tint: a gentle green lean (G lifted a
-                        // touch over R/B) but lighter than before, so the road
-                        // network stays clearly visible on the dark card.
-                        out[di] = Math.min(255, Math.round(rgba[si]! * 0.74 + 12));
-                        out[di + 1] = Math.min(255, Math.round(rgba[si + 1]! * 0.92 + 20));
-                        out[di + 2] = Math.min(255, Math.round(rgba[si + 2]! * 0.78 + 14));
-                        out[di + 3] = 255;
+                        const [nr, ng, nb] = nightPixel(rgba[si]!, rgba[si + 1]!, rgba[si + 2]!);
+                        out[di] = nr; out[di + 1] = ng; out[di + 2] = nb; out[di + 3] = 255;
                     }
                 }
             }));
