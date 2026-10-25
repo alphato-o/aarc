@@ -29,6 +29,17 @@ struct WatchRootView: View {
         Group {
             if let preview = ProcessInfo.processInfo.environment["AARC_PREVIEW"], !preview.isEmpty {
                 WatchPreviewGallery(screen: preview)
+            } else if let done = host.finishedRun {
+                // Ahead of the run view: shows the moment End is tapped, while
+                // HealthKit is still saving, and survives the phase going idle.
+                WatchRunSummary(points: done.points, metrics: done.metrics) {
+                    host.finishedRun = nil
+                }
+                .task(id: done.at) {
+                    // Never pin the watch: the glance clears itself.
+                    try? await Task.sleep(for: .seconds(300))
+                    if host.finishedRun?.at == done.at { host.finishedRun = nil }
+                }
             } else if isInActiveSessionPhase {
                 WatchActiveRunView()
             } else {
@@ -45,6 +56,7 @@ struct WatchRootView: View {
             // ever actually foregrounded the app after a remote start
             // (the "app never materialized on screen" investigation).
             WatchBreadcrumbs.shared.drop("scene \(String(describing: newPhase)) (phase \(host.phase.rawValue))")
+            if newPhase == .background, host.phase == .idle { host.finishedRun = nil }
             if newPhase == .active {
                 // Refresh stale auth state + sweep for a pending start
                 // command that may have landed while no delegate fired.

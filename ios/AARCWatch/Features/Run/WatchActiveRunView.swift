@@ -10,11 +10,9 @@ import AARCKit
 struct WatchActiveRunView: View {
     @Environment(WorkoutSessionHost.self) private var host
     @Environment(WatchSession.self) private var session
-    @Environment(\.dismiss) private var dismiss
 
     @State private var selectedPage: Page = .metrics
     @State private var showEndConfirm = false
-    @State private var showSummary = false
     /// Coach line the runner dismissed (X) — hidden until the next line.
     @State private var coachDismissedId: UUID?
 
@@ -47,10 +45,8 @@ struct WatchActiveRunView: View {
                     session.sendStateEvent(.endWorkout)
                     host.endSimDisplay()
                 } else {
-                    // Show the post-run summary INSTANTLY (it reads in-memory
-                    // data, no wait). The slow HealthKit teardown runs in the
-                    // background so the tap never feels dropped.
-                    showSummary = true
+                    // endRun publishes the summary before its first await; the
+                    // root shows it at once while HealthKit saves.
                     Task { _ = await host.endRun() }
                 }
             }
@@ -58,11 +54,6 @@ struct WatchActiveRunView: View {
             Text(host.currentRunIsTestData
                  ? "This is a test run. It will be tagged in Apple Health for easy cleanup."
                  : "This run will be permanently saved to Apple Health.")
-        }
-        .fullScreenCover(isPresented: $showSummary, onDismiss: { dismiss() }) {
-            WatchRunSummary(points: host.routeTrailPoints, metrics: host.liveMetrics) {
-                showSummary = false
-            }
         }
     }
 
@@ -75,7 +66,7 @@ struct WatchActiveRunView: View {
         // end-run control was unreachable under a 90% black sheet. The overlay
         // now never shows once the end flow has started, dismisses on any tap,
         // and times itself out, so a talkative coach cannot pin the watch.
-        if !showEndConfirm, !showSummary,
+        if !showEndConfirm,
            let line = session.currentCoachLine, line.id != coachDismissedId {
             WatchCoachPage(
                 line: line.text,

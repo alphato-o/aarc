@@ -88,6 +88,20 @@ final class WorkoutSessionHost: NSObject {
     /// True while MIRRORING a phone desk-test sim run (display-only, no HK).
     var isSimDisplay = false
 
+    /// The post-run glance. Owned here, not by the run view: the root swaps the
+    /// run view out when the phase goes idle, which stranded a cover presented
+    /// from it (Tianjin finish, 25 Oct: Done did nothing, the watch stuck).
+    struct FinishedRun {
+        let points: [WatchTrailPoint]
+        let metrics: LiveMetrics
+        let at: Date
+    }
+    var finishedRun: FinishedRun?
+
+    /// One HealthKit recovery call at a time: overlapping calls failed with
+    /// "Task server endpoint already exists" in the Tianjin corral.
+    private var recovering = false
+
     var routeTrail: [CLLocationCoordinate2D] = []
     /// Trail with per-point speed/HR + a MapKit-display (GCJ in China) coord,
     /// for the performance-hued route on the in-run map.
@@ -324,6 +338,7 @@ final class WorkoutSessionHost: NSObject {
         guard state == .idle || state == .ended else {
             throw WorkoutHostError.alreadyActive
         }
+        finishedRun = nil
 
         // Auth pre-flight. Already authorized → skip the request entirely
         // (removes a hang surface from every run). Not authorized → only
@@ -536,11 +551,20 @@ final class WorkoutSessionHost: NSObject {
     /// instead of leaving a zombie session that blocks future starts.
     func recoverActiveSession() {
         // Already attached to a session → nothing to recover.
-        guard session == nil else { return }
+        guard session == nil, !recovering else { return }
+        // A run we ended ourselves minutes ago: endRun owns that teardown, and a
+        // recovery racing it grabbed the ending session at the Tianjin finish.
+        if UserDefaults.standard.string(forKey: Self.persistedRunIdKey) == nil,
+           let endedAt = UserDefaults.standard.object(forKey: Self.lastEndedAtKey) as? Double,
+           Date().timeIntervalSince1970 - endedAt < 600 {
+            return
+        }
+        recovering = true
         // Explicitly @Sendable — HealthKit calls back on a background queue.
         let completion: @Sendable (HKWorkoutSession?, (any Error)?) -> Void = { [weak self] session, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.recovering = false
                 if let error {
                     self.lastError = "Recovery failed: \(error.localizedDescription)"
                     WatchBreadcrumbs.shared.drop("recovery FAILED: \(error.localizedDescription)")
@@ -560,7 +584,7 @@ final class WorkoutSessionHost: NSObject {
                     let endedAt = UserDefaults.standard.object(forKey: Self.lastEndedAtKey) as? Double
                     let ago = endedAt.map { Int(Date().timeIntervalSince1970 - $0) } ?? -1
                     WatchBreadcrumbs.shared.drop("recovery REFUSED: no persisted run → zombie (HK state \(session.state.rawValue), ended \(ago)s ago); ending session")
-                    session.end()
+                    if session.state != .ended { session.end() }
                     return
                 }
                 WatchBreadcrumbs.shared.drop("recovery ACCEPTED: persisted run present → genuine crash recovery (HK state \(session.state.rawValue))")
@@ -660,6 +684,7 @@ final class WorkoutSessionHost: NSObject {
     func endRun() async -> UUID? {
         guard let session, let builder, state != .ended, state != .idle else { return nil }
         WatchBreadcrumbs.shared.drop("endRun begin (state \(state.rawValue))")
+        finishedRun = FinishedRun(points: routeTrailPoints, metrics: liveMetrics, at: .now)
         location?.stop()
         location = nil
         ticker?.cancel()

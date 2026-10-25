@@ -23,7 +23,7 @@ final class WatchAppDelegate: NSObject, WKApplicationDelegate {
 
     func applicationDidFinishLaunching() {
         Task { @MainActor in
-            WatchBreadcrumbs.shared.drop("launch")
+            WatchBreadcrumbs.shared.drop("launch (app state \(WKApplication.shared().applicationState.rawValue))")
             WatchSession.shared.activate()
         }
         log.info("[watch] didFinishLaunching — WC activation kicked")

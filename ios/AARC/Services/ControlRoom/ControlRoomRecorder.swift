@@ -55,6 +55,7 @@ final class ControlRoomRecorder: NSObject {
     /// talk-back reuses this one.
     private var armedId: String?
     private var foregroundObserver: NSObjectProtocol?
+    private var terminateObserver: NSObjectProtocol?
     private var commandTargets: [(MPRemoteCommand, Any)] = []
     private var keepaliveWasRunning = false
     private var runId: String?
@@ -568,6 +569,12 @@ final class ControlRoomRecorder: NSObject {
                 forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
                 Task { @MainActor in ControlRoomRecorder.shared.arm() }
             }
+            // A quit app must not leave a banner behind: a live one relaunched
+            // the watch app onto his wrist for hours (Tianjin, 25 Oct).
+            terminateObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+                Self.endEveryBannerBeforeExit()
+            }
         }
         PostRunWindow.shared.expireIfDue()
         guard Self.bannerWanted else {
@@ -604,6 +611,17 @@ final class ControlRoomRecorder: NSObject {
         let ids = Activity<ControlRoomActivityAttributes>.activities.map(\.id).filter { $0 != keep }
         if !ids.isEmpty { Task { await Self.endNow(ids) } }
         LiveActivityController.shared.endAll()
+    }
+
+    /// iOS gives willTerminate a few seconds; hold it until the banners are gone.
+    private nonisolated static func endEveryBannerBeforeExit() {
+        let done = DispatchSemaphore(value: 0)
+        Task.detached {
+            for a in Activity<ControlRoomActivityAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
+            for a in Activity<LiveActivityAttributes>.activities { await a.end(nil, dismissalPolicy: .immediate) }
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 2)
     }
 
     private nonisolated static func endNow(_ ids: [String]) async {
