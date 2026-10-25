@@ -624,8 +624,9 @@ function fmtClock(sec) {
 }
 function fmtDur(sec) {
   if (sec == null || isNaN(sec)) return null;
-  var m = Math.floor(sec / 60), s = Math.round(sec - m * 60);
-  return m + "m" + (s < 10 ? "0" : "") + s + "s";
+  var t = Math.round(sec), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  var mm = (h > 0 && m < 10 ? "0" : "") + m, ss = (s < 10 ? "0" : "") + s;
+  return h > 0 ? h + ":" + mm + ":" + ss : m + ":" + ss;
 }
 function fmtDist(m) {
   if (m == null || isNaN(m) || m <= 0) return null;

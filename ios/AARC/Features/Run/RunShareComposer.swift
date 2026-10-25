@@ -25,6 +25,10 @@ struct RunShareComposer: View {
     /// overrides the menu while set.
     @State private var pickedLine: VoiceLineTimeline.Line?
     @State private var showLinePicker = false
+    /// His own wording for the card, over whichever line is chosen.
+    @State private var editedText: String?
+    @State private var showEdit = false
+    @State private var editInput = ""
     @State private var busy = false
     @State private var status = ""
     @State private var shareItems: [Any] = []
@@ -83,8 +87,9 @@ struct RunShareComposer: View {
             .sheet(isPresented: $showShare) { ActivityView(items: shareItems) }
             .onAppear { regenPreview() }
             .onChange(of: aspect) { _, _ in if layout == .route { buildMapIfNeeded() } else { regenPreview() } }
-            .onChange(of: quoteIdx) { _, _ in pickedLine = nil; regenPreview() }
-            .onChange(of: pickedLine) { _, _ in regenPreview() }
+            .onChange(of: quoteIdx) { _, _ in pickedLine = nil; editedText = nil; regenPreview() }
+            .onChange(of: pickedLine) { _, _ in editedText = nil; regenPreview() }
+            .onChange(of: editedText) { _, _ in regenPreview() }
             .onChange(of: store.finalRoast) { _, _ in regenPreview() }
             .onChange(of: layout) { _, l in if l == .route { buildMapIfNeeded() } else { regenPreview() } }
             .onChange(of: mapMode) { _, _ in if layout == .route { buildMapIfNeeded() } }
@@ -115,6 +120,12 @@ struct RunShareComposer: View {
     }
 
     private var selectedQuote: (label: String, text: String, who: String, voiceId: String?) {
+        let q = chosenQuote
+        guard let editedText else { return q }
+        return (q.label, editedText, q.who, q.voiceId)
+    }
+
+    private var chosenQuote: (label: String, text: String, who: String, voiceId: String?) {
         if let l = pickedLine {
             let who = l.voiceId == RemoteTTS.jessicaVoiceId ? "jessica" : l.voiceId == RemoteTTS.homeVoiceId ? "home" : "ricky"
             // The phone's own fallback voice has no audio to put in a video.
@@ -156,8 +167,9 @@ struct RunShareComposer: View {
     }
     private static func fmtDur(_ sec: Double) -> String {
         guard sec.isFinite, sec > 0 else { return "\u{2014}" }
-        let m = Int(sec / 60), s = Int((sec - Double(m) * 60).rounded())
-        return "\(m)m\(s < 10 ? "0" : "")\(s)s"
+        // h:mm:ss, like a race clock (founder, 25 Oct: "280m56s" for a marathon).
+        let t = Int(sec.rounded()), h = t / 3600, m = (t % 3600) / 60, s = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
     private static func fmtPace(_ secPerKm: Double) -> String {
         guard secPerKm.isFinite, secPerKm > 0 else { return "\u{2014}" }
@@ -174,8 +186,8 @@ struct RunShareComposer: View {
     // MARK: controls
 
     @ViewBuilder private var quotePicker: some View {
-        if case .wholeRun = target {
-            VStack(spacing: 6) {
+        VStack(spacing: 6) {
+            if case .wholeRun = target {
                 if quoteOptions.count > 1 {
                     Picker("Centrepiece", selection: $quoteIdx) {
                         ForEach(Array(quoteOptions.enumerated()), id: \.offset) { i, o in
@@ -194,11 +206,30 @@ struct RunShareComposer: View {
                     Button("Back to the closing line") { pickedLine = nil }.font(.caption)
                 }
             }
-            .sheet(isPresented: $showLinePicker) {
-                RunLinePicker(runId: store.summary?.runId) { line in
-                    pickedLine = line
-                    showLinePicker = false
+            HStack(spacing: 16) {
+                Button {
+                    editInput = selectedQuote.text.strippingAudioTags
+                    showEdit = true
+                } label: { Label("Edit line", systemImage: "pencil").font(.caption) }
+                if editedText != nil {
+                    Button("Undo edit") { editedText = nil }.font(.caption)
                 }
+            }
+        }
+        .alert("Edit the line", isPresented: $showEdit) {
+            TextField("Line", text: $editInput, axis: .vertical)
+            Button("Use") {
+                let t = editInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                editedText = t.isEmpty ? nil : t
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Your wording goes on the card. A video speaks it in the same voice.")
+        }
+        .sheet(isPresented: $showLinePicker) {
+            RunLinePicker(runId: store.summary?.runId) { line in
+                pickedLine = line
+                showLinePicker = false
             }
         }
     }
