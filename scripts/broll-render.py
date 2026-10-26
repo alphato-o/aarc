@@ -498,6 +498,25 @@ class Series:
         return self.v[i] + (self.v[i + 1] - self.v[i]) * f
 
 
+def gps_distance(recs, max_speed=8.0):
+    """Cumulative metres along the GPS fixes; a hop faster than max_speed m/s is a glitch."""
+    fixes = sorted((r["ms"], r["lat"], r["lon"]) for r in recs if r["lane"] == "pos"
+                   and r.get("lat") is not None and r.get("lon") is not None
+                   and (abs(r["lat"]) > 1e-6 or abs(r["lon"]) > 1e-6))
+    pts, total, prev = [], 0.0, None
+    for ms, lat, lon in fixes:
+        if prev is not None:
+            la1, la2 = math.radians(prev[1]), math.radians(lat)
+            h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin(math.radians(lon - prev[2]) / 2) ** 2
+            d = 2 * 6371000 * math.asin(math.sqrt(h))
+            dt = (ms - prev[0]) / 1000
+            if dt > 0 and d / dt <= max_speed:
+                total += d
+        pts.append({"ms": ms, "d": total})
+        prev = (ms, lat, lon)
+    return Series(pts, "d")
+
+
 # --- renderer --------------------------------------------------------------
 
 TERM_BG = (24, 24, 27)
@@ -563,16 +582,60 @@ class Renderer:
         self.f_km = Face(round(13 * k), "Bold")
         self.f_title = Face(round(15 * k), "Medium")
 
-        self.metrics = [r for r in recs if r["lane"] == "metrics"]
-        self.dist = Series(self.metrics, "distanceM")
-        self.pace = Series(self.metrics, "paceS")
-        self.hr = Series(self.metrics + [r for r in recs if r["lane"] == "pos"], "hr")
+        self._setup_series(manifest, recs)
 
         self._cache = {}
         self._setup_map(recs, labels)
         self._setup_feed(recs)
         self._setup_terminal(recs)
         self._setup_chrome()
+
+    def _setup_series(self, manifest, recs):
+        self.metrics = [r for r in recs if r["lane"] == "metrics"]
+        self.dist = Series(self.metrics, "distanceM")
+        self.pace = Series(self.metrics, "paceS")
+        self.hr = Series(self.metrics + [r for r in recs if r["lane"] == "pos"], "hr")
+        # An official result (chip time, certified distance) wins over the watch. The live
+        # distance feed stalled in Tianjin (1.4 km behind at the arch), so race distance is
+        # the GPS track from the gate, scaled to the certified course at the finish.
+        self.official = manifest.get("official") or {}
+        ft = self.official.get("finishT")
+        self.finish_ms = self.start_ms + ft * 1000 if ft is not None and self.official.get("timeS") else None
+        if self.finish_ms is not None and self.official.get("distanceKm"):
+            track = gps_distance(recs)
+            if len(track.ms) >= 2:
+                g0 = track.lerp(self.gate_ms if self.gate_ms is not None else self.start_ms) or 0.0
+                span = (track.lerp(self.finish_ms) or 0.0) - g0
+                if span > 0:
+                    scale = self.official["distanceKm"] * 1000 / span
+                    track.v = [max(0.0, (d - g0) * scale) for d in track.v]
+                    self.dist = track
+
+    def _readout(self, ms):
+        """Clock label, clock, Beijing time, distance, pace, HR as display strings."""
+        finished = self.finish_ms is not None and ms >= self.finish_ms
+        if finished:
+            el, label = self.official["timeS"], "FINISH"
+        elif self.gate_ms is not None:
+            el = (ms - self.gate_ms) / 1000
+            label = "RACE CLOCK" if el >= 0 else "TO THE GATE"
+        else:
+            el = (ms - self.start_ms) / 1000
+            label = "RUN CLOCK"
+        sign = "-" if el < 0 else ""
+        e = int(abs(el)) if el >= 0 else int(math.ceil(abs(el)))
+        clock = f"{sign}{e // 3600}:{e % 3600 // 60:02d}:{e % 60:02d}"
+        wall = datetime.fromtimestamp(ms / 1000, BEIJING).strftime("%H:%M:%S")
+        if finished and self.official.get("distanceKm"):
+            dist = f"{self.official['distanceKm']:g}"
+        else:
+            dm = self.dist.lerp(ms)
+            dist = f"{dm / 1000:.2f}" if dm is not None else "0.00"
+        p = self.pace.last(ms)
+        pace = f"{int(p) // 60}:{int(p) % 60:02d}" if p and 120 <= p <= 1200 else "--:--"
+        hr = self.hr.last(ms)
+        hr = f"{int(round(hr))}" if hr else "--"
+        return label, clock, wall, dist, pace, hr
 
     # map
     def _setup_map(self, recs, labels):
@@ -1099,22 +1162,7 @@ class Renderer:
 
     def _stats(self, ms):
         k = self.k
-        if self.gate_ms is not None:
-            el = (ms - self.gate_ms) / 1000
-            label = "RACE CLOCK" if el >= 0 else "TO THE GATE"
-        else:
-            el = (ms - self.start_ms) / 1000
-            label = "RUN CLOCK"
-        sign = "-" if el < 0 else ""
-        e = int(abs(el)) if el >= 0 else int(math.ceil(abs(el)))
-        clock = f"{sign}{e // 3600}:{e % 3600 // 60:02d}:{e % 60:02d}"
-        wall = datetime.fromtimestamp(ms / 1000, BEIJING).strftime("%H:%M:%S")
-        dm = self.dist.lerp(ms)
-        dist = f"{dm / 1000:.2f}" if dm is not None else "0.00"
-        p = self.pace.last(ms)
-        pace = f"{int(p) // 60}:{int(p) % 60:02d}" if p and 120 <= p <= 1200 else "--:--"
-        hr = self.hr.last(ms)
-        hr = f"{int(round(hr))}" if hr else "--"
+        label, clock, wall, dist, pace, hr = self._readout(ms)
         key = ("stats", label, clock, wall, dist, pace, hr)
         if key in self._cache:
             return self._cache[key]
