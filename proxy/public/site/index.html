@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AARC: a running coach with opinions</title>
+<meta name="description" content="AARC is an AI running coach for iPhone and Apple Watch. Ricky reacts live to your pace, heart rate and music. It ran the Tianjin Marathon in 4:40:34.">
+<meta name="theme-color" content="#0d1412">
+<meta property="og:title" content="AARC: a running coach with opinions">
+<meta property="og:description" content="An AI coach in your ear for iPhone and Apple Watch. First marathon: 4:40:34, talking the whole way.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://i.ytimg.com/vi/_IKXahSPCVU/maxresdefault.jpg">
+<link rel="stylesheet" href="/site/phone.css">
+<link rel="stylesheet" href="/site/watch.css">
+<style>
+  :root {
+    color-scheme: dark;
+    --ground: #0d1412;
+    --ground-2: #121b18;
+    --line: #22302b;
+    --ink: #f2efe2;
+    --muted: #a2ab9f;
+    --faint: #6f7b72;
+    --pub: #4a6350;
+    --pub-hi: #6f8f76;
+    --live: #ff5a7a;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --round: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --gutter: 16px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font: 16px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  a { color: inherit; }
+  img { max-width: 100%; display: block; }
+  :focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 var(--gutter); }
+  @media (min-width: 720px) { :root { --gutter: 32px; } }
+
+  /* nav */
+  .nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(13, 20, 18, .78);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    backdrop-filter: blur(16px) saturate(150%);
+    border-bottom: 1px solid transparent;
+    transition: border-color .2s ease;
+  }
+  .nav.scrolled { border-bottom-color: var(--line); }
+  .nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font: 700 17px/1 var(--display); letter-spacing: -0.01em; }
+  .brand svg { width: 30px; height: 30px; display: block; }
+  .nav-links { display: flex; align-items: center; gap: 22px; font-size: 14px; }
+  .nav-links a { text-decoration: none; color: var(--muted); transition: color .15s ease; }
+  .nav-links a:hover { color: var(--ink); }
+  .nav-links .signin {
+    color: var(--ink); font-weight: 600;
+    border: 1px solid var(--line); padding: 8px 15px; border-radius: 999px;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .nav-links .signin:hover { border-color: var(--pub-hi); background: var(--ground-2); }
+  @media (max-width: 560px) { .nav-links .hide-sm { display: none; } }
+
+  /* hero */
+  .hero { position: relative; padding: 28px 0 64px; }
+  .hero::before {
+    content: ""; position: absolute; inset: -60px 0 0 0; pointer-events: none;
+    background:
+      radial-gradient(60% 55% at 72% 46%, rgba(74, 99, 80, .34), transparent 70%),
+      radial-gradient(30% 30% at 82% 70%, rgba(255, 90, 122, .07), transparent 70%);
+  }
+  .hero .wrap { position: relative; display: grid; grid-template-columns: 1fr; gap: 36px; }
+  .copy { max-width: 34rem; }
+  h1 {
+    font: 800 clamp(44px, 11.5vw, 92px)/0.94 var(--display);
+    letter-spacing: -0.045em;
+    margin: 0 0 22px;
+    text-wrap: balance;
+  }
+  .lede { font-size: clamp(17px, 2.1vw, 19px); line-height: 1.5; color: var(--muted); margin: 0 0 28px; max-width: 30rem; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  /* waitlist */
+  .wl { max-width: 30rem; }
+  .wl-form { display: flex; gap: 8px; flex-wrap: wrap; }
+  .wl-email {
+    flex: 1 1 13rem; min-width: 0;
+    font: 500 16px/1.2 var(--sans); color: var(--ink);
+    background: rgba(255, 255, 255, .04);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 14px 18px; outline: none;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .wl-email::placeholder { color: var(--faint); }
+  .wl-email:focus { border-color: var(--pub-hi); background: rgba(255, 255, 255, .06); }
+  .cta {
+    font: 700 15px/1 var(--sans); cursor: pointer; white-space: nowrap;
+    color: #10180f; background: var(--ink);
+    border: 0; border-radius: 999px; padding: 15px 22px;
+    transition: transform .15s ease, background .15s ease;
+  }
+  .cta:hover { background: #fffcf0; }
+  .cta:active { transform: translateY(1px); }
+  .cta:disabled { opacity: .6; cursor: default; }
+  .wl-msg { flex-basis: 100%; font-size: 14px; min-height: 1.3em; margin: 4px 0 0 18px; color: var(--faint); }
+  .wl-msg:empty { min-height: 0; margin: 0; }
+  .wl-msg.ok { color: #9fd3a6; }
+  .wl-msg.err { color: #ff8f8f; }
+  .wl-note { font-size: 14px; color: var(--faint); margin: 10px 0 0 18px; }
+  .wl-note a { color: var(--muted); text-underline-offset: 3px; }
+
+  /* device rig: phone height drives everything */
+  .stage { display: flex; flex-direction: column; align-items: center; order: -1; }
+  .rig {
+    --ph: min(calc((100vw - 2 * var(--gutter)) / 0.70), 700px);
+    position: relative;
+    width: calc(var(--ph) * 0.4795 + var(--ph) * 0.42 * 0.5);
+    height: calc(var(--ph) * 1.1);
+  }
+  .phone-slot {
+    position: absolute; left: 0; top: 0;
+    height: var(--ph); width: calc(var(--ph) * 0.4795);
+  }
+  /* watch.js draws case plus cropped band at 100:150, width-driven */
+  .watch-slot {
+    position: absolute; right: 0; bottom: 0;
+    width: calc(var(--ph) * 0.42); height: calc(var(--ph) * 0.63);
+    z-index: 2;
+  }
+  /* fallback renders until phone.js / watch.js mount */
+  .fb-phone, .fb-watch {
+    position: absolute; inset: 0; color: var(--ink);
+    background: #05070a; border: 1px solid #3a4440;
+    box-shadow: 0 0 0 calc(var(--ph) * 0.012) #1b1f1e, 0 40px 90px rgba(0,0,0,.55);
+    overflow: hidden; font-family: var(--round);
+  }
+  .fb-phone { border-radius: calc(var(--ph) * 0.075); padding: 18% 9% 9%; }
+  .fb-watch { top: 18%; bottom: 18%; border-radius: calc(var(--ph) * 0.07); padding: 16% 12%; }
+  .fb-phone .fb-big { font-size: calc(var(--ph) * 0.07); font-weight: 700; letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .fb-phone .fb-row { display: flex; justify-content: space-between; font-size: calc(var(--ph) * 0.022); color: var(--muted); margin-top: 6%; font-variant-numeric: tabular-nums; }
+  .fb-phone .fb-coach { font: 500 calc(var(--ph) * 0.019)/1.35 var(--sans); color: var(--ink); margin-top: 10%; min-height: 6em; }
+  .fb-phone .fb-tag { font-size: calc(var(--ph) * 0.016); color: var(--faint); }
+  .fb-watch .fb-big { font-size: calc(var(--ph) * 0.05); font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .fb-watch .fb-row { font-size: calc(var(--ph) * 0.02); color: var(--live); margin-top: 8%; font-variant-numeric: tabular-nums; }
+
+  /* mode switcher */
+  .modes {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px;
+    width: min(100%, 420px); margin-top: 22px;
+    padding: 4px; border: 1px solid var(--line); border-radius: 16px;
+    background: rgba(255, 255, 255, .025);
+  }
+  .mode {
+    position: relative; overflow: hidden;
+    appearance: none; border: 0; cursor: pointer; text-align: left;
+    background: transparent; color: var(--faint);
+    padding: 9px 12px 11px; border-radius: 12px;
+    font: 600 14px/1.2 var(--sans);
+    transition: color .2s ease, background .2s ease;
+  }
+  .mode:hover { color: var(--muted); }
+  .mode .k { display: block; font: 600 12.5px/1.3 var(--round); font-variant-numeric: tabular-nums; color: inherit; opacity: .8; margin-top: 2px; }
+  .mode[aria-pressed="true"] { color: var(--ink); background: rgba(255, 255, 255, .06); }
+  .mode .bar { position: absolute; left: 12px; right: 12px; bottom: 4px; height: 2px; border-radius: 2px; background: rgba(255,255,255,.08); opacity: 0; }
+  .mode .bar i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--ink); }
+  .mode[aria-pressed="true"] .bar { opacity: 1; }
+  .mode-caption { font-size: 13px; color: var(--faint); margin: 10px 0 0; text-align: center; min-height: 1.4em; }
+
+  @media (min-width: 980px) {
+    .hero { padding: 40px 0 72px; }
+    .hero .wrap { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 48px; }
+    .stage { order: 0; }
+    .rig { --ph: min(76vh, 700px, 62vw); }
+    h1 { font-size: clamp(64px, 6.6vw, 96px); }
+  }
+
+  /* race section */
+  .section { padding: 88px 0; border-top: 1px solid var(--line); }
+  .race .wrap { display: grid; grid-template-columns: 1fr; gap: 36px; align-items: start; }
+  @media (min-width: 980px) { .race .wrap { grid-template-columns: 1.55fr 1fr; gap: 56px; } }
+  h2 { font: 800 clamp(32px, 5vw, 52px)/1 var(--display); letter-spacing: -0.035em; margin: 0 0 18px; text-wrap: balance; }
+  .yt {
+    position: relative; width: 100%; aspect-ratio: 16 / 9;
+    border-radius: 18px; overflow: hidden; background: #000;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, .5), 0 0 0 1px var(--line);
+  }
+  .yt button { all: unset; position: absolute; inset: 0; cursor: pointer; display: block; }
+  .yt img { width: 100%; height: 100%; object-fit: cover; transition: transform .5s ease, filter .3s ease; filter: saturate(.9) brightness(.82); }
+  .yt button:hover img { transform: scale(1.02); filter: saturate(1) brightness(.9); }
+  .yt .play {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: clamp(64px, 11vw, 96px); aspect-ratio: 1; border-radius: 50%;
+    background: var(--ink); display: grid; place-items: center;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, .45);
+    transition: transform .2s ease;
+  }
+  .yt button:hover .play { transform: translate(-50%, -50%) scale(1.06); }
+  .yt .play svg { width: 34%; margin-left: 7%; }
+  .yt .label {
+    position: absolute; left: 16px; bottom: 14px; right: 16px;
+    font: 600 clamp(13px, 1.6vw, 15px)/1.3 var(--sans); color: #fff; text-shadow: 0 1px 12px rgba(0,0,0,.6);
+  }
+  .yt button:focus-visible { outline: 3px solid var(--ink); outline-offset: -3px; border-radius: 18px; }
+  .yt iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  .clock {
+    font: 700 clamp(64px, 12vw, 116px)/0.9 var(--round);
+    letter-spacing: -0.04em; font-variant-numeric: tabular-nums;
+    margin: 0 0 12px;
+  }
+  .clock-note { color: var(--muted); margin: 0 0 30px; max-width: 26rem; }
+  .clock-note strong { color: var(--ink); font-weight: 600; }
+  .race-log { list-style: none; margin: 0; padding: 0; border-left: 1px solid var(--line); }
+  .race-log li { position: relative; padding: 0 0 14px 20px; color: var(--muted); font-size: 15px; line-height: 1.45; }
+  .race-log li:last-child { padding-bottom: 0; }
+  .race-log li::before {
+    content: ""; position: absolute; left: -4px; top: .5em; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--ground); border: 1px solid var(--pub-hi);
+  }
+  .race-log b { color: var(--ink); font-weight: 600; }
+
+  /* proof strip */
+  .proof .wrap { display: grid; grid-template-columns: 1fr; gap: 0; }
+  .proof .item { padding: 22px 0; border-top: 1px solid var(--line); }
+  .proof .item:first-child { border-top: 0; }
+  .proof h3 { font: 700 19px/1.2 var(--display); letter-spacing: -0.015em; margin: 0 0 6px; }
+  .proof p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.5; max-width: 22rem; }
+  @media (min-width: 720px) {
+    .proof .wrap { grid-template-columns: repeat(2, 1fr); column-gap: 40px; }
+    .proof .item:nth-child(2) { border-top: 0; }
+  }
+  @media (min-width: 1080px) {
+    .proof .wrap { grid-template-columns: repeat(4, 1fr); }
+    .proof .item { border-top: 0; padding: 0 0 0 20px; border-left: 1px solid var(--line); }
+  }
+
+  /* closing band: the pub sign */
+  .band { background: var(--ink); color: #13201a; padding: 80px 0; }
+  .band .wrap { display: grid; grid-template-columns: 1fr; gap: 28px; align-items: end; }
+  @media (min-width: 900px) { .band .wrap { grid-template-columns: 1.2fr 1fr; gap: 56px; } }
+  .band h2 { color: #13201a; margin-bottom: 12px; }
+  .band p { margin: 0; color: #4b5a50; font-size: 17px; max-width: 28rem; }
+  .band .wl-email { background: #fff; border-color: #d7d2bf; color: #13201a; }
+  .band .wl-email::placeholder { color: #8b9288; }
+  .band .wl-email:focus { border-color: var(--pub); background: #fff; }
+  .band .cta { background: var(--pub); color: var(--ink); }
+  .band .cta:hover { background: #3f5644; }
+  .band .wl-msg { color: #6b7469; }
+  .band .wl-msg.ok { color: #2f6b3c; }
+  .band .wl-msg.err { color: #a3332b; }
+
+  footer { padding: 30px 0 44px; color: var(--faint); font-size: 14px; }
+  footer .wrap { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px 24px; }
+  footer a { color: var(--muted); text-decoration: none; }
+  footer a:hover { color: var(--ink); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { transition: none !important; }
+  }
+  @media print {
+    .nav, .stage, .yt, .wl-form { display: none; }
+    body { background: #fff; color: #000; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="brand" href="/" aria-label="AARC home">
+      <svg viewBox="0 0 40 40" aria-hidden="true">
+        <rect x="1" y="1" width="38" height="38" rx="10.5" fill="#4a6350"/>
+        <rect x="1" y="1" width="38" height="38" rx="10.5" fill="none" stroke="#fff" stroke-opacity=".14"/>
+        <g stroke="#f2efe2" stroke-linecap="round" fill="none" stroke-width="1.9">
+          <line x1="4.5" y1="14.5" x2="10" y2="14.5" stroke-opacity=".45"/>
+          <line x1="3.5" y1="19.5" x2="10.5" y2="19.5" stroke-opacity=".8"/>
+          <line x1="5.5" y1="24.5" x2="9.5" y2="24.5" stroke-opacity=".35"/>
+        </g>
+        <g transform="translate(24 20) rotate(6)">
+          <path fill="#f2efe2" d="M-8.2 -13 L8.2 -13 C8.2 -4.5 4.4 0.2 0 1.6 C-4.4 0.2 -8.2 -4.5 -8.2 -13 Z"/>
+          <rect x="-1.15" y="1" width="2.3" height="9.2" fill="#f2efe2"/>
+          <ellipse cx="0" cy="11.2" rx="5.6" ry="1.7" fill="#f2efe2"/>
+          <path fill="none" stroke="#4a6350" stroke-width="1.5" stroke-linecap="round"
+                d="M0 -7.2 a1.1 1.1 0 0 1 1.6 1.3 a2.3 2.3 0 0 1 -3.4 1.3 a3.5 3.5 0 0 1 1.2 -5.5 a4.7 4.7 0 0 1 4.4 6.3"/>
+        </g>
+      </svg>
+      <span>AARC</span>
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a class="hide-sm" href="#race">The marathon</a>
+      <a class="hide-sm" href="#join">Join the beta</a>
+      <a class="signin" href="https://my.aarun.club">Sign in</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <div class="copy">
+      <h1>A running coach with opinions.</h1>
+      <p class="lede"><strong>Ricky</strong> reads your pace, your heart rate and the song in your ears, then has something to say about all three. iPhone and Apple Watch.</p>
+      <div class="wl">
+        <form class="wl-form" data-source="hero" novalidate>
+          <input class="wl-email" type="email" inputmode="email" autocomplete="email" placeholder="you@email.com" aria-label="Email address" required>
+          <button class="cta" type="submit">Join the waitlist</button>
+          <div class="wl-msg" role="status" aria-live="polite"></div>
+        </form>
+        <p class="wl-note">In TestFlight beta now. Already in? <a href="https://my.aarun.club">Sign in</a>.</p>
+      </div>
+    </div>
+
+    <div class="stage" aria-label="Live demo of the AARC app on iPhone and Apple Watch">
+      <div class="rig">
+        <div class="phone-slot" id="phone-slot">
+          <div class="fb-phone" aria-hidden="true">
+            <div class="fb-tag" data-fb="mode">Indoor</div>
+            <div class="fb-big" data-fb="clock">0:00</div>
+            <div class="fb-row"><span data-fb="dist">0.00 km</span><span data-fb="pace">0:00 /km</span></div>
+            <div class="fb-row"><span data-fb="hr">0 bpm</span><span data-fb="kcal">0 kcal</span></div>
+            <div class="fb-coach" data-fb="coach"></div>
+          </div>
+        </div>
+        <div class="watch-slot" id="watch-slot">
+          <div class="fb-watch" aria-hidden="true">
+            <div class="fb-big" data-fb="pace2">0:00</div>
+            <div class="fb-row" data-fb="hr2">0</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modes" role="group" aria-label="Demo mode">
+        <button class="mode" type="button" data-mode="indoor" aria-pressed="true">Indoor<span class="k">Treadmill</span><span class="bar"><i></i></span></button>
+        <button class="mode" type="button" data-mode="outdoor" aria-pressed="false">Outdoor<span class="k">Hyde Park</span><span class="bar"><i></i></span></button>
+        <button class="mode" type="button" data-mode="race" aria-pressed="false">Race<span class="k">Km 31</span><span class="bar"><i></i></span></button>
+      </div>
+      <p class="mode-caption" id="mode-caption">The Apple Watch tracks. The phone talks.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section race" id="race">
+  <div class="wrap">
+    <div>
+      <div class="yt" id="yt">
+        <button type="button" aria-label="Play video: I ran a marathon race with an AI coach talking in my ear">
+          <img src="https://i.ytimg.com/vi/_IKXahSPCVU/maxresdefault.jpg" alt="" loading="lazy" width="1280" height="720">
+          <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4l15 8-15 8z" fill="#13201a"/></svg></span>
+        </button>
+      </div>
+    </div>
+    <div>
+      <h2>It has run a marathon.</h2>
+      <p class="clock">4:40:34</p>
+      <p class="clock-note">Tianjin Marathon, 25 October 2026. Chip time, and <strong>Alpha's fastest of four</strong>, with AARC in his ear for all 42.2 km.</p>
+      <ul class="race-log">
+        <li><b>Clock starts on the mat.</b> Not in the corral.</li>
+        <li><b>Gel and salt</b> called at the aid stations.</li>
+        <li><b>No signal, no silence.</b> The race pack lives on the phone.</li>
+        <li><b>Ran the chest camera</b> over Bluetooth, battery swaps included.</li>
+        <li><b>Home Base</b> watched live and answered his voice notes mid-race.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="section proof" aria-label="What it does on every run">
+  <div class="wrap">
+    <div class="item">
+      <h3>The watch is the tracker</h3>
+      <p>Start on the phone and Apple Watch opens itself. Pace, heart rate and route come from your wrist.</p>
+    </div>
+    <div class="item">
+      <h3>Timed around your songs</h3>
+      <p>It knows what is playing and waits for the gap. Never over the chorus.</p>
+    </div>
+    <div class="item">
+      <h3>Treadmill or outdoors</h3>
+      <p>Indoor mode for the belt, outdoor with a live map. Same voice, same standards.</p>
+    </div>
+    <div class="item">
+      <h3>Every run, replayable</h3>
+      <p>Scrub back through pace, heart rate and every line said. Then share the card.</p>
+    </div>
+  </div>
+</section>
+
+<section class="band" id="join">
+  <div class="wrap">
+    <div>
+      <h2>Ricky is waiting. He is not patient.</h2>
+      <p>AARC is in private beta. Leave an email and you will hear when it opens up. No spam, he would mock it.</p>
+    </div>
+    <div class="wl">
+      <form class="wl-form" data-source="band" novalidate>
+        <input class="wl-email" type="email" inputmode="email" autocomplete="email" placeholder="you@email.com" aria-label="Email address" required>
+        <button class="cta" type="submit">Join the waitlist</button>
+        <div class="wl-msg" role="status" aria-live="polite"></div>
+      </form>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>&copy; 2026 AARC. Made for running, mostly by running.</span>
+    <span><a href="https://my.aarun.club">Sign in</a></span>
+  </div>
+</footer>
+
+<script src="/site/sim.js"></script>
+<script src="/site/phone.js"></script>
+<script src="/site/watch.js"></script>
+<script>
+(function () {
+  // sticky nav hairline once scrolled
+  var nav = document.getElementById('nav');
+  function onScroll() { nav.classList.toggle('scrolled', window.scrollY > 8); }
+  window.addEventListener('scroll', onScroll, { passive: true }); onScroll();
+
+  var SIM = window.AARC_SIM;
+  var phoneSlot = document.getElementById('phone-slot');
+  var watchSlot = document.getElementById('watch-slot');
+
+  if (window.AARCPhone && typeof window.AARCPhone.mount === 'function') {
+    phoneSlot.innerHTML = '';
+    try { window.AARCPhone.mount(phoneSlot, { mapSrc: '/site/london.webp' }); } catch (e) { console.error(e); }
+  }
+  if (window.AARCWatch && typeof window.AARCWatch.mount === 'function') {
+    watchSlot.innerHTML = '';
+    try { window.AARCWatch.mount(watchSlot, { mapSrc: '/site/london.webp', route: window.AARC_ROUTE && window.AARC_ROUTE.route }); } catch (e) { console.error(e); }
+  }
+  if (!SIM) return;
+
+  var fb = {};
+  var nodes = document.querySelectorAll('[data-fb]');
+  for (var i = 0; i < nodes.length; i++) fb[nodes[i].getAttribute('data-fb')] = nodes[i];
+  function set(k, v) { if (fb[k] && fb[k].isConnected && fb[k].textContent !== v) fb[k].textContent = v; }
+
+  var tabs = document.querySelectorAll('.mode');
+  var caption = document.getElementById('mode-caption');
+  var CAPTIONS = {
+    indoor: 'Treadmill. Steady 5:30s, and Ricky has noticed the fire exit.',
+    outdoor: 'Hyde Park loop. The map follows your wrist.',
+    race: 'Race mode, km 31. Home Base is on the radio.'
+  };
+  var lastMode = null;
+  for (i = 0; i < tabs.length; i++) {
+    tabs[i].addEventListener('click', function () { SIM.setMode(this.getAttribute('data-mode')); });
+  }
+
+  SIM.subscribe(function (s) {
+    if (!s) return;
+    if (s.mode !== lastMode) {
+      lastMode = s.mode;
+      for (var j = 0; j < tabs.length; j++) tabs[j].setAttribute('aria-pressed', String(tabs[j].getAttribute('data-mode') === s.mode));
+      caption.textContent = CAPTIONS[s.mode] || '';
+    }
+    var active = document.querySelector('.mode[aria-pressed="true"] .bar i');
+    if (active) active.style.width = (s.modeProgress * 100).toFixed(1) + '%';
+
+    // placeholder screens, only while the real mockups are absent
+    var corral = s.race && s.race.phase === 'corral';
+    set('mode', s.mode === 'race' ? (corral ? 'Race: in the corral' : 'Race: km ' + (s.distM / 1000).toFixed(1)) : s.mode === 'outdoor' ? 'Outdoor: Hyde Park' : 'Indoor: treadmill');
+    set('clock', SIM.formatClock(s.elapsedS));
+    set('dist', (s.distM / 1000).toFixed(2) + ' km');
+    set('pace', s.paceSecPerKm ? SIM.formatPace(s.paceSecPerKm) + ' /km' : '--:-- /km');
+    set('hr', s.hr + ' bpm');
+    set('kcal', s.kcal + ' kcal');
+    set('coach', s.coach ? s.coach.voice + ': ' + s.coach.text : '');
+    set('pace2', s.paceSecPerKm ? SIM.formatPace(s.paceSecPerKm) : '--:--');
+    set('hr2', s.hr + ' bpm');
+  });
+})();
+
+// YouTube lite embed: nothing from YouTube loads until the click, bar the thumbnail.
+(function () {
+  var box = document.getElementById('yt');
+  if (!box) return;
+  var img = box.querySelector('img');
+  var fallback = 'https://i.ytimg.com/vi/_IKXahSPCVU/hqdefault.jpg';
+  function useFallback() { if (img.src !== fallback) img.src = fallback; }
+  img.addEventListener('error', useFallback);
+  img.addEventListener('load', function () { if (img.naturalWidth && img.naturalWidth < 200) useFallback(); });
+  box.querySelector('button').addEventListener('click', function () {
+    var f = document.createElement('iframe');
+    f.src = 'https://www.youtube-nocookie.com/embed/_IKXahSPCVU?autoplay=1&rel=0';
+    f.title = 'I ran a marathon race with an AI coach talking in my ear';
+    f.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+    f.allowFullscreen = true;
+    box.innerHTML = '';
+    box.appendChild(f);
+  });
+})();
+
+// Waitlist: POST /api/waitlist {email, source}, inline result.
+(function () {
+  var EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  var forms = document.querySelectorAll('.wl-form');
+  for (var i = 0; i < forms.length; i++) wire(forms[i]);
+
+  function wire(form) {
+    var input = form.querySelector('.wl-email');
+    var btn = form.querySelector('.cta');
+    var msg = form.querySelector('.wl-msg');
+    var done = false;
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (done) return;
+      var email = (input.value || '').trim();
+      if (!EMAIL_RE.test(email)) {
+        show('err', 'That does not look like an email address.');
+        input.focus();
+        return;
+      }
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Adding…';
+      show('', '');
+      fetch('/api/waitlist', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email: email, source: form.getAttribute('data-source') || 'site' })
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, j: j }; });
+      }).then(function (res) {
+        if (res.ok && res.j && res.j.ok) {
+          done = true;
+          input.disabled = true;
+          btn.style.display = 'none';
+          show('ok', 'You are on the list. We will be in touch.');
+        } else {
+          btn.disabled = false; btn.textContent = label;
+          show('err', 'Could not save that. Try again in a moment.');
+        }
+      }).catch(function () {
+        btn.disabled = false; btn.textContent = label;
+        show('err', 'Network hiccup. Try again.');
+      });
+    });
+    function show(cls, text) {
+      msg.className = 'wl-msg' + (cls ? ' ' + cls : '');
+      msg.textContent = text;
+    }
+  }
+})();
+</script>
+</body>
+</html>

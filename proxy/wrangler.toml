@@ -21,6 +21,12 @@ routes = [
   { pattern = "aarun.club", custom_domain = true }
 ]
 
+# Static assets: the public marketing site lives in public/site/ and is served
+# at /site/*; the apex "/" returns /site/ through the ASSETS binding.
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
 # Observability — turn on Logpush-style request logging in the dashboard.
 [observability]
 enabled = true

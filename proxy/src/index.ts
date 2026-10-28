@@ -38,6 +38,7 @@ import { personalNotesGetHandler, personalNotesPutHandler } from "./routes/perso
 import { captureException } from "./lib/sentry";
 
 interface Env {
+    ASSETS?: Fetcher;
     OPENROUTER_API_KEY?: string;
     OPENROUTER_MODEL?: string;
     OPENROUTER_BASE_URL?: string;
