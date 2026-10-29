@@ -1,4 +1,4 @@
-/* AARC homepage: Apple Watch Ultra 3 mockup with a live replica of the AARC watch run screen.
+/* AARC homepage: Apple Watch mockup with a live replica of the AARC watch run screen.
    Usage: AARCWatch.mount(el, { sim, mapSrc, route, routeSrc, mapPage, fade })
    Mirrors ios/AARCWatch/Features/Run: WatchMetricsView (time + 2x2 quads), WatchCoachPage
    (overlay), WatchRouteMap (outdoor map), WatchActiveRunView controls (race corral gate). */
@@ -94,20 +94,35 @@
     };
   }
 
+  // Sport band, from Filip Vitas's pure-CSS Apple Watch (codepen.io/FilipVitas/pen/BaLrzaN, MIT).
+  var BAND_PATH = 'M543.6 595.3a545 545 0 01-73.5 6c-22.8-.2-58.1-3.2-64.5-5-5.9-1.8-5.8-.9-16.2-5.4 6.3 4.4 9.4 7.8 12.3 13.8 4.4 9 5.7 16 7 38.2 1 16 1.3 17.3 3.7 19.7 6 5.8 28.7 9.4 60.1 9.4 30.8 0 53.3-3.4 60-9.1 2.4-2.1 2.8-3.9 3.6-15.8 1.2-18.5 1.6-22.6 2.8-28.6a82 82 0 012-7.5c3-9.2 6.8-14.6 14.1-19.7-4 1.8-7.3 2.5-11.4 4zm8-3';
+  function band(pos) {
+    var top = pos === 'top';
+    var g = 'wt-g' + pos;
+    var tf = 'gradientTransform="matrix(165.562 0 0 -81.141 389.4 672)" gradientUnits="userSpaceOnUse"';
+    return '<svg class="wt-band wt-band-' + pos + '" viewBox="389.4 590.9 165.6 81.1">' +
+      '<linearGradient id="' + g + 'a" x1=".5" y1="1" x2=".5" y2="0" ' + tf + '>' +
+        '<stop offset="0%" stop-color="' + (top ? '#3c3b39' : '#636260') + '"/>' +
+        '<stop offset="100%" stop-color="' + (top ? '#61605e' : '#3b3a38') + '"/></linearGradient>' +
+      '<linearGradient id="' + g + 'b" x1=".9" y1=".5" x2=".1" y2=".5" ' + tf + '>' +
+        '<stop offset="0%" stop-color="#444"/><stop offset="48%" stop-opacity="0" stop-color="#4e4d4b"/>' +
+        '<stop offset="100%" stop-color="#444"/></linearGradient>' +
+      '<path d="' + BAND_PATH + '" fill="url(#' + g + 'a)"/>' +
+      '<path d="' + BAND_PATH + '" fill="url(#' + g + 'b)" style="mix-blend-mode:darken"/></svg>';
+  }
+
   function build() {
     var root = el('div', 'wt');
     root.setAttribute('role', 'img');
-    root.setAttribute('aria-label', 'Apple Watch Ultra running the AARC workout screen');
+    root.setAttribute('aria-label', 'Apple Watch running the AARC workout screen');
     root.innerHTML =
-      '<div class="wt-band wt-band-top"><i></i></div>' +
-      '<div class="wt-band wt-band-bot"><i></i></div>' +
-      '<div class="wt-side"><span class="wt-grille"></span><span class="wt-grille"></span></div>' +
-      '<div class="wt-action"></div>' +
-      '<div class="wt-guard"></div>' +
-      '<div class="wt-button"></div>' +
-      '<div class="wt-crown-neck"></div>' +
-      '<div class="wt-crown"></div>' +
-      '<div class="wt-case"><div class="wt-lip"></div><div class="wt-glass">' +
+      '<div class="wt-hw">' +
+      band('top') + band('bot') +
+      '<div class="wt-case">' +
+        '<div class="wt-fs-top"></div><div class="wt-fs-bot"></div>' +
+        '<div class="wt-crown"></div><div class="wt-button"></div>' +
+        '<div class="wt-glass"></div>' +
+        '<div class="wt-display">' +
         '<div class="wt-screen" aria-hidden="true">' +
           '<section class="wt-page wt-ctl">' +
             '<div class="wt-gate"><b>CROSSED THE GATE</b><small>tap when you pass the timing mat</small></div>' +
@@ -137,8 +152,7 @@
           '</div>' +
           '<div class="wt-clock">10:09</div>' +
         '</div>' +
-        '<div class="wt-glare"></div>' +
-      '</div></div>';
+      '</div></div></div>';
     return root;
   }
 
@@ -150,6 +164,13 @@
     host.appendChild(root);
 
     var q = function (s) { return root.querySelector(s); };
+    var hw = q('.wt-hw');
+    // The hardware is drawn in the pen's pixels (264 x 440); scale it to the slot.
+    var fitHw = function () {
+      var w = root.clientWidth;
+      if (w) hw.style.transform = 'translateX(-50%) scale(' + (w / 290) + ')';
+    };
+    fitHw();
     var screen = q('.wt-screen');
     var pages = { ctl: q('.wt-ctl'), metrics: q('.wt-metrics'), map: q('.wt-map') };
     var order = ['ctl', 'metrics', 'map'];
@@ -323,8 +344,8 @@
 
     var ro = null;
     if (typeof ResizeObserver === 'function') {
-      ro = new ResizeObserver(function () { if (coachId !== null) fitLine(); });
-      ro.observe(screen);
+      ro = new ResizeObserver(function () { fitHw(); if (coachId !== null) fitLine(); });
+      ro.observe(root);
     }
 
     var unsub = null;
