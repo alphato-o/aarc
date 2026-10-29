@@ -4,6 +4,8 @@ Briefing for AI coding agents (Claude Code, Codex, Cursor, etc.) working in this
 
 If you are an agent: **read this top-to-bottom before making changes.**
 
+If your user is new to AARC and wants to set it up (their own Worker, keys, voices, Home Base), follow [`.claude/skills/aarc-bootstrap/SKILL.md`](.claude/skills/aarc-bootstrap/SKILL.md).
+
 ---
 
 ## What this project is

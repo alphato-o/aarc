@@ -6,6 +6,7 @@
   "type": "module",
   "license": "Apache-2.0",
   "scripts": {
+    "postinstall": "node scripts/ensure-private.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail",

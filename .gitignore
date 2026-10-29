@@ -116,7 +116,8 @@ secrets.json
 # =====================================================================
 # Claude Code / agent artifacts
 # =====================================================================
-.claude/
+.claude/*
+!.claude/skills/
 PLAN.html
 .secret
 .secrets
@@ -128,3 +129,6 @@ proxy/src/lib/jessicaDeck.ts
 
 # Private founder<->agent exchange (secrets, infra notes) — never tracked
 private/
+
+# Python bytecode from scripts/
+__pycache__/

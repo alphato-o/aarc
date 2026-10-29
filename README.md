@@ -1,194 +1,179 @@
 # AARC
 
-**Alcoholic Anonymous Runners Club** — a native iOS + watchOS running app with a live AI voice coach, built solo, for long-distance training and marathon racing.
+**Alcoholics Anonymous Run Club.** A native iPhone and Apple Watch running app with AI voices in your ear: a roast-coach who reads your pace, your heart rate and the song you're listening to, a second voice who answers him, and a live agent back at **Home Base** you can talk to mid-run.
 
-> The Apple Watch tracks the run. The iPhone runs the brain. Ricky — a savage British roast-coach — reacts in real time to your pace, your heart rate, your splits and the music in your ears. Real lines, generated mid-run, spoken at the right moment — and silent when silence is better.
+Built solo, used on every training run, and taken through a full city marathon. Site: [aarun.club](https://aarun.club). Status: private TestFlight beta (v0.8).
 
-Status: **working product in daily training use.** Marketing site + waitlist at [aarun.club](https://aarun.club).
+![AARC on iPhone and Apple Watch: treadmill, outdoor and race modes](docs/images/run-modes.webp)
+
+## AARC in a real race
+
+A full marathon, corral to finish mat, with AARC in the ear for every kilometre: the coach, kilometre readouts from Home Base, gel and salt calls at the aid stations, a chest camera started and stopped over Bluetooth, and the runner talking back to Home Base mid-race.
+
+[![Watch: I ran a marathon race with an AI coach talking in my ear](https://img.youtube.com/vi/_IKXahSPCVU/maxresdefault.jpg)](https://www.youtube.com/watch?v=_IKXahSPCVU)
 
 ---
 
 ## What it does
 
-- **Serious tracking** — `HKWorkoutSession` on the watch is the source of truth (GPS, pace, heart rate, splits); the phone mirrors it live over WatchConnectivity. Start a run on the phone and the watch app launches itself. Phone-only runs work too.
-- **Live AI coaching** — a scripted backbone (per-km / halfway / finish lines personalised before each run) plus a reactive layer that fires on what's actually happening: pace surges, HR spikes, standing still, a song change. Lines are LLM-generated, spoken via ElevenLabs, with on-device TTS as fallback.
-- **Music-aware** — knows what's playing and times the banter around the track instead of over it, with transient ducking while a line plays.
-- **Orchestrated, not chatty** — a run **Director** owns the timeline (milestones are protected slots), a single priority queue paces every utterance, stale lines expire instead of playing late, and synthesis is coalesced so the voice never stacks up.
-- **Full run replay** — every run's metrics, events and spoken audio are archived (D1 + R2) and replayable end-to-end in a web dashboard: speed/HR chart, clickable voice timeline, and a debug mode with the event log and network waterfall.
-- **Share cards** — turn a run into a social image (quote-centred, four layouts: quote / km-splits / route / elevation) or a short video where the line's actual audio plays back with a karaoke-style word highlight. All rendered client-side (Canvas + MediaRecorder, MP4 on Chromium/Safari).
-- **Test & recovery infrastructure** — a desk simulator (synthetic metrics, operator controls: pace, HR spikes, jumps) and a flagged "real run" test mode, neither of which writes to Apple Health; recently-deleted runs with 30-day retention, cloud-synced soft delete, and an importer that recovers orphaned watch workouts from Apple Health.
-- **Offline QA harnesses** — the whole run experience is verifiable headlessly, so a real gym run is acceptance, not discovery. A **feedback simulator** fast-forwards an entire run through the *real* generation pipeline (text-only, no TTS, no spend) and an analyzer scores the coaching for repetition / voice balance / milestone coverage / audio-tag usage; **UI invariant + journey tests** drive the real app on the simulator and screenshot each beat. See [Testing & content QA](#testing--content-qa).
+**On the run**
+- **The watch tracks.** `HKWorkoutSession` on the Apple Watch is the only source of pace, distance, heart rate and route; the iPhone mirrors it live. Start on the phone and the watch app opens itself. Phone-only runs work too, for treadmill and outdoors.
+- **Three voices.** Ricky has a script for the run (start, every kilometre, halfway, finish) and reacts live to pace surges, heart-rate spikes, standing still and song changes. A second voice answers his lines. Home Base, the agent, calls race kilometres and answers you. Lines are written by Claude during the run and spoken with ElevenLabs, with Apple's voice as the fallback.
+- **Music-aware.** It knows what's playing, jokes about the lyrics, and waits for the gap instead of talking over the chorus.
+- **Orchestrated, not chatty.** A run Director owns the timeline; one priority queue paces every line; stale lines expire instead of playing late; one tap mutes everything.
 
-The coach's persona prompts live in an untracked private module — the repo ships the machinery, not the personality. Variety is engineered: the second voice improvises off a large, founder-seeded **content deck** (deal-a-fresh-hand-per-line) rather than relying on prompt bans, and deterministic guards strip recurring opener tics.
+**Talk back to Home Base**
+- Mid-run, say **"Hey Siri, tell Home Base"**, talk, then **"Send to Home Base"** (or press the earbud, or tap Send on the watch). Your words are transcribed and reach the agent with the run and the kilometre attached.
+- The agent answers out loud, in its own voice, into the run. Off a run, the answer plays on the phone and stays in the app's Home Base terminal.
+- If the agent is quiet for 40 seconds, the server answers on its own so you're never left hanging.
+- Home Base is any agent session with a shell (Claude Code, or your own agent). It watches the live run (pace, heart rate, battery, place) through `/live/*`, checks in every few minutes, and can push a line into your ear at any time. Start with [`scripts/home-base/`](scripts/home-base/).
+
+**Race day**
+- **Corral, then gate.** In "Actual race" mode the watch starts in the corral; one tap on the timing mat starts the race clock, so queue time never counts.
+- **Course-aware.** Every voice knows where you are on the course, what's next and the next aid station. Fuel and salt are cued at the aid stations.
+- **Fly dark.** A race pack of pre-rendered lines lives on the phone, so no signal never means silence; everything catches up when the network returns.
+- **Camera.** A DJI Osmo Action is started, kept alive and reported on over Bluetooth, with a battery ladder for swaps.
+- **Relaunch-safe.** Kill the app mid-race and it resumes the same run.
+
+**After the run**
+- **Replay.** Every run's metrics, events and spoken audio are archived (D1 + R2) and replayable on a web dashboard: pace and heart-rate chart, clickable voice timeline, debug event log.
+- **Share cards.** A run becomes an image or a short video with the line's real audio and a karaoke highlight. The official race result can replace the watch numbers.
+- **Voice notes.** Record how it went after the run; it's transcribed and tidied server-side.
+- **Your history.** Imports past runs from Apple Health, recovers runs a crash cut short, and can import a Nike Run Club archive.
+
+---
+
+## Getting started
+
+AARC is not on the App Store yet. To run it you build it yourself and bring your own backend and keys. The fastest route is to let a coding agent walk you through it: open the repo in Claude Code (or any agent) and ask it to **"set me up with the aarc-bootstrap skill"**. The skill ([`.claude/skills/aarc-bootstrap/SKILL.md`](.claude/skills/aarc-bootstrap/SKILL.md)) checks what you have, deploys your Worker, points the app at it, and interviews you to write your own coach voices.
+
+### What you need to bring
+
+| | Needed for | Without it |
+|---|---|---|
+| **iPhone (iOS 18+) and Apple Watch (watchOS 10+)** | the watch is the tracker | phone-only runs still work |
+| **Mac with Xcode** and `brew install xcodegen` | building the apps | |
+| **Apple Developer Program** membership | HealthKit, the watch app, Siri, Live Activity on device | a free account sideloads for 7 days with fewer capabilities |
+| **Cloudflare account** for your own **Worker** | the backend: holds every key, talks to the LLM and TTS, stores runs (D1) and audio (R2) | nothing works; the free plan is enough to start |
+| **Anthropic API key** (or OpenRouter) | writing every line | no coaching |
+| **ElevenLabs API key** | the real voices | Apple's built-in voice |
+| **OpenAI (Whisper) or Volcano Engine key** | transcribing voice notes and talk-back | talk-back by voice fails; the typed terminal works |
+| **Spotify developer app** | now-playing and lyrics | music awareness is limited |
+| **An agent session** (Claude Code, or any agent with a shell) | Home Base | runs work, nobody answers talk-back |
+| Optional: Sentry DSN, Amap key | error reports, place names in China | |
+
+### Your own voices
+
+The persona prompts that make the maintainer's Ricky and second voice are **not in this repo**. It ships starter placeholders instead ([`personalities.example.ts`](proxy/src/lib/personalities.example.ts), [`jessicaDeck.example.ts`](proxy/src/lib/jessicaDeck.example.ts)); `npm install` copies them into place so a fresh clone builds and talks. The bootstrap skill interviews you (who you are as a runner, what the coach may tease you about, who the second voice is, how rough it gets) and writes your own versions, which stay gitignored.
+
+### By hand
+
+```sh
+brew install xcodegen
+cd proxy && npm install                     # also seeds the starter persona files
+npx wrangler login
+npx wrangler d1 create aarc-runs            # put the id in wrangler.toml
+npx wrangler r2 bucket create aarc-voices
+# wrangler.toml: replace the aarun.club routes with your domain, or use workers.dev
+npx wrangler d1 migrations apply aarc-runs --remote
+npx wrangler secret put ANTHROPIC_API_KEY   # and ELEVENLABS_API_KEY, OPENAI_API_KEY,
+                                            # DEVICE_TOKEN, LIVE_DEVICE_TOKEN, LIVE_ADMIN_TOKEN
+npm run deploy
+```
+
+Then point the app at your Worker: your team and bundle prefix in [`ios/project.yml`](ios/project.yml), your Worker URL in [`EndpointManager.swift`](ios/AARC/Services/EndpointManager.swift), your device tokens in `ios/AARC/Info.plist`, your Spotify Client ID in `SpotifyConfig.swift`. Then:
+
+```sh
+cd ios && xcodegen generate && open AARC.xcodeproj   # run the AARC scheme on your iPhone
+```
+
+Please don't point builds at `api.aarun.club`; that server is the maintainer's and bills the maintainer.
+
+Hear a whole run before you go outside: Run screen, test mode, **Simulate at my desk**. Test runs never write to Apple Health.
+
+### Home Base in two commands
+
+```sh
+export AARC_API=https://<your-worker> AARC_ADMIN_TOKEN=<your LIVE_ADMIN_TOKEN>
+scripts/home-base/watch.sh                 # blocks until you talk, a run starts or ends
+scripts/home-base/reply.sh "Nice split. Gel at the next table."   # spoken into the run
+```
+
+Turn on **Share live running data back home** on the Run screen. Have your agent keep one `watch.sh` running in the background and answer what it prints.
 
 ---
 
 ## Architecture
 
 ```
-Apple Watch (AARCWatch)              iPhone (AARC)                       Cloud
-┌────────────────────────┐   WC    ┌───────────────────────────┐  HTTPS ┌──────────────────────────┐
-│ HKWorkoutSession       │ ──────▶ │ LiveMetricsConsumer       │ ─────▶ │ Cloudflare Worker        │
-│ live pace/HR/distance  │         │ RunDirector + ScriptEngine│        │  /generate-script        │
-│ workout-style UI       │         │ ContextualCoach + queue   │        │  /dynamic-line /tts …    │
-└────────────────────────┘         │ Speaker → ElevenLabs/local│        │ D1 (runs) + R2 (audio)   │
-                                   │ RunEventLog → ingest      │        │ dashboard + landing site │
-                                   └───────────────────────────┘        └──────────────────────────┘
+Apple Watch (AARCWatch)          iPhone (AARC)                       Your Cloudflare Worker
+┌──────────────────────┐  WC   ┌───────────────────────────┐ HTTPS ┌───────────────────────────┐
+│ HKWorkoutSession     │ ────▶ │ LiveMetricsConsumer       │ ────▶ │ /generate-script          │
+│ pace / HR / route    │       │ RunDirector + ScriptEngine│       │ /dynamic-line /react-line │
+│ race gate, coach page│       │ voice queue + Speaker     │       │ /tts (ElevenLabs, cached) │
+└──────────────────────┘       │ race pack (offline)       │       │ /live/* /agent/*          │
+                               │ Siri talk-back            │       │ D1 runs + R2 voice audio  │
+                               └───────────────────────────┘       └─────────────┬─────────────┘
+                                                                                 │ /live, /agent
+                                                                    ┌────────────┴────────────┐
+                                                                    │ Home Base agent session │
+                                                                    │ watch.sh / reply.sh     │
+                                                                    └─────────────────────────┘
 ```
 
-- One Worker serves three hostnames: `api.aarun.club` (app API + ingest), `my.aarun.club` (the replay dashboard, QR-approved auth), and `aarun.club` (public landing + waitlist).
-- A standalone Node port of the proxy (`proxy/server/`, Docker + Caddy) runs on a VPS as a network-path fallback; the app's `EndpointManager` fails over between endpoints automatically.
-- Errors on both sides report to Sentry.
+- The non-negotiables (watch is the only tracker, no API keys in the app, the run works offline) are in [`AGENTS.md`](AGENTS.md).
+- One Worker serves the API, the replay dashboard and the marketing site (static files in [`proxy/public/site/`](proxy/public/site/)).
+- A Node port of the Worker ([`proxy/server/`](proxy/server/)) can run on a VPS as a second network path; the app fails over between endpoints automatically.
 
-## Repo structure
+## Repo
 
 ```
 aarc/
-├── README.md            ← you are here
-├── AGENTS.md            ← briefing + ground rules for AI coding agents
-├── PLAN.md              ← original planning entry point (historical)
-├── docs/                ← architecture, data model, decisions, risks, phase plans
+├── AGENTS.md            ground rules for AI coding agents (read first)
+├── .claude/skills/      aarc-bootstrap: the guided setup
+├── docs/                architecture, data model, decisions, race day, troubleshooting
 ├── ios/
-│   ├── project.yml      ← xcodegen source of truth (.xcodeproj is generated)
-│   ├── AARC/            ← iPhone app (SwiftUI)
-│   ├── AARCWatch/       ← watch app (SwiftUI + HealthKit)
-│   └── AARCKit/         ← shared Swift package (host-testable)
-├── proxy/               ← Cloudflare Worker (TypeScript): API, ingest, dashboard, landing
-│   └── server/          ← Node port of the proxy for VPS deployment (Docker)
-├── scripts/             ← bump-build.sh, icon generation
-└── private/             ← untracked: secrets + founder/agent exchange (gitignored)
+│   ├── project.yml      xcodegen source of truth (.xcodeproj is generated)
+│   ├── AARC/            iPhone app (SwiftUI)
+│   ├── AARCWatch/       watch app (SwiftUI + HealthKit)
+│   ├── AARCLiveActivity/
+│   └── AARCKit/         shared Swift package (host-testable)
+├── proxy/               Cloudflare Worker (TypeScript): API, live channel, dashboard, site
+│   └── server/          Node port for a VPS
+└── scripts/             build bumps, run-sim analyzer, Home Base, race video tools
 ```
-
-iOS tests live inside the Xcode test targets (platform convention — no top-level `tests/`). `AARCKit` tests run on the host with plain `swift test`.
-
-## Tech stack
 
 | Layer | Choice |
 |---|---|
-| iOS app | SwiftUI, SwiftData, AVFoundation, ActivityKit (Live Activity), Swift 6 strict concurrency |
-| watchOS app | SwiftUI, HealthKit (`HKWorkoutSession` + `HKLiveWorkoutBuilder`) |
-| Shared code | Swift package `AARCKit` (in-repo) |
-| LLM | Claude via proxy (OpenRouter / Anthropic, switchable per-deployment) |
-| TTS | ElevenLabs (primary) with `AVSpeechSynthesizer` fallback; per-voice audio cache |
-| Proxy | Cloudflare Worker, TypeScript, D1 (run logs), R2 (voice archive) |
-| Dashboard / landing | Self-contained vanilla JS + SVG/Canvas served by the Worker — no frontend build step |
-| Monitoring | Sentry (proxy + iOS) |
-| Min versions | iOS 17, watchOS 10 |
-
-## Domains
-
-| Hostname | Purpose |
-|---|---|
-| `api.aarun.club` | Worker API: script/line generation, TTS, run ingest, replay reads |
-| `my.aarun.club` | Run replay dashboard (sign-in via QR approved on the phone) |
-| `aarun.club` | Public landing page + waitlist |
-| `gateway.aarun.club` | VPS fallback endpoint (Node proxy port) |
-
-Bundle IDs: `club.aarun.AARC` (iOS), `club.aarun.AARC.watchkitapp` (watch).
-
----
+| iOS | SwiftUI, SwiftData, AVFoundation, ActivityKit, App Intents (Siri), Swift 6 strict concurrency |
+| watchOS | SwiftUI, HealthKit (`HKWorkoutSession` + `HKLiveWorkoutBuilder`) |
+| LLM | Claude (Anthropic first-party, OpenRouter switchable) via the Worker |
+| Voice | ElevenLabs v4 at 64 kbps or better, cached in R2; `AVSpeechSynthesizer` fallback |
+| Backend | Cloudflare Worker, D1, R2; no frontend build step |
+| Monitoring | Sentry (Worker and iOS) |
 
 ## Development
 
-### One-time setup
-
 ```sh
-brew install xcodegen        # generates ios/AARC.xcodeproj from project.yml
-cd proxy && npm install      # Cloudflare Worker deps
+cd ios/AARCKit && swift test                 # shared logic on the host
+cd ios && xcodebuild test -project AARC.xcodeproj -scheme AARC \
+  -destination 'platform=iOS Simulator,name=iPhone 17'   # invariants + UI journeys
+cd proxy && npm run dev                      # Worker on localhost:8787
+cd proxy && npm run typecheck
 ```
 
-### iOS / watchOS
+Point a debug build at a local Worker with the scheme env var `AARC_API_BASE_URL=http://localhost:8787`.
 
-The `.xcodeproj` is generated, not committed. Source of truth: [`ios/project.yml`](ios/project.yml).
+**Headless QA.** The run experience is testable without leaving the desk:
+- **Feedback simulator**: fast-forwards a whole run through the real generation pipeline, text only (no TTS spend). `SIMCTL_CHILD_AARC_RUN_SIM=10k xcrun simctl launch <sim> club.aarun.AARC`, then `python3 scripts/analyze-run-sim.py <transcript.json>` for an HTML report on repetition, voice balance and milestone coverage.
+- **Race simulator**: `AARC_RACE_SIM` rides a whole race (corral, gate, kilometres, finish) on the simulator.
+- **UI tests**: `AARCTests` asserts run-lifecycle invariants; `AARCUITests` drives start, live run, end and summary and screenshots each beat. A tripwire blocks every ElevenLabs call while tests run, so QA never bills the voice provider.
 
-```sh
-cd ios
-xcodegen generate            # creates AARC.xcodeproj
-open AARC.xcodeproj
-# Set your Apple Developer Team in Signing & Capabilities for both
-# AARC and AARCWatch targets, then Run.
-```
+Versioning, build numbers and commit style are in [`AGENTS.md`](AGENTS.md); device gotchas in [`docs/troubleshooting.md`](docs/troubleshooting.md).
 
-Run AARCKit's tests on the host without Xcode:
-```sh
-cd ios/AARCKit && swift test
-```
+## Contributing
 
-### Cloudflare Worker (proxy)
-
-```sh
-cd proxy
-npm run dev                  # local at http://localhost:8787
-npm run typecheck            # tsc --noEmit
-npm run deploy               # wrangler deploy (all three hostnames)
-npx wrangler d1 migrations apply aarc-runs --remote   # after adding a migration
-```
-
-Secrets (`wrangler secret put …`): provider API keys, `DEVICE_TOKEN` (ingest/dashboard auth), `SENTRY_DSN`.
-
-> Editing `dashboardApp.ts` / `landing.ts`: the embedded JS lives inside TS template literals — backticks, `${`, and **every regex backslash** must be escaped (`\\s`, not `\s`), or they silently degrade in the served page.
-
-### Pointing the iOS app at a local proxy
-
-In Xcode, edit the `AARC` scheme → Run → Arguments → Environment Variables, add `AARC_API_BASE_URL=http://localhost:8787` for debug builds. Production builds use the bundled endpoint list with automatic failover.
-
-### Quick iteration loop
-
-```sh
-git pull
-cd ios && xcodegen generate
-open AARC.xcodeproj
-# ⌘R with AARC scheme + iPhone destination
-```
-
-After deploy: check the **build number on the watch home screen** (and iPhone Settings → About). If both match `CURRENT_PROJECT_VERSION` in `ios/project.yml`, you're on the latest build. It's bumped on every code-change push by `scripts/bump-build.sh` (see AGENTS.md).
-
-To exercise the full voice pipeline without leaving your desk: Run screen → enable test mode → **Simulate at my desk**, then drive pace/HR/position from the Control Room. Test runs are flagged, excluded from Apple Health, and batch-deletable.
-
-### Testing & content QA
-
-Three headless harnesses make the run experience verifiable without the gym — all run on the simulator (or host) and emit artifacts you can eyeball.
-
-**1. Feedback simulator** — fast-forwards a whole run through the *real* generation pipeline (Director → ScriptEngine → Conversation → proxy), text-only (no TTS, no ElevenLabs spend), recording every coach line. An analyzer turns the transcript into an HTML verdict.
-
-```sh
-# launch the app with the env gate → writes Documents/run-sim-<km>.json
-SIMCTL_CHILD_AARC_RUN_SIM=10k xcrun simctl launch <booted-sim> club.aarun.AARC
-python3 scripts/analyze-run-sim.py <transcript.json>   # → repetition, voice balance,
-#   milestone coverage, length distribution, v3 audio-tag usage, all as an HTML report
-```
-
-**2. UI invariant + journey tests** — `AARCTests` (Swift Testing) drives the real `@MainActor` singletons headlessly and asserts lifecycle invariants (no run starts while one is active / a summary is up; End is synchronous; the summary chart normalizes each series so neither is crushed). `AARCUITests` (XCUITest) drives the actual app start → live-run → end → summary and screenshots each beat. Both are network-free / cost-free via launch-env mutes.
-
-```sh
-cd ios && xcodegen generate
-xcodebuild test -project AARC.xcodeproj -scheme AARC -destination 'platform=iOS Simulator,name=iPhone 17'
-```
-
-**Cost safety:** the TTS path caches synthesized audio in R2 (keyed by voice+text+params), and a runtime tripwire blocks *any* ElevenLabs call while a preview / UI test is active — so headless QA can never bill the voice provider.
-
-### Deploying only the watch app
-
-When the iOS code didn't change but the watch did, skip the full iOS install:
-
-1. Toolbar scheme dropdown → switch from **AARC** to **AARCWatch**
-2. Destination dropdown → your Apple Watch by name
-3. ⌘R — Xcode pushes the watch bundle through the iPhone
-
-Switch back to the **AARC** scheme afterwards.
-
-### When to clean or delete
-
-You almost never need to. Day-to-day, incremental builds + reinstalls are correct. Reach for these only when something is visibly broken:
-
-- **⌘⇧K (Clean Build Folder)** — signature seal mismatches, "module not found" after a refactor, Xcode insists nothing has changed
-- **Delete app from iPhone** — capabilities or entitlements changed and provisioning needs to re-bind
-- **Force-quit watch app** (swipe away in recents) — when you suspect watchOS is keeping an older instance warm
-- **`rm -rf ~/Library/Developer/Xcode/DerivedData/AARC-*`** — last-resort nuke when ⌘⇧K isn't enough
-
-More gotchas: [`docs/troubleshooting.md`](docs/troubleshooting.md).
-
----
+Issues and pull requests are welcome. Read [`AGENTS.md`](AGENTS.md) first (it applies to humans too). Never commit keys, tokens, or your persona files.
 
 ## License
 
